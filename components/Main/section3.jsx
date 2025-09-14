@@ -43,18 +43,3 @@ export default function WorkingTogetherImg() {
 
 
 
-// import Image from 'next/image';
-
-// export default function WorkingTogetherImg() {
-//   return (
-//     <section className="relative w-full h-96">
-//       <Image
-//         src="/images/working_together.jpeg"
-//         alt="Working together"
-//         fill
-//         className="object-fill"
-//         priority
-//       />
-//     </section>
-//   );
-// }

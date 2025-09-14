@@ -17,7 +17,8 @@ export default function Section1({ bundjalungGreeting = "JINGI WALLA", englishGr
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 1 }}
-          className="text-center w-full font-extrabold text-5xl sm:text-6xl md:text-7xl lg:text-8xl xl:text-9xl mb-6 text-white drop-shadow-lg"
+          className="text-center w-full font-extrabold text-5xl sm:text-6xl md:text-7xl lg:text-8xl xl:text-9xl mb-6 text-white drop-shadow-lg
+                     text-shadow-black-lg"
         >
           {isBundjalung ? bundjalungGreeting : englishGreeting}
         </motion.h1>
