@@ -30,7 +30,7 @@ export default function Section1({ bundjalungGreeting = "JINGI WALLA", englishGr
         onClick={toggleGreeting}
         whileHover={{ scale: 1.05, y: -4 }}
         whileTap={{ scale: 0.95, y: 2 }}
-        className="text-xl sm:text-2xl md:text-3xl px-6 sm:px-8 py-3 sm:py-4 bg-blue-600 border-white border-4 text-white rounded-full shadow-2xl transition-colors duration-300 hover:bg-blue-700 tracking-tight"
+        className="text-xl sm:text-2xl md:text-3xl px-6 sm:px-8 py-3 sm:py-4 bg-blue-600 border-white border-4 text-white rounded-full shadow-2xl transition-colors duration-300 hover:bg-green-500 tracking-tight"
         
       />
 {/*       

@@ -33,7 +33,7 @@ function Navbar({ navigation }) {
                 <Link
                   key={item.name}
                   href={item.href}
-                  className="text-gray-700 hover:text-blue-600 hover:bg-gray-100 transition-colors font-semibold px-4 py-2 rounded focus:ring-2"
+                  className="text-gray-700 hover:text-white hover:bg-blue-500 transition-colors font-bold px-4 py-2 rounded focus:ring-2"
                 >
                   {item.name}
                 </Link>
