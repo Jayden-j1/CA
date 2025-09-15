@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 export default function ServicesPage() {
     return (
 <main className="m-0 p-0">
@@ -13,17 +15,25 @@ export default function ServicesPage() {
         <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-bold mb-6 md:mb-12 text-left">
           Services
         </h1>
-        <p className="text-sm sm:text-base md:text-lg font-medium leading-relaxed">
+        <p className="text-sm sm:text-base md:text-lg font-medium leading-relaxed mb-10">
           We offer a cultural awareness course content packages focused specifically on the Nyanbul people of the Bundjalung nation from Ballina/Bullinah.
-          <br className="hidden sm:block" />
-          Below you will find the pricing cards.
         </p>
-        <p></p>
+                <a
+          href="#pricing"
+          className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300"
+        >
+          Pricing Below
+        </a>
       </div>
 
       {/* Right Content Block */}
-      <div className="hidden md:block md:w-2/5 bg-black/40 p-4 rounded-lg shadow-md">
-        Content Block 2
+      <div className="hidden md:block md:w-2/5 p-4 rounded-lg shadow-md relative h-52">
+        <Image 
+            src="/images/country.jpeg"
+            alt="Image of an Aborginal Australian dot painting, primary colour used is blue."
+            fill
+            className="absolute object-cover rounded-lg shadow-2xl"
+        />
       </div>
     </div>
   </section>
@@ -31,7 +41,7 @@ export default function ServicesPage() {
   {/* Pricing Cards */}
   <section className="mt-40">
         {/* Pricing Cards */}
-<section className="w-full bg-gradient-to-b from-blue-700 to-blue-300 py-16 px-4">
+<section id="pricing" className="w-full bg-gradient-to-b from-blue-700 to-blue-300 py-16 px-4">
   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto">
     
     {/* Pricing Card */}
