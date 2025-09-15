@@ -44,7 +44,7 @@ export default function AboutPage() {
     <>
     <TopofPageContent 
       HeadingOneTitle="About"
-      paragraphContent="PLaceholder Text"
+      paragraphContent="Jingela (Hello), this website is dedicated to fostering cultural awareness, understanding, and respect for First Nations Peoples of Australia."
       linkOne="See more"
     />
   <div className="flex flex-col xl:grid xl:grid-cols-5 gap-7 px-6 py-10 xl:px-12 xl:py-16">
@@ -65,9 +65,17 @@ export default function AboutPage() {
       </AnimatePresence>
     </div>
 
-    <p className="text-lg sm:text-xl leading-relaxed tracking-normal sm:tracking-wide text-white font-semibold">
-      Jingela (Hello), this website is dedicated to fostering cultural awareness, understanding, and respect for First Nations Aboriginal Peoples of Australia. It aims to support non-Indigenous individuals and organisations in learning about our rich history, diverse cultures, and enduring connection to Country. By encouraging open-mindedness and collaboration, we hope to build stronger, more respectful relationships that acknowledge and celebrate the strengths, knowledge, and resilience of our communities.
+    <p className="text-lg sm:text-xl leading-relaxed tracking-normal sm:tracking-wide text-white font-semibold mb-5">
+      <span className="italic px-2 py-4 bg-green-500 rounded-4xl">We aim to:</span> 
     </p>
+      <ul className="list-disc pl-4">
+        <li className="text-white mb-2">
+          Support non-Indigenous people and organisations in learning about Indigenous history, cultures, and connection to Country
+        </li>
+        <li className="text-white mb-2">Promote open-mindedness and collaboration</li>
+        <li className="text-white mb-2">Foster respectful, stronger relationships</li>
+        <li className="text-white mb-2">Acknowledge and celebrate Indigenous strengths, knowledge, and resilience</li>
+      </ul>
   </div>
 
   <div className="aspect-video col-span-1 md:col-span-2 row-span-1 md:row-span-2 border-2 border-gray-300 p-4 rounded-lg bg-gray-50 
@@ -89,7 +97,7 @@ export default function AboutPage() {
       return (
         <div
           key={i}
-          className="bg-blue-500 border-2 border-black rounded-md hover:bg-blue-400 hover:shadow transition-all duration-200"
+          className="bg-blue-500 shadow-2xl rounded-md hover:bg-blue-400 hover:shadow transition-all duration-200"
         >
           <button
             onClick={() => toggleSection(i)}

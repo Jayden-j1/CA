@@ -19,7 +19,7 @@ function Navbar({ navigation }) {
 
   return (
     <header>
-      <nav className="bg-white border-b border-gray-200 shadow-sm">
+      <nav className="bg-blue-blue-600 border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between min-h-16 py-2">
             <div className="flex items-center flex-shrink-0 py-2">
