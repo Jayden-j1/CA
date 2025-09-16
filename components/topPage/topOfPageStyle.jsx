@@ -7,8 +7,10 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
   const controls = useAnimationControls();
 
   useEffect(() => {
+    let isMounted = true;
+
     const cycleColors = async () => {
-      while (true) {
+      while (isMounted) {
         await controls.start({
           background: "linear-gradient(to bottom, #1e3a8a, #60a5fa)", // deep blue to light blue
           transition: { duration: 1.8 },
@@ -24,7 +26,15 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
       }
     };
 
-    cycleColors();
+    // Delay the animation start to the next tick
+    const timeout = setTimeout(() => {
+      cycleColors();
+    }, 0);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timeout); // cleanup if unmounted before timeout
+    };
   }, [controls]);
 
   return (
@@ -80,19 +90,7 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+// 'use client';
 // import Image from "next/image";
 // import { motion, useAnimationControls } from "framer-motion";
 // import { useEffect } from "react";
@@ -104,16 +102,16 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
 //     const cycleColors = async () => {
 //       while (true) {
 //         await controls.start({
-//           background: "linear-gradient(to bottom, #1e3a8a, #60a5fa)", // blue-700 to blue-300
-//           transition: { duration: 3 },
+//           background: "linear-gradient(to bottom, #1e3a8a, #60a5fa)", // deep blue to light blue
+//           transition: { duration: 1.8 },
 //         });
 //         await controls.start({
-//           background: "linear-gradient(to bottom, #6b21a8, #c084fc)", // purple shades
-//           transition: { duration: 3 },
+//           background: "linear-gradient(to bottom, #0f766e, #5eead4)", // teal to turquoise
+//           transition: { duration: 1.8 },
 //         });
 //         await controls.start({
-//           background: "linear-gradient(to bottom, #0f766e, #5eead4)", // teal shades
-//           transition: { duration: 3 },
+//           background: "linear-gradient(to bottom, #0284c7, #67e8f9)", // sky blue to cyan
+//           transition: { duration: 1.8 },
 //         });
 //       }
 //     };
@@ -169,68 +167,3 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
 //     </>
 //   );
 // }
-
-
-
-
-
-
-// import Image from "next/image";
-
-// export default function TopofPageContent( {HeadingOneTitle, paragraphContent, linkOne} ) {
-//     return (
-//         <>
-//             <section className="relative w-full py-16 md:py-24 overflow-hidden">
-             
-//               {/* Blue background */}
-//               <div className="absolute inset-0 bg-blue-500 shadow-xl shadow-blue-800/30 -skew-y-6 z-10 rounded-b-[60px]" />
-          
-//               {/* Main content */}
-//               <div className="relative z-30 flex flex-col md:flex-row items-center justify-between gap-8 px-6 md:px-12 text-white max-w-7xl mx-auto">
-                
-//               {/* Left Text Block */}
-//                 <div className="w-full md:w-3/5">
-//                   <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-bold mb-6 md:mb-12 text-left">
-//                     {HeadingOneTitle}
-//                   </h1>
-//                   <p className="text-sm sm:text-base md:text-lg font-medium leading-relaxed mb-10">
-//                     {paragraphContent}
-//                   </p>
-//                           <a
-//                     href="#pricing"
-//                     className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300"
-//                     >
-//                     {linkOne}
-//                   </a>
-//                 </div>
-
-//                 {/* Right Content Block */}
-//                   <div className="hidden md:block md:w-2/5 p-4 rounded-lg shadow-md relative h-52 overflow-hidden">
-                
-//                 {/* Background Image */}
-//                   <Image 
-//                     src="/images/country.jpeg"
-//                     alt="Image of an Aboriginal Australian dot painting, primary colour used is blue."
-//                     fill
-//                     className="absolute object-cover rounded-lg"
-//                   />
-
-//                 {/* Gradient Overlay */}
-//                   <div className="absolute inset-0 z-10 rounded-lg bg-gradient-to-b from-blue-700 to-blue-300 opacity-60 transition-all duration-300 ease-in-out" />
-//                   </div>
-        
-//                 {/* Right Content Block
-//                 <div className="hidden md:block md:w-2/5 p-4 rounded-lg shadow-md relative h-52">
-//                   <Image 
-//                       src="/images/country.jpeg"
-//                       alt="Image of an Aborginal Australian dot painting, primary colour used is blue."
-//                       fill
-//                       className="absolute object-cover rounded-lg shadow-2xl"
-//                   />
-//                 </div> */}
-//               </div>
-//             </section>
-//         </>
-//     );
-// }
-
