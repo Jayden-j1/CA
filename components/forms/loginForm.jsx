@@ -68,7 +68,7 @@ export default function Login() {
                     <button
                         id="loginBtn"
                         className="px-8 py-4 bg-green-600 text-white hover:bg-green-500 font-bold rounded-4xl shadow-2xl 
-                        border-2 border-white text-sm md:text-base transition-colors duration-200"
+                        border-2 border-white text-sm md:text-base transition-colors duration-200 cursor-pointer"
                     >
                         Login
                     </button>

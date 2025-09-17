@@ -57,7 +57,7 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
             </p>
             <a
               href="#pricing"
-              className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300"
+              className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300 cursor-pointer"
             >
               {linkOne}
             </a>

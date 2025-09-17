@@ -76,7 +76,13 @@ export default function ContactFormComponent() {
         placeholder="Write your message here..."></textarea>
 
       {/* Preferred method of contact radio buttons */}
+      <fieldset className="flex flex-col space-y-3 mt-4 border-0 p-0 m-0">
+      <legend className="text-left text-white font-bold text-sm tracking-wide md:text-base px-0 mb-1">
+      
       <div className="flex flex-col space-y-3 mt-4">
+        {/* Preferred method of contact */}
+        <p className='className="text-left text-white font-bold text-sm tracking-wide md:text-base'>Preferred contact method</p>
+
         {/* Email option */}
         <label
           htmlFor="viaEmail"
@@ -154,9 +160,12 @@ export default function ContactFormComponent() {
           </span>
         </label>
       </div>
-
-      <button type="submit" id="submit" value="clientContact">
-        {/* You might want to add text or styling here */}
+      
+      </legend>
+      </fieldset>
+      <button type="submit" id="submit" value="clientContact" className="px-8 py-4 bg-green-600 text-white hover:bg-green-500     font-bold rounded-4xl shadow-2xl 
+      border-2 border-white text-sm md:text-base transition-colors duration-200 cursor-pointer">
+        Submit
       </button>
     </form>
   );

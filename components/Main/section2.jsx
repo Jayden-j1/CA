@@ -36,7 +36,7 @@ export default function Section2({
   return (
     <section
       ref={ref}
-      className="relative flex flex-col justify-center items-center min-h-[85vh] sm:min-h-screen bg-gradient-to-b from-blue-700 to-blue-300  px-4 sm:px-6"
+      className="relative flex flex-col justify-center items-center min-h-[85vh] sm:min-h-screen px-4 sm:px-6 mt-40 bg-blue-500"
     >
 
       <motion.h2
@@ -66,7 +66,7 @@ export default function Section2({
        onClick={toggleLanguage}
         whileHover={{ scale: 1.05, y: -4 }}
         whileTap={{ scale: 0.95, y: 2 }}
-        className="text-xl sm:text-2xl md:text-3xl px-6 sm:px-8 py-3 sm:py-4 bg-blue-600 border-white border-4 text-white rounded-full shadow-2xl transition-colors duration-300 hover:bg-green-500 tracking-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="text-xl sm:text-2xl md:text-3xl px-6 sm:px-8 py-3 sm:py-4 bg-blue-600 border-white border-2 text-white rounded-full shadow-2xl transition-colors duration-300 hover:bg-green-500 hover:border-green-500 tracking-tight focus:outline-none cursor-pointer"
       />
     </section>
   );
