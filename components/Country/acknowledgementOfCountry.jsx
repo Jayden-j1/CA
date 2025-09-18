@@ -26,7 +26,7 @@ export default function AcknowledgementOfCountry( {isOpen, onClose, message} ) {
             <div className="text-right">
                 <button 
                 onClick={onClose}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transistion duration-300"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transistion duration-300 cursor-pointer"
                 >
                  Close 
                 </button>
