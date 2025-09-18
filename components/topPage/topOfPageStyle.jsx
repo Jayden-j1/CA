@@ -3,7 +3,7 @@ import Image from "next/image";
 import { motion, useAnimationControls } from "framer-motion";
 import { useEffect } from "react";
 
-export default function TopofPageContent({ HeadingOneTitle, paragraphContent, linkOne, onClick }) {
+export default function TopofPageContent({ HeadingOneTitle, paragraphContent, linkOne, onClick, href }) {
   const controls = useAnimationControls();
 
   useEffect(() => {
@@ -58,7 +58,7 @@ export default function TopofPageContent({ HeadingOneTitle, paragraphContent, li
 
             {/* Link */}
             <a
-              href="#pricing"
+              href={href}
               className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300 cursor-pointer"
               onClick={onClick}
             >

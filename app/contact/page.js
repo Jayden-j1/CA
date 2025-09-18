@@ -9,9 +9,10 @@ export default function ContactPage() {
             HeadingOneTitle="Contact us"
             paragraphContent="Placeholder text for now."
             linkOne="Contact form below"
+            href="#contact"
           />
 
-          <section className="flex flex-col justify-center items-center bg-gradient-to-b from-blue-700 to-blue-300 mt-40">
+          <section id="contact" className="flex flex-col justify-center items-center bg-gradient-to-b from-blue-700 to-blue-300 mt-40">
             <ContactFormComponent />
           </section>
         </>

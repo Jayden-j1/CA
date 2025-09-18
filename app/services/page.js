@@ -8,6 +8,7 @@ export default function ServicesPage() {
           HeadingOneTitle="Services"
           paragraphContent="We offer a cultural awareness course content packages focused specifically on the Nyanbul people of the Bundjalung    nation from Ballina/Bullinah."
           linkOne="Prices Below"
+          href="#pricing"
         />
 
           {/* Pricing Cards */}

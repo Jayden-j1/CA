@@ -3,11 +3,14 @@ import Section1 from "@/components/Main/section1";
 import Section2 from "@/components/Main/section2";
 import TopofPageContent from "../components/topPage/topOfPageStyle";
 import { useState } from "react";
-import AcknowledgementOfCountry from "../components/Country/acknowledgementOfCountry";
+import PopUpMessage from "../components/PopUpMsgs/popUpTemplate"
 
 
 
 export default function Home( {} ) {
+
+  // Heading for Acknowlegement of Country
+  const title = "Acknowlegement of Country";
 
   // Message for Acknowleddgement of Country
   const message = "We acknowledge the Traditional Custodians of the lands on which we work and live. We pay our respects to Elders past and present and extend that respect to all First Nations peoples.";
@@ -44,9 +47,10 @@ export default function Home( {} ) {
 
 
       {/* Moda; Component (pop up message) - Only shows if isModalOpen is true */}
-      <AcknowledgementOfCountry 
+      <PopUpMessage 
         isOpen={isModalOpen}
         onClose={closeAcknowledgement}
+        heading={title}
         message={message}
       />
 

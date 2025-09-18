@@ -19,7 +19,7 @@ function Navbar({ navigation }) {
 
   return (
     <header>
-      <nav className="bg-blue-blue-600 border-gray-200 shadow-sm">
+      <nav className="relative bg-blue-blue-600 border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between min-h-16 py-2">
             <div className="flex items-center flex-shrink-0 py-2">
@@ -57,13 +57,17 @@ function Navbar({ navigation }) {
                 )}
               </button>
             </div>
-
+          </div>
+        </div>
+            
+            {/* Mobile Navigation Menu */}
             {isOpen && (
-              <div className="w-full lg:hidden mt-2 px-4 pb-4 space-y-1 bg-white shadow rounded-md">
+              <div className="absolute z-50 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow">
                 {navItems.map((item) => (
                   <Link
                     key={item.name}
                     href={item.href}
+                    onClick={() => setIsOpen(false)}
                     className="block text-gray-700 hover:text-blue-600 hover:bg-gray-100 transition-colors py-3 px-4 rounded font-bold"
                   >
                     {item.name}
@@ -71,8 +75,6 @@ function Navbar({ navigation }) {
                 ))}
               </div>
             )}
-          </div>
-        </div>
       </nav>
     </header>
   );

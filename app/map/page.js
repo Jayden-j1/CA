@@ -1,6 +1,7 @@
 'use client';
-
 import dynamic from 'next/dynamic';
+import TopofPageContent from '../../components/topPage/topOfPageStyle';
+
 
 // Load the map component only on the client
 const GoogleMapComponent = dynamic(
@@ -10,8 +11,14 @@ const GoogleMapComponent = dynamic(
 
 export default function MapsPage() {
   return (
+    <>
+    <TopofPageContent 
+      HeadingOneTitle="Map Boundary"
+      paragraphContent="Placeholder text for now"
+    />
     <div>
       <GoogleMapComponent />
     </div>
+    </>
   );
 }

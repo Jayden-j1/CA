@@ -5,6 +5,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDownIcon } from '@heroicons/react/24/solid';
 import TopofPageContent from '../../components/topPage/topOfPageStyle';
 import Image from 'next/image';
+import PopUpMessage from '../../components/PopUpMsgs/popUpTemplate';
+
+
 
 const words = ['CULTURE', 'COLLABORATE', 'COMMUNITY', 'RESPECT', 'TRANSPARENCY', 'AWARENESS'];
 
@@ -24,6 +27,30 @@ const sections = [
 ];
 
 export default function AboutPage() {
+
+  // State to control pop-up message visibility
+  const [isModalOpen, setModelOpen] = useState();
+  
+  // Function to open pop-up message
+  const openAbout = (e) => {
+    // Prevent link from navigating else where
+    e.preventDefault 
+    // Set pop-up modal to true (open and display message)
+    setModelOpen(true);
+  }
+
+  // Function to close and hide pop-up about message
+  const closeAbout = () => {
+    setModelOpen(false);
+  }
+
+  // Heading for about page pop-up
+  const title = "Developed by Community, Guided by Knowledge Holders";
+
+  // Paragraph content for about page pop-up
+  const message = "This website has been 100% developed by members of the local Aboriginal community, with all content respectfully shared by recognised Elders and cultural knowledge holders. It serves as a trusted source of truth for those seeking to deepen their understanding of local Aboriginal culture, history, and practices. Every element reflects lived experience, community voice, and cultural integrity.";
+
+
   const [index, setIndex] = useState(0);
   const [openSections, setOpenSections] = useState([]);
 
@@ -39,6 +66,7 @@ export default function AboutPage() {
       prev.includes(i) ? prev.filter((id) => id !== i) : [...prev, i]
     );
   };
+   
 
   return (
     <>
@@ -46,7 +74,17 @@ export default function AboutPage() {
       HeadingOneTitle="About"
       paragraphContent="Jingela (Hello), this website is dedicated to fostering cultural awareness, understanding, and respect for First Nations Peoples of Australia."
       linkOne="See more"
+      onClick={openAbout}
     />
+
+    {/* Pop up message for About Page*/}
+    <PopUpMessage 
+      heading={title}
+      message={message}
+      isOpen={isModalOpen}
+      onClose={closeAbout}
+    />
+
   <div className="flex flex-col xl:grid xl:grid-cols-5 gap-7 px-6 py-10 xl:px-12 xl:py-16">
   {/* Main Content */}
   <div className="col-span-1 md:col-span-3 row-span-1 md:row-span-2 border-2 border-gray-300 p-6 rounded-lg shadow-xl bg-blue-500">
