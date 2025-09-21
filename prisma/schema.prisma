@@ -1,0 +1,84 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider = "sqlite" // for dev (later switch to "postgresql")
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --------------------------------
+// User model (used by NextAuth)
+// --------------------------------
+model User {
+  id          String   @id @default(cuid())  // cuid = unique string id
+  name        String?  // optional
+  email       String   @unique
+  emailVerified DateTime?
+  image       String?
+
+  // New fields we are adding for business logic
+  role        String   @default("USER") // can be "USER" | "ADMIN" | "BUSINESS_OWNER"
+  businessId  String?                     // foreign key to Business if user belongs to one
+  business    Business? @relation(fields: [businessId], references: [id])
+
+  // Relations
+  accounts    Account[]
+  sessions    Session[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// --------------------------------
+// Business model
+// --------------------------------
+model Business {
+  id          String   @id @default(cuid())
+  name        String
+  domain      String   @unique // e.g. "company.com"
+  ownerId     String   // user who created/purchased
+  owner       User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+  users       User[]   // employees linked by businessId
+  createdAt   DateTime @default(now())
+}
+
+// --------------------------------
+// NextAuth models (required)
+// --------------------------------
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
