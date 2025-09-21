@@ -4,15 +4,12 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import Stripe from "stripe";
 
-//  No apiVersion to avoid type mismatch
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2022-11-15" });
 
 export async function POST(req: NextRequest) {
-  // 1️ Ensure user is logged in
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // 2️ Only business owners can add staff
   if (session.user.role !== "BUSINESS_OWNER") {
     return NextResponse.json({ error: "Only business owners can add staff" }, { status: 403 });
   }
@@ -20,20 +17,18 @@ export async function POST(req: NextRequest) {
   try {
     const { pricePerStaff } = await req.json();
 
-    // 3️ Count how many staff users this business has
+    // ✅ Get business and staff count
     const businessId = session.user.businessId!;
     const staffCount = await prisma.user.count({
       where: { businessId, role: "USER" },
     });
 
-    const freeStaffLimit = 1; // how many free staff you allow
-
-    // 4️ If still under the free limit → no payment needed
+    const freeStaffLimit = 1; // Free staff allowance
     if (staffCount < freeStaffLimit) {
       return NextResponse.json({ requiresPayment: false });
     }
 
-    // 5️ Otherwise, create a Stripe checkout session
+    // ✅ Payment required: create Stripe checkout session
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -41,7 +36,7 @@ export async function POST(req: NextRequest) {
         price_data: {
           currency: "aud",
           product_data: { name: "Add Staff Member" },
-          unit_amount: Math.round(pricePerStaff * 100), // in cents
+          unit_amount: Math.round(pricePerStaff * 100),
         },
         quantity: 1,
       }],

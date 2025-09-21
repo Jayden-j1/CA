@@ -1,7 +1,7 @@
 // prisma/schema.prisma
 
 datasource db {
-  provider = "sqlite" // for dev (later switch to "postgresql")
+  provider = "sqlite" // dev (later switch to "postgresql" for production)
   url      = env("DATABASE_URL")
 }
 
@@ -13,54 +13,89 @@ generator client {
 // User model (used by NextAuth)
 // --------------------------------
 model User {
-  id          String   @id @default(cuid())  // cuid = unique string id
-  name        String?  // optional
-  email       String   @unique
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
   emailVerified DateTime?
-  image       String?
+  image         String?
 
-  // New fields we are adding for business logic
-  role        String   @default("USER") // can be "USER" | "ADMIN" | "BUSINESS_OWNER"
-  businessId  String?                     // foreign key to Business if user belongs to one
-  business    Business? @relation(fields: [businessId], references: [id])
+  //  For password-based login (optional if user signs in via OAuth)
+  password String?
 
-  // Relations
-  accounts    Account[]
-  sessions    Session[]
+  //  Role determines what they can do
+  role String @default("USER") // "USER" | "BUSINESS_OWNER" | "ADMIN"
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  //  If this user is staff in a business
+  businessId String?
+  business   Business? @relation(fields: [businessId], references: [id])
+
+  //  If this user is the owner of a business (1:1 relation)
+  ownedBusiness Business? @relation("BusinessOwner")
+
+  //  Payments this user has made
+  payments Payment[]
+
+  // NextAuth relations
+  accounts Account[]
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // --------------------------------
 // Business model
 // --------------------------------
 model Business {
-  id          String   @id @default(cuid())
-  name        String
-  domain      String   @unique // e.g. "company.com"
-  ownerId     String   // user who created/purchased
-  owner       User     @relation("BusinessOwner", fields: [ownerId], references: [id])
-  users       User[]   // employees linked by businessId
-  createdAt   DateTime @default(now())
+  id     String @id @default(cuid())
+  name   String
+  domain String @unique // used to validate staff emails
+
+  //  One-to-one relation with a business owner
+  ownerId String @unique
+  owner   User   @relation("BusinessOwner", fields: [ownerId], references: [id])
+
+  //  Staff + owner linked via User.businessId
+  users User[]
+
+  createdAt DateTime @default(now())
+}
+
+// --------------------------------
+// Payment model
+// --------------------------------
+model Payment {
+  id String @id @default(cuid())
+
+  //  Who made the payment
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  //  Stripe payment details
+  amount      Float
+  currency    String
+  stripeId    String // Stripe checkout session ID
+  description String
+
+  createdAt DateTime @default(now())
 }
 
 // --------------------------------
 // NextAuth models (required)
 // --------------------------------
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id])
 
