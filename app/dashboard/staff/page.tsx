@@ -1,9 +1,19 @@
+// app/dashboard/staff/page.tsx
+//
+// Staff management dashboard
+// - Only BUSINESS_OWNER users can view this page.
+// - Logged-out users → redirected to /login
+// - Logged-in but non-business users → redirected to /dashboard
+//
+// Dependencies: next-auth (for session), next/navigation (for router)
+
 'use client';
 
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import AddStaffForm from "@/components/forms/addStaffForm";
 
-// Interface for staff user
 interface Staff {
   id: string;
   name: string;
@@ -12,11 +22,37 @@ interface Staff {
 }
 
 export default function StaffDashboardPage() {
-  const [staffList, setStaffList] = useState<Staff[]>([]); // Store staff
-  const [loading, setLoading] = useState(true);           // Loading state
-  const [error, setError] = useState("");                 // Error message
+  const { data: session, status } = useSession();
+  const router = useRouter();
 
-  // Fetch staff list from API
+  const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Redirect rules
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/login"); // 🚀 logged-out → login
+    } else if (status === "authenticated" && session?.user.role !== "BUSINESS_OWNER") {
+      router.push("/dashboard"); // 🚀 users w/out permissions → dashboard
+    }
+  }, [status, session, router]);
+
+  // While checking session, show loading
+  if (status === "loading") {
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Loading staff dashboard...</p>
+      </section>
+    );
+  }
+
+  // If redirected, don't render
+  if (!session?.user || session.user.role !== "BUSINESS_OWNER") {
+    return null;
+  }
+
+  // Fetch staff list
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
@@ -36,7 +72,6 @@ export default function StaffDashboardPage() {
     }
   };
 
-  // Fetch staff on component mount
   useEffect(() => {
     fetchStaff();
   }, []);
@@ -68,7 +103,6 @@ export default function StaffDashboardPage() {
 
       {/* Add Staff Form */}
       <div className="w-[90%] sm:w-[600px] md:w-[800px]">
-        {/* Pass fetchStaff as onSuccess to refresh list after adding */}
         <AddStaffForm onSuccess={fetchStaff} />
       </div>
     </section>
@@ -82,13 +116,12 @@ export default function StaffDashboardPage() {
 
 
 
-
-
 // 'use client';
 
 // import { useEffect, useState } from "react";
 // import AddStaffForm from "@/components/forms/addStaffForm";
 
+// // Interface for staff user
 // interface Staff {
 //   id: string;
 //   name: string;
@@ -97,10 +130,11 @@ export default function StaffDashboardPage() {
 // }
 
 // export default function StaffDashboardPage() {
-//   const [staffList, setStaffList] = useState<Staff[]>([]);
-//   const [loading, setLoading] = useState(true);
-//   const [error, setError] = useState("");
+//   const [staffList, setStaffList] = useState<Staff[]>([]); // Store staff
+//   const [loading, setLoading] = useState(true);           // Loading state
+//   const [error, setError] = useState("");                 // Error message
 
+//   // Fetch staff list from API
 //   const fetchStaff = async () => {
 //     setLoading(true);
 //     setError("");
@@ -120,6 +154,7 @@ export default function StaffDashboardPage() {
 //     }
 //   };
 
+//   // Fetch staff on component mount
 //   useEffect(() => {
 //     fetchStaff();
 //   }, []);
@@ -151,8 +186,12 @@ export default function StaffDashboardPage() {
 
 //       {/* Add Staff Form */}
 //       <div className="w-[90%] sm:w-[600px] md:w-[800px]">
-//         <AddStaffForm />
+//         {/* Pass fetchStaff as onSuccess to refresh list after adding */}
+//         <AddStaffForm onSuccess={fetchStaff} />
 //       </div>
 //     </section>
 //   );
 // }
+
+
+

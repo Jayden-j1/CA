@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "db:migrate": "prisma migrate dev --schema=prisma/schema.dev.prisma",
-    "db:studio": "prisma studio --schema=prisma/schema.dev.prisma",
-    "db:generate": "prisma generate --schema=prisma/schema.dev.prisma",
+    "db:migrate": "prisma migrate dev --name init --schema=prisma/schema.prisma",
+    "db:generate": "prisma generate --schema=prisma/schema.prisma",
+    "db:studio": "prisma studio --schema=prisma/schema.prisma",
+    "db:reset": "rm -f prisma/dev.db && prisma migrate dev --name init --schema=prisma/schema.prisma && prisma generate --schema=prisma/schema.prisma && ts-node prisma/seed.ts",
     "build": "next build --turbopack",
     "start": "next start",
     "postinstall": "prisma generate --schema=prisma/schema.dev.prisma"
@@ -27,6 +28,7 @@
     "next-auth": "^4.24.11",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-hot-toast": "^2.6.0",
     "stripe": "^18.5.0"
   },
   "devDependencies": {

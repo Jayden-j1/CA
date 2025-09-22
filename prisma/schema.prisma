@@ -1,0 +1,134 @@
+// -------------------------------------------------------------------
+// Prisma schema for your app
+//
+// Purpose:
+// - Single source of truth for both development (SQLite) and production (Postgres).
+// - Keep your models here; switch database type using DATABASE_URL.
+//
+//  How it works:
+// - Local dev → DATABASE_URL="file:./dev.db" (SQLite)
+// - Production (Vercel) → DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DB_NAME?schema=public"
+//
+//  Important:
+// - Remove schema.dev.prisma and schema.prod.prisma after adding this.
+// - Prisma CLI always looks for `prisma/schema.prisma` by default.
+// - Models below include Users, Businesses, Payments, and NextAuth tables.
+// -------------------------------------------------------------------
+
+datasource db {
+  provider = "sqlite"             // for local development
+  url      = env("DATABASE_URL")  // value comes from .env / Vercel env vars
+}
+
+generator client {
+  provider = "prisma-client-js"   // generates the Prisma Client for DB access
+}
+
+// --------------------------------
+// User model (used by NextAuth)
+// --------------------------------
+model User {
+  id            String     @id @default(cuid())     // cuid = unique string id
+  name          String?                             // optional name
+  email         String     @unique                  // required unique email
+  emailVerified DateTime?
+  image         String?
+
+  // For CredentialsProvider (bcrypt-hashed)
+  password      String?
+
+  // Roles: "USER" | "BUSINESS_OWNER" | "ADMIN"
+  role          String     @default("USER")
+
+  // If user belongs to a business (null = individual)
+  businessId    String?
+  business      Business?  @relation(fields: [businessId], references: [id])
+
+  // Inverse of Business.owner (1:1)
+  ownedBusiness Business?  @relation("BusinessOwner")
+
+  // Payments made by this user
+  payments      Payment[]
+
+  // NextAuth relations
+  accounts      Account[]
+  sessions      Session[]
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+// --------------------------------
+// Business model
+// --------------------------------
+model Business {
+  id        String   @id @default(cuid())
+  name      String
+  domain    String   @unique           // e.g. "company.com", used for staff email validation
+
+  // Each business has exactly one owner (BUSINESS_OWNER)
+  ownerId   String   @unique
+  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+
+  // Staff + owner linked via User.businessId
+  users     User[]
+
+  createdAt DateTime @default(now())
+}
+
+// --------------------------------
+// Payment model
+// --------------------------------
+model Payment {
+  id          String   @id @default(cuid())
+
+  // Who paid
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+
+  // Stripe info
+  amount      Float
+  currency    String
+  stripeId    String   // Stripe Checkout Session id
+  description String
+
+  createdAt   DateTime @default(now())
+}
+
+// --------------------------------
+// NextAuth models (required by Prisma Adapter)
+// --------------------------------
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
