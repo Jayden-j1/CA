@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-// NOTE: prisma is imported but not used here. You could use it to log a
-// "Pending Payment" record before sending the user to Stripe, but right now
-// everything is handled by Stripe → webhook flow.
+// Optional: could be used to log "pending payments" before redirecting to Stripe
 import { prisma } from "@/lib/prisma";
 import Stripe from "stripe";
 
-// No apiVersion specified → avoids type error
+//  Safe Stripe client initialization
+// Uses your Secret Key from .env.local or Vercel
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: NextRequest) {
   try {
-    // 1️ Check authentication
+    // 1️ Ensure user is logged in
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,12 +20,15 @@ export async function POST(req: NextRequest) {
     // 2️ Parse request body
     const { amount, currency, description } = await req.json();
 
-    // 3️ Optional: restrict this endpoint to business owners
+    // 3️ (Optional) Restrict to business owners only
     if (session.user.role === "USER") {
-      return NextResponse.json({ error: "Users cannot make this payment" }, { status: 403 });
+      return NextResponse.json(
+        { error: "Users cannot make this payment" },
+        { status: 403 }
+      );
     }
 
-    // 4️ Create Stripe checkout session
+    // 4️ Create Stripe Checkout session
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -42,10 +44,13 @@ export async function POST(req: NextRequest) {
       ],
       success_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?success=true`,
       cancel_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?canceled=true`,
-      metadata: { userId: session.user.id }, // store user for webhook
+      metadata: {
+        userId: session.user.id, // Useful in webhook to link payment → user
+        description,
+      },
     });
 
-    // 5️ Return session URL so frontend can redirect
+    // 5️ Send Checkout session URL to frontend
     return NextResponse.json({ url: stripeSession.url });
   } catch (error) {
     console.error("Stripe payment error:", error);
