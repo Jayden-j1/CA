@@ -4,15 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    
     "db:migrate": "prisma migrate dev --schema=prisma/schema.dev.prisma",
     "db:studio": "prisma studio --schema=prisma/schema.dev.prisma",
     "db:generate": "prisma generate --schema=prisma/schema.dev.prisma",
-    
     "build": "next build --turbopack",
     "start": "next start",
     "postinstall": "prisma generate --schema=prisma/schema.dev.prisma"
-
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",
