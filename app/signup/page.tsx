@@ -9,6 +9,7 @@ export default function SignupPage() {
           HeadingOneTitle="Join Today"
           paragraphContent="Get access to our cultural awareness content packages."
           linkOne="Already have an account? Log in"
+          href="/login" // Redirect to login page
         />
       </main>
 

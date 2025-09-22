@@ -31,7 +31,7 @@ export default function ServicesPage() {
                 <h3 className="text-2xl font-extrabold tracking-wide">Type</h3>
                 <h4 className="text-xl font-bold tracking-wider">$0.00</h4>
                 <a
-                  href="#"
+                  href="/signup" //  redirect to signup page
                   className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300"
                 >
                   Get Started

@@ -114,7 +114,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
       </div>
 
       {/* User Type Selection */}
-      <fieldset className="mt-4 border-t border-white pt-4">
+      <fieldset className="mt-4 pt-4">
         <legend className="text-white font-bold text-sm md:text-base mb-2">I am signing up as:</legend>
         <label className="flex items-center gap-2 text-white">
           <input

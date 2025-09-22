@@ -10,6 +10,7 @@ export default function LoginPage() {
           HeadingOneTitle="Start Today"
           paragraphContent="Get an insight into the local Aboriginal Community (placeholder text for now)"
           linkOne="No Account? Sign up Now!"
+          href="/signup"  //  redirect to signup page
         />
       </main>
 
