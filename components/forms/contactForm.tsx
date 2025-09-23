@@ -5,47 +5,6 @@ import { emailRegex, suggestDomain } from "@/utils/emailValidation"
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircle, faCircleDot } from '@fortawesome/free-solid-svg-icons';
 
-// --- Email validation helpers ---
-// Regex for flexible email validation
-// - Supports custom domains
-// - Requires at least one dot in domain
-// - TLD must be 2–15 characters long
-
-
-// Common email domains to suggest if typos are detected
-const commonDomains = [
-  "gmail.com",
-  "yahoo.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com",
-  "protonmail.com",
-  "aol.com",
-  "live.com"
-];
-
-// Levenshtein distance algorithm (edit distance)
-function levenshteinDistance(a: string, b: string): number {
-  const matrix = Array.from({ length: a.length + 1 }, (_, i) =>
-    Array(b.length + 1).fill(0)
-  );
-  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
-    }
-  }
-  return matrix[a.length][b.length];
-}
-
-
 export default function ContactFormComponent() {
   // State to track which radio button is selected
   const [selected, setSelected] = useState<'email' | 'mobile' | 'textMessage' | ''>('');
@@ -167,7 +126,74 @@ export default function ContactFormComponent() {
       />
 
       {/* Preferred contact method */}
-      {/* ... unchanged radio buttons ... */}
+      <fieldset className="flex flex-col space-y-3 mt-4 border-0 p-0 m-0">
+        <legend className="text-left text-white font-bold text-sm tracking-wide md:text-base px-0 mb-1">
+          Preferred contact method
+        </legend>
+
+        {/* Email */}
+        <label htmlFor="viaEmail" className="flex items-center cursor-pointer space-x-2">
+          <input
+            type="radio"
+            id="viaEmail"
+            name="preferredContact"
+            value="email"
+            checked={selected === 'email'}
+            onChange={() => handleRadioChange('email')}
+            className="sr-only"
+          />
+          <FontAwesomeIcon
+            icon={selected === 'email' ? faCircleDot : faCircle}
+            className={selected === 'email' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
+            size="lg"
+          />
+          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
+            Email
+          </span>
+        </label>
+
+        {/* Mobile */}
+        <label htmlFor="viaMobile" className="flex items-center cursor-pointer space-x-2">
+          <input
+            type="radio"
+            id="viaMobile"
+            name="preferredContact"
+            value="mobile"
+            checked={selected === 'mobile'}
+            onChange={() => handleRadioChange('mobile')}
+            className="sr-only"
+          />
+          <FontAwesomeIcon
+            icon={selected === 'mobile' ? faCircleDot : faCircle}
+            className={selected === 'mobile' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
+            size="lg"
+          />
+          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
+            Mobile
+          </span>
+        </label>
+
+        {/* Text Message */}
+        <label htmlFor="viaTextMessage" className="flex items-center cursor-pointer space-x-2">
+          <input
+            type="radio"
+            id="viaTextMessage"
+            name="preferredContact"
+            value="textMessage"
+            checked={selected === 'textMessage'}
+            onChange={() => handleRadioChange('textMessage')}
+            className="sr-only"
+          />
+          <FontAwesomeIcon
+            icon={selected === 'textMessage' ? faCircleDot : faCircle}
+            className={selected === 'textMessage' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
+            size="lg"
+          />
+          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
+            Text Message
+          </span>
+        </label>
+      </fieldset>
 
       {/* Submit button */}
       <button
@@ -181,6 +207,7 @@ export default function ContactFormComponent() {
     </form>
   );
 }
+
 
 
 

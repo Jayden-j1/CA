@@ -6,39 +6,6 @@ import { signIn } from "next-auth/react";
 import toast from "react-hot-toast";
 import { emailRegex, suggestDomain } from "@/utils/emailValidation";
 
-// --- Email validation helpers ---
-const commonDomains = [
-  "gmail.com",
-  "yahoo.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com",
-  "protonmail.com",
-  "aol.com",
-  "live.com"
-];
-
-function levenshteinDistance(a: string, b: string): number {
-  const matrix = Array.from({ length: a.length + 1 }, (_, i) =>
-    Array(b.length + 1).fill(0)
-  );
-  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
-    }
-  }
-  return matrix[a.length][b.length];
-}
-
-
 interface SignupFormProps {
   redirectTo?: string;
 }
@@ -51,7 +18,6 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
-
   const [loading, setLoading] = useState(false);
 
   // Toggle password visibility
@@ -177,10 +143,51 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
       </div>
 
       {/* User Type Selection */}
-      {/* ... unchanged ... */}
+      <fieldset className="mt-4 pt-4">
+        <legend className="text-white font-bold text-sm md:text-base mb-2">
+          I am signing up as:
+        </legend>
+        <label className="flex items-center gap-2 text-white">
+          <input
+            type="radio"
+            name="userType"
+            value="individual"
+            checked={userType === "individual"}
+            onChange={() => setUserType("individual")}
+            className="accent-green-500"
+          />
+          Individual
+        </label>
+        <label className="flex items-center gap-2 text-white">
+          <input
+            type="radio"
+            name="userType"
+            value="business"
+            checked={userType === "business"}
+            onChange={() => setUserType("business")}
+            className="accent-green-500"
+          />
+          Business
+        </label>
+      </fieldset>
 
       {/* Business Name (only if Business is selected) */}
-      {/* ... unchanged ... */}
+      {userType === "business" && (
+        <>
+          <label htmlFor="businessName" className="text-left text-white font-bold text-sm md:text-base">
+            Business Name
+          </label>
+          <input
+            type="text"
+            id="businessName"
+            value={businessName}
+            onChange={(e) => setBusinessName(e.target.value)}
+            required={userType === "business"}
+            placeholder="Your company name"
+            className="block w-full border-white border-2 rounded-2xl px-4 py-3 bg-transparent text-white placeholder-white"
+          />
+        </>
+      )}
 
       {/* Submit Button */}
       <div className="text-center">
@@ -190,7 +197,14 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
       </div>
 
       {/* Links */}
-      {/* ... unchanged ... */}
+      <aside>
+        <p className="text-white text-xs sm:text-sm md:text-base mt-2 text-center sm:text-left leading-relaxed">
+          Already have an account?
+          <a href="/login" className="text-white hover:underline font-bold ml-1">
+            Log in
+          </a>.
+        </p>
+      </aside>
     </form>
   );
 }
