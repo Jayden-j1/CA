@@ -3,54 +3,46 @@
 //
 // Purpose:
 // - Single source of truth for both development (SQLite) and production (Postgres).
-// - Keep your models here; switch database type using DATABASE_URL.
+// - Uses one schema, switching DB via DATABASE_URL in .env.
 //
-//  How it works:
-// - Local dev → DATABASE_URL="file:./dev.db" (SQLite)
-// - Production (Vercel) → DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DB_NAME?schema=public"
-//
-//  Important:
-// - Remove schema.dev.prisma and schema.prod.prisma after adding this.
-// - Prisma CLI always looks for `prisma/schema.prisma` by default.
-// - Models below include Users, Businesses, Payments, and NextAuth tables.
+// Changes in this version:
+//  Renamed `password` field → `hashedPassword` for clarity.
+//    (No chance of confusing it with plaintext passwords.)
+//  Added @map("password") to keep DB column name backwards-compatible.
 // -------------------------------------------------------------------
 
 datasource db {
-  provider = "sqlite"             // for local development
-  url      = env("DATABASE_URL")  // value comes from .env / Vercel env vars
+  provider = "sqlite"             // Local dev (SQLite)
+  url      = env("DATABASE_URL")  // From .env / Vercel environment
 }
 
 generator client {
-  provider = "prisma-client-js"   // generates the Prisma Client for DB access
+  provider = "prisma-client-js"   // Generates Prisma Client
 }
 
-// --------------------------------
-// User model (used by NextAuth)
-// --------------------------------
+// -----------------------------
+// User model
+// -----------------------------
 model User {
-  id            String     @id @default(cuid())     // cuid = unique string id
-  name          String?                             // optional name
-  email         String     @unique                  // required unique email
+  id            String     @id @default(cuid())
+  name          String?
+  email         String     @unique
   emailVerified DateTime?
   image         String?
 
-  // For CredentialsProvider (bcrypt-hashed)
-  password      String?
+  //   Store bcrypt-hashed password (NOT plaintext)
+  //   - Field is `hashedPassword` in Prisma Client
+  //   - Column in DB is still `password` (for compatibility)
+  hashedPassword String? @map("password")
 
   // Roles: "USER" | "BUSINESS_OWNER" | "ADMIN"
   role          String     @default("USER")
 
-  // If user belongs to a business (null = individual)
   businessId    String?
   business      Business?  @relation(fields: [businessId], references: [id])
-
-  // Inverse of Business.owner (1:1)
   ownedBusiness Business?  @relation("BusinessOwner")
 
-  // Payments made by this user
   payments      Payment[]
-
-  // NextAuth relations
   accounts      Account[]
   sessions      Session[]
 
@@ -58,46 +50,37 @@ model User {
   updatedAt     DateTime   @updatedAt
 }
 
-// --------------------------------
+// -----------------------------
 // Business model
-// --------------------------------
+// -----------------------------
 model Business {
   id        String   @id @default(cuid())
   name      String
-  domain    String   @unique           // e.g. "company.com", used for staff email validation
-
-  // Each business has exactly one owner (BUSINESS_OWNER)
+  domain    String   @unique
   ownerId   String   @unique
   owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
-
-  // Staff + owner linked via User.businessId
   users     User[]
 
   createdAt DateTime @default(now())
 }
 
-// --------------------------------
+// -----------------------------
 // Payment model
-// --------------------------------
+// -----------------------------
 model Payment {
   id          String   @id @default(cuid())
-
-  // Who paid
   userId      String
   user        User     @relation(fields: [userId], references: [id])
-
-  // Stripe info
   amount      Float
   currency    String
-  stripeId    String   // Stripe Checkout Session id
+  stripeId    String
   description String
-
   createdAt   DateTime @default(now())
 }
 
-// --------------------------------
-// NextAuth models (required by Prisma Adapter)
-// --------------------------------
+// -----------------------------
+// NextAuth tables
+// -----------------------------
 model Account {
   id                 String  @id @default(cuid())
   userId             String
