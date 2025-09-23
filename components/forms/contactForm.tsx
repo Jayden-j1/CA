@@ -1,22 +1,34 @@
 'use client';
 
 import { useState } from 'react';
+import { emailRegex, suggestDomain } from "@/utils/emailValidation"
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircle, faCircleDot } from '@fortawesome/free-solid-svg-icons';
 
 // --- Email validation helpers ---
-// Regex for flexible email validation (allows dots, plus, subdomains, long TLDs)
-const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+// Regex for flexible email validation
+// - Supports custom domains
+// - Requires at least one dot in domain
+// - TLD must be 2–15 characters long
 
-// Common email domains to check for typos
-const commonDomains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"];
 
-// Levenshtein distance function (to measure closeness between strings)
+// Common email domains to suggest if typos are detected
+const commonDomains = [
+  "gmail.com",
+  "yahoo.com",
+  "hotmail.com",
+  "outlook.com",
+  "icloud.com",
+  "protonmail.com",
+  "aol.com",
+  "live.com"
+];
+
+// Levenshtein distance algorithm (edit distance)
 function levenshteinDistance(a: string, b: string): number {
   const matrix = Array.from({ length: a.length + 1 }, (_, i) =>
     Array(b.length + 1).fill(0)
   );
-
   for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
   for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
 
@@ -24,28 +36,15 @@ function levenshteinDistance(a: string, b: string): number {
     for (let j = 1; j <= b.length; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1, // deletion
-        matrix[i][j - 1] + 1, // insertion
-        matrix[i - 1][j - 1] + cost // substitution
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
       );
     }
   }
-
   return matrix[a.length][b.length];
 }
 
-// Suggest closest common domain if a typo is detected
-function suggestDomain(email: string) {
-  const parts = email.split("@");
-  if (parts.length !== 2) return null;
-
-  const [local, domain] = parts;
-  const suggestion = commonDomains.find((d) =>
-    domain && levenshteinDistance(domain, d) <= 2
-  );
-
-  return suggestion ? `${local}@${suggestion}` : null;
-}
 
 export default function ContactFormComponent() {
   // State to track which radio button is selected
@@ -54,7 +53,7 @@ export default function ContactFormComponent() {
   // State to store the user's mobile number input (restricted to 10 digits)
   const [mobileNumber, setMobileNumber] = useState('');
 
-  // State to store the user's email input (with validation)
+  // State to store the user's email input
   const [email, setEmail] = useState('');
 
   // Handler for radio button change
@@ -140,14 +139,18 @@ export default function ContactFormComponent() {
         autoComplete="email"
         inputMode="email"
       />
-      {/* Show clickable suggestion */}
+      {/* Show suggestion with "✅ Use this" button */}
       {!emailRegex.test(email) && suggestDomain(email) && (
-        <p
-          className="text-yellow-400 text-sm mt-1 cursor-pointer underline"
-          onClick={() => setEmail(suggestDomain(email)!)}
-        >
-          Did you mean <strong>{suggestDomain(email)}</strong>?
-        </p>
+        <div className="flex items-center space-x-2 mt-1 text-yellow-400 text-sm">
+          <span>Did you mean <strong>{suggestDomain(email)}</strong>?</span>
+          <button
+            type="button"
+            onClick={() => setEmail(suggestDomain(email)!)}
+            className="ml-2 px-2 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600"
+          >
+            ✅ Use this
+          </button>
+        </div>
       )}
 
       {/* Message Textarea */}
@@ -164,7 +167,7 @@ export default function ContactFormComponent() {
       />
 
       {/* Preferred contact method */}
-      {/* ... (unchanged) ... */}
+      {/* ... unchanged radio buttons ... */}
 
       {/* Submit button */}
       <button
@@ -178,6 +181,7 @@ export default function ContactFormComponent() {
     </form>
   );
 }
+
 
 
 
