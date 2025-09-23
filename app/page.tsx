@@ -30,7 +30,7 @@ export default function Home() {
     <>
       {/* Top of page content, including Acknowledgement of Country link */}
       <TopofPageContent
-        HeadingOneTitle="Nynangbul Cultural Awareness"
+        HeadingOneTitle="Nyangbul Cultural Awareness"
         paragraphContent="Cultural Awareness training from the Grass-Roots Community"
         linkOne="Acknowledgement of Country"
         onClick={openAcknowledge} // now fully typed

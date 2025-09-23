@@ -1,9 +1,12 @@
+// app/components/Header/DashboardNavbar.tsx (example path)
+
 'use client';
 
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { publicNavigation, NavItem } from "@/config/navigation"; // ✅ centralized config
+import { useSession } from "next-auth/react";
+import { dashboardNavigation, NavItem } from "@/config/navigation"; // ✅ centralized config
 
 interface NavbarProps {
   navigation?: NavItem[];
@@ -12,8 +15,16 @@ interface NavbarProps {
 const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const role = session?.user?.role; // e.g. "USER", "BUSINESS_OWNER", "ADMIN"
 
-  const navItems = navigation || publicNavigation;
+  // ✅ Use config and filter by role
+  const navItems = (navigation || dashboardNavigation).filter((item) => {
+    if (item.requiresRole && item.requiresRole !== role) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <header>
