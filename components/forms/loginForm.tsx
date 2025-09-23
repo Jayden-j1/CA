@@ -86,7 +86,7 @@ export default function Login() {
             </a>
             <br />
             Don't have an account?
-            <a href="#" className="text-white hover:underline font-bold ml-1">Join now</a>.
+            <a href="/signup" className="text-white hover:underline font-bold ml-1">Join now</a>.
           </p>
         </aside>
       </form>
