@@ -3,8 +3,12 @@
 // Purpose:
 // - Configure NextAuth with Prisma + CredentialsProvider.
 // - Support login via email/password (credentials).
-// - Safely compare bcrypt-hashed passwords.
-// - Expose role + businessId to frontend session for role-based UI.
+// - Compare plain text password against stored bcrypt hash.
+// - Expose role + businessId in JWT/session for frontend role-based UI.
+//
+// Notes:
+// - OAuth providers can be added later (e.g. Google).
+// - Uses JWT sessions for scalability.
 
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "./prisma";
@@ -23,13 +27,13 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        // 1. Basic validation
+        // 1. Validate input
         if (!credentials?.email || !credentials.password) {
           console.warn("[NextAuth] Missing email or password");
           return null;
         }
 
-        // 2. Find user in DB
+        // 2. Find user
         const user = await prisma.user.findUnique({
           where: { email: credentials.email },
         });
@@ -38,13 +42,13 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        // 3. Ensure user has a stored password (OAuth users may not)
+        // 3. Ensure password exists (OAuth users may not have one)
         if (!user.hashedPassword) {
           console.warn("[NextAuth] User exists but has no password:", credentials.email);
           return null;
         }
 
-        // 4. Compare entered password with bcrypt hash
+        // 4. Compare bcrypt hash
         const isValid = await bcrypt.compare(credentials.password, user.hashedPassword);
         if (!isValid) {
           console.warn("[NextAuth] Invalid password for:", credentials.email);
@@ -60,6 +64,7 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
 
   callbacks: {
+    // Attach custom fields to JWT
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
@@ -68,6 +73,7 @@ export const authOptions: NextAuthOptions = {
       }
       return token;
     },
+    // Attach JWT fields to session
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;

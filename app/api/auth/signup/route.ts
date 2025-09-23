@@ -21,34 +21,34 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name, email, password, userType, businessName } = body;
 
-    // Validate fields
+    // 1. Validate fields
     if (!name || !email || !password) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Prevent duplicate signup
+    // 2. Prevent duplicate signup
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return NextResponse.json({ error: "User already exists" }, { status: 400 });
     }
 
-    // Hash password securely
+    // 3. Hash password securely
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Determine role
+    // 4. Determine role
     const role = userType === "business" ? "BUSINESS_OWNER" : "USER";
 
-    // Create user
+    // 5. Create user with hashed password
     const user = await prisma.user.create({
       data: {
         name,
         email,
-        hashedPassword, // ✅ renamed field
+        hashedPassword, // ✅ matches schema.prisma
         role,
       },
     });
 
-    // If business owner → create Business
+    // 6. If business owner → create Business record
     if (role === "BUSINESS_OWNER") {
       if (!businessName) {
         return NextResponse.json(
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Link back to user
+      // Link business back to user
       await prisma.user.update({
         where: { id: user.id },
         data: { businessId: business.id },
