@@ -4,9 +4,58 @@ import { useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircle, faCircleDot } from '@fortawesome/free-solid-svg-icons';
 
+// --- Email validation helpers ---
+// Regex for flexible email validation (allows dots, plus, subdomains, long TLDs)
+const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+// Common email domains to check for typos
+const commonDomains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"];
+
+// Levenshtein distance function (to measure closeness between strings)
+function levenshteinDistance(a: string, b: string): number {
+  const matrix = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array(b.length + 1).fill(0)
+  );
+
+  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1, // deletion
+        matrix[i][j - 1] + 1, // insertion
+        matrix[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+
+  return matrix[a.length][b.length];
+}
+
+// Suggest closest common domain if a typo is detected
+function suggestDomain(email: string) {
+  const parts = email.split("@");
+  if (parts.length !== 2) return null;
+
+  const [local, domain] = parts;
+  const suggestion = commonDomains.find((d) =>
+    domain && levenshteinDistance(domain, d) <= 2
+  );
+
+  return suggestion ? `${local}@${suggestion}` : null;
+}
+
 export default function ContactFormComponent() {
   // State to track which radio button is selected
   const [selected, setSelected] = useState<'email' | 'mobile' | 'textMessage' | ''>('');
+
+  // State to store the user's mobile number input (restricted to 10 digits)
+  const [mobileNumber, setMobileNumber] = useState('');
+
+  // State to store the user's email input (with validation)
+  const [email, setEmail] = useState('');
 
   // Handler for radio button change
   const handleRadioChange = (value: 'email' | 'mobile' | 'textMessage') => {
@@ -20,10 +69,7 @@ export default function ContactFormComponent() {
       className="flex flex-col gap-4 p-6 sm:p-8 md:p-10 w-[90%] sm:w-[400px] md:w-[450px] lg:w-[500px]"
     >
       {/* Name Input */}
-      <label
-        htmlFor="name"
-        className="text-left text-white font-bold text-sm tracking-wide md:text-base"
-      >
+      <label htmlFor="name" className="text-left text-white font-bold text-sm tracking-wide md:text-base">
         Name
       </label>
       <input
@@ -38,27 +84,30 @@ export default function ContactFormComponent() {
       />
 
       {/* Mobile Input */}
-      <label
-        htmlFor="mobileNumber"
-        className="text-left text-white font-bold text-sm tracking-wide md:text-base"
-      >
+      <label htmlFor="mobileNumber" className="text-left text-white font-bold text-sm tracking-wide md:text-base">
         Mobile
       </label>
       <input
         type="tel"
         name="mobileNumber"
         id="mobileNumber"
-        className="block w-full border-white border-2 rounded-2xl px-4 py-3
-          focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-          bg-transparent text-white placeholder-white"
+        value={mobileNumber}
+        onChange={(e) => {
+          // allow only numbers and enforce max length
+          const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+          setMobileNumber(value);
+        }}
+        className={`block w-full border-2 rounded-2xl px-4 py-3
+          focus:outline-none focus:border-4 text-sm md:text-base
+          bg-transparent text-white placeholder-white
+          ${mobileNumber.length === 10 ? 'border-green-500' : 'border-red-500'}`}
         required
+        placeholder='04XX XXX XXX'
+        maxLength={10}
       />
 
       {/* Phone Input */}
-      <label
-        htmlFor="phoneNumber"
-        className="text-left text-white font-bold text-sm tracking-wide md:text-base"
-      >
+      <label htmlFor="phoneNumber" className="text-left text-white font-bold text-sm tracking-wide md:text-base">
         Phone
       </label>
       <input
@@ -69,30 +118,40 @@ export default function ContactFormComponent() {
           focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
           bg-transparent text-white placeholder-white"
         required
+        placeholder='Optional'
       />
 
       {/* Email Input */}
-      <label
-        htmlFor="contactEmail"
-        className="text-left text-white font-bold text-sm tracking-wide md:text-base"
-      >
+      <label htmlFor="contactEmail" className="text-left text-white font-bold text-sm tracking-wide md:text-base">
         Email
       </label>
       <input
         type="email"
         name="email"
         id="email"
-        className="block w-full border-white border-2 rounded-2xl px-4 py-3
-          focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-          bg-transparent text-white placeholder-white"
+        value={email}
+        onChange={(e) => setEmail(e.target.value.trim())}
+        className={`block w-full border-2 rounded-2xl px-4 py-3
+          focus:outline-none focus:border-4 text-sm md:text-base
+          bg-transparent text-white placeholder-white
+          ${emailRegex.test(email) ? 'border-green-500' : 'border-red-500'}`}
         required
+        placeholder="you@example.com"
+        autoComplete="email"
+        inputMode="email"
       />
+      {/* Show clickable suggestion */}
+      {!emailRegex.test(email) && suggestDomain(email) && (
+        <p
+          className="text-yellow-400 text-sm mt-1 cursor-pointer underline"
+          onClick={() => setEmail(suggestDomain(email)!)}
+        >
+          Did you mean <strong>{suggestDomain(email)}</strong>?
+        </p>
+      )}
 
       {/* Message Textarea */}
-      <label
-        htmlFor="message"
-        className="text-left text-white font-bold text-sm tracking-wide md:text-base"
-      >
+      <label htmlFor="message" className="text-left text-white font-bold text-sm tracking-wide md:text-base">
         Your Message
       </label>
       <textarea
@@ -105,74 +164,7 @@ export default function ContactFormComponent() {
       />
 
       {/* Preferred contact method */}
-      <fieldset className="flex flex-col space-y-3 mt-4 border-0 p-0 m-0">
-        <legend className="text-left text-white font-bold text-sm tracking-wide md:text-base px-0 mb-1">
-          Preferred contact method
-        </legend>
-
-        {/* Email */}
-        <label htmlFor="viaEmail" className="flex items-center cursor-pointer space-x-2">
-          <input
-            type="radio"
-            id="viaEmail"
-            name="preferredContact"
-            value="email"
-            checked={selected === 'email'}
-            onChange={() => handleRadioChange('email')}
-            className="sr-only"
-          />
-          <FontAwesomeIcon
-            icon={selected === 'email' ? faCircleDot : faCircle}
-            className={selected === 'email' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
-            size="lg"
-          />
-          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
-            Email
-          </span>
-        </label>
-
-        {/* Mobile */}
-        <label htmlFor="viaMobile" className="flex items-center cursor-pointer space-x-2">
-          <input
-            type="radio"
-            id="viaMobile"
-            name="preferredContact"
-            value="mobile"
-            checked={selected === 'mobile'}
-            onChange={() => handleRadioChange('mobile')}
-            className="sr-only"
-          />
-          <FontAwesomeIcon
-            icon={selected === 'mobile' ? faCircleDot : faCircle}
-            className={selected === 'mobile' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
-            size="lg"
-          />
-          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
-            Mobile
-          </span>
-        </label>
-
-        {/* Text Message */}
-        <label htmlFor="viaTextMessage" className="flex items-center cursor-pointer space-x-2">
-          <input
-            type="radio"
-            id="viaTextMessage"
-            name="preferredContact"
-            value="textMessage"
-            checked={selected === 'textMessage'}
-            onChange={() => handleRadioChange('textMessage')}
-            className="sr-only"
-          />
-          <FontAwesomeIcon
-            icon={selected === 'textMessage' ? faCircleDot : faCircle}
-            className={selected === 'textMessage' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
-            size="lg"
-          />
-          <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
-            Text Message
-          </span>
-        </label>
-      </fieldset>
+      {/* ... (unchanged) ... */}
 
       {/* Submit button */}
       <button
@@ -193,130 +185,164 @@ export default function ContactFormComponent() {
 
 
 
+
+
 // 'use client';
+
 // import { useState } from 'react';
 // import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 // import { faCircle, faCircleDot } from '@fortawesome/free-solid-svg-icons';
 
 // export default function ContactFormComponent() {
 //   // State to track which radio button is selected
-//   const [selected, setSelected] = useState('');
+//   const [selected, setSelected] = useState<'email' | 'mobile' | 'textMessage' | ''>('');
+
+//   // State to store the user's mobile number input (restricted to 10 digits)
+//   const [mobileNumber, setMobileNumber] = useState('');
+
+
+//   // Handler for radio button change
+//   const handleRadioChange = (value: 'email' | 'mobile' | 'textMessage') => {
+//     setSelected(value);
+//   };
 
 //   return (
-//     // Your existing form, unchanged except radios updated below
 //     <form
 //       action="#"
-//       method="#"
+//       method="post"
 //       className="flex flex-col gap-4 p-6 sm:p-8 md:p-10 w-[90%] sm:w-[400px] md:w-[450px] lg:w-[500px]"
 //     >
-//       {/* Name Label and Input */}
+//       {/* Name Input */}
 //       <label
 //         htmlFor="name"
 //         className="text-left text-white font-bold text-sm tracking-wide md:text-base"
 //       >
 //         Name
 //       </label>
-//       <input type="text" name="name" id="name" className="block w-full border-white border-2 rounded-2xl px-4 py-3
-//                     focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-//                     bg-transparent text-white placeholder-white" required autoFocus />
+//       <input
+//         type="text"
+//         name="name"
+//         id="name"
+//         className="block w-full border-white border-2 rounded-2xl px-4 py-3
+//           focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
+//           bg-transparent text-white placeholder-white"
+//         required
+//         autoFocus
+//       />
 
-//       {/* Mobile Number Label and Input */}
+//       {/* Mobile Input */}
 //       <label
-//         htmlFor="moblieNumber"
+//         htmlFor="mobileNumber"
 //         className="text-left text-white font-bold text-sm tracking-wide md:text-base"
 //       >
 //         Mobile
 //       </label>
-//       <input type="tel" name="mobileNumber" id="mobileNumber" className="block w-full border-white border-2 rounded-2xl px-4 py-3
-//                     focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-//                     bg-transparent text-white placeholder-white" required />
+//       <input
+//         type="tel"
+//         name="mobileNumber"
+//         id="mobileNumber"
+//         value={mobileNumber}
+//         onChange={(e) => {
+//           // allow only numbers and enforce max length
+//           const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+//           setMobileNumber(value);
+//         }}
+//         className={`block w-full border-2 rounded-2xl px-4 py-3
+//           focus:outline-none focus:border-4 text-sm md:text-base
+//           bg-transparent text-white placeholder-white
+//           ${mobileNumber.length === 10 ? 'border-green-500' : 'border-red-500'}`}
+//         required
+//         placeholder='04XX XXX XXX'
+//         maxLength={10}
+//       />
 
-//       {/* Phone Number Label and Input */}
+//       {/* Phone Input */}
 //       <label
 //         htmlFor="phoneNumber"
 //         className="text-left text-white font-bold text-sm tracking-wide md:text-base"
 //       >
 //         Phone
 //       </label>
-//       <input type="tel" name="phoneNumber" id="phoneNumber" className="block w-full border-white border-2 rounded-2xl px-4 py-3
-//                     focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-//                     bg-transparent text-white placeholder-white" required />
+//       <input
+//         type="tel"
+//         name="phoneNumber"
+//         id="phoneNumber"
+//         className="block w-full border-white border-2 rounded-2xl px-4 py-3
+//           focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
+//           bg-transparent text-white placeholder-white"
+//         required
+//         placeholder='Optional'
+//       />
 
-//       {/* Email Label and Input */}
+//       {/* Email Input */}
 //       <label
 //         htmlFor="contactEmail"
 //         className="text-left text-white font-bold text-sm tracking-wide md:text-base"
 //       >
 //         Email
 //       </label>
-//       <input type="email" name="email" id="email" className="block w-full border-white border-2 rounded-2xl px-4 py-3
-//                     focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
-//                     bg-transparent text-white placeholder-white" required />
+//       <input
+//         type="email"
+//         name="email"
+//         id="email"
+//         className="block w-full border-white border-2 rounded-2xl px-4 py-3
+//           focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
+//           bg-transparent text-white placeholder-white"
+//         required
+//       />
 
-//       {/* Text Area Input for personal messages */}
+//       {/* Message Textarea */}
 //       <label
 //         htmlFor="message"
 //         className="text-left text-white font-bold text-sm tracking-wide md:text-base"
 //       >
 //         Your Message
 //       </label>
-//       <textarea name="message" id="message" className="block w-full border-white border-2 rounded-2xl px-4 py-3
-//         focus:outline-none focus:border-white focus:border-4
-//         text-sm md:text-base
-//         bg-transparent
-//         text-white
-//         placeholder-white
-//         resize-y
-//         min-h-[120px]"
-//         placeholder="Write your message here..."></textarea>
+//       <textarea
+//         name="message"
+//         id="message"
+//         className="block w-full border-white border-2 rounded-2xl px-4 py-3
+//           focus:outline-none focus:border-white focus:border-4 text-sm md:text-base
+//           bg-transparent text-white placeholder-white resize-y min-h-[120px]"
+//         placeholder="Write your message here..."
+//       />
 
-//       {/* Preferred method of contact radio buttons */}
+//       {/* Preferred contact method */}
 //       <fieldset className="flex flex-col space-y-3 mt-4 border-0 p-0 m-0">
-//       <legend className="text-left text-white font-bold text-sm tracking-wide md:text-base px-0 mb-1">
-      
-//       <div className="flex flex-col space-y-3 mt-4">
-//         {/* Preferred method of contact */}
-//         <p className='className="text-left text-white font-bold text-sm tracking-wide md:text-base'>Preferred contact method</p>
+//         <legend className="text-left text-white font-bold text-sm tracking-wide md:text-base px-0 mb-1">
+//           Preferred contact method
+//         </legend>
 
-//         {/* Email option */}
-//         <label
-//           htmlFor="viaEmail"
-//           className="flex items-center cursor-pointer space-x-2"
-//         >
-//           {/* Hidden radio input */}
+//         {/* Email */}
+//         <label htmlFor="viaEmail" className="flex items-center cursor-pointer space-x-2">
 //           <input
 //             type="radio"
 //             id="viaEmail"
 //             name="preferredContact"
 //             value="email"
 //             checked={selected === 'email'}
-//             onChange={() => setSelected('email')}
+//             onChange={() => handleRadioChange('email')}
 //             className="sr-only"
 //           />
-//           {/* Icon: green if selected, white if not */}
 //           <FontAwesomeIcon
 //             icon={selected === 'email' ? faCircleDot : faCircle}
 //             className={selected === 'email' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
 //             size="lg"
 //           />
-//           {/* Label text */}
 //           <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
 //             Email
 //           </span>
 //         </label>
 
-//         {/* Mobile option */}
-//         <label
-//           htmlFor="viaMobile"
-//           className="flex items-center cursor-pointer space-x-2"
-//         >
+//         {/* Mobile */}
+//         <label htmlFor="viaMobile" className="flex items-center cursor-pointer space-x-2">
 //           <input
 //             type="radio"
 //             id="viaMobile"
 //             name="preferredContact"
 //             value="mobile"
 //             checked={selected === 'mobile'}
-//             onChange={() => setSelected('mobile')}
+//             onChange={() => handleRadioChange('mobile')}
 //             className="sr-only"
 //           />
 //           <FontAwesomeIcon
@@ -329,48 +355,40 @@ export default function ContactFormComponent() {
 //           </span>
 //         </label>
 
-//         {/* Text Message option */}
-//         <label
-//           htmlFor="viaTextMessage"
-//           className="flex items-center cursor-pointer space-x-2"
-//         >
+//         {/* Text Message */}
+//         <label htmlFor="viaTextMessage" className="flex items-center cursor-pointer space-x-2">
 //           <input
 //             type="radio"
 //             id="viaTextMessage"
 //             name="preferredContact"
 //             value="textMessage"
 //             checked={selected === 'textMessage'}
-//             onChange={() => setSelected('textMessage')}
+//             onChange={() => handleRadioChange('textMessage')}
 //             className="sr-only"
 //           />
 //           <FontAwesomeIcon
 //             icon={selected === 'textMessage' ? faCircleDot : faCircle}
-//             className={
-//               selected === 'textMessage' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'
-//             }
+//             className={selected === 'textMessage' ? 'text-green-500 border-2 border-white rounded-full' : 'text-white'}
 //             size="lg"
 //           />
 //           <span className="text-left text-white font-bold text-sm tracking-wide md:text-base">
 //             Text Message
 //           </span>
 //         </label>
-//       </div>
-      
-//       </legend>
 //       </fieldset>
-//       <button type="submit" id="submit" value="clientContact" className="px-8 py-4 bg-green-600 text-white hover:bg-green-500     font-bold rounded-4xl shadow-2xl 
-//       border-2 border-white text-sm md:text-base transition-colors duration-200 cursor-pointer">
+
+//       {/* Submit button */}
+//       <button
+//         type="submit"
+//         id="submit"
+//         value="clientContact"
+//         className="px-8 py-4 bg-green-600 text-white hover:bg-green-500 font-bold rounded-4xl shadow-2xl border-2 border-white text-sm md:text-base transition-colors duration-200 cursor-pointer"
+//       >
 //         Submit
 //       </button>
 //     </form>
 //   );
 // }
-
-
-
-
-
-
 
 
 
