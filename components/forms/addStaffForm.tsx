@@ -11,10 +11,10 @@
 // - react-hot-toast installed
 // - <Toaster /> set globally in app/layout.tsx with custom theme
 
+'use client';
 
 import ButtonWithSpinner from "../ui/buttonWithSpinner";  // Import Spinner Component
 
-'use client';
 
 import { useState, FormEvent } from "react";
 import toast from "react-hot-toast";
