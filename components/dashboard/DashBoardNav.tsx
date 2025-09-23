@@ -1,5 +1,3 @@
-// app/components/Header/DashboardNavbar.tsx (example path)
-
 'use client';
 
 import { useState } from "react";
