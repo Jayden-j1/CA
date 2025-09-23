@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "prisma generate --schema=prisma/schema.dev.prisma && next dev --turbopack",
+    "dev": "prisma generate --schema=prisma/schema.prisma && next dev --turbopack",
     "db:migrate": "prisma migrate dev --name init --schema=prisma/schema.prisma",
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
     "db:studio": "prisma studio --schema=prisma/schema.prisma",
     "db:reset": "rm -f prisma/dev.db && prisma migrate dev --name init --schema=prisma/schema.prisma && prisma generate --schema=prisma/schema.prisma && ts-node prisma/seed.ts",
     "build": "prisma generate --schema=prisma/schema.prisma && next build --turbopack",
     "start": "next start",
-    "postinstall": "prisma generate --schema=prisma/schema.prisma"
+    "postinstall": "prisma generate --schema=prisma/schema.prisma",
+    "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",
@@ -44,6 +45,7 @@
     "prisma": "^6.16.2",
     "tailwindcss": "^4.1.13",
     "ts-jest": "^29.4.4",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
   }
 }
