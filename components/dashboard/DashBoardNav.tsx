@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { dashboardNavigation, NavItem } from "@/config/navigation"; // ✅ centralized config
+import { dashboardNavigation, NavItem } from "@/config/navigation"; // centralized config
 
 interface NavbarProps {
   navigation?: NavItem[];
@@ -16,7 +16,7 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   const { data: session } = useSession();
   const role = session?.user?.role; // e.g. "USER", "BUSINESS_OWNER", "ADMIN"
 
-  // ✅ Use config and filter by role
+  //  Use config and filter by role
   const navItems = (navigation || dashboardNavigation).filter((item) => {
     if (item.requiresRole && item.requiresRole !== role) {
       return false;
