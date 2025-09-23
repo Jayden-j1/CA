@@ -16,7 +16,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
   const [userType, setUserType] = useState<"individual" | "business">("individual");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(""); // ✅ Plaintext password (hashed securely on backend)
   const [businessName, setBusinessName] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -29,6 +29,8 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
     setLoading(true);
 
     try {
+      // ✅ Send plaintext password here
+      // Backend API will hash it into hashedPassword before saving
       const response = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -49,12 +51,14 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
         return;
       }
 
+      // ✅ Friendly toast based on role
       if (data.role === "BUSINESS_OWNER") {
         toast.success("🎉 Welcome Business Owner! Your dashboard is ready.");
       } else {
         toast.success("🎉 Welcome aboard! Glad to have you here.");
       }
 
+      // ✅ Auto-login new user after signup
       await signIn("credentials", {
         email,
         password,
@@ -69,7 +73,6 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
     }
   };
 
-  // --- Render form ---
   return (
     <form
       onSubmit={handleSubmit}

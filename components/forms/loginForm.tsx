@@ -7,22 +7,24 @@ import toast from "react-hot-toast";
 export default function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(""); // ✅ Plaintext password (only used here, hashed on backend)
   const [loading, setLoading] = useState(false);
 
   // Toggle password visibility
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
 
-  // Handle form submit → use NextAuth signIn
+  // Handle form submit → NextAuth signIn
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
 
+    // ✅ Send email + plaintext password to NextAuth
+    // NextAuth will compare this against the hashedPassword in DB
     const result = await signIn("credentials", {
       redirect: true,
       email,
       password,
-      callbackUrl: "/dashboard", // redirect on success
+      callbackUrl: "/dashboard",
     });
 
     if (result?.error) {
@@ -37,7 +39,7 @@ export default function LoginForm() {
       onSubmit={handleSubmit}
       className="flex flex-col gap-4 p-6 sm:p-8 md:p-10 w-[90%] sm:w-[400px] md:w-[450px] lg:w-[500px]"
     >
-      {/* Email */}
+      {/* Email input */}
       <label htmlFor="email" className="text-left text-white font-bold text-sm md:text-base">
         Email
       </label>
@@ -50,7 +52,7 @@ export default function LoginForm() {
         className="block w-full border-white border-2 rounded-2xl px-4 py-3 bg-transparent text-white placeholder-white"
       />
 
-      {/* Password */}
+      {/* Password input */}
       <label htmlFor="password" className="text-left text-white font-bold text-sm md:text-base">
         Password
       </label>
@@ -73,7 +75,7 @@ export default function LoginForm() {
         </button>
       </div>
 
-      {/* Submit */}
+      {/* Submit button */}
       <div className="text-center">
         <button
           type="submit"

@@ -1,12 +1,14 @@
 // app/api/staff/add/route.ts
 //
 // Purpose:
-// - Allow business owners to add staff accounts under their business.
-// - Staff accounts are created with role "USER" and linked to the business.
+// - Allow business owners to add staff members to their company.
+// - Each staff gets a User record linked to the owner’s Business.
 // - Passwords are securely hashed before saving.
+// - Uses Prisma + bcrypt.
 //
 // Notes:
-// - Accepts POST only.
+// - Matches Prisma schema: we now use `hashedPassword` instead of `password`.
+// - Only supports POST requests.
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -14,9 +16,10 @@ import bcrypt from "bcryptjs";
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Parse JSON body
     const { name, email, password, businessId } = await req.json();
 
-    // 1. Validate input
+    // 2. Validate required fields
     if (!name || !email || !password || !businessId) {
       return NextResponse.json(
         { error: "Missing required fields" },
@@ -24,31 +27,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Prevent duplicate staff email
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return NextResponse.json(
-        { error: "A user with this email already exists" },
-        { status: 400 }
-      );
-    }
-
-    // 3. Hash staff password
+    // 3. Hash password before saving
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 4. Create staff user linked to business
+    // 4. Create staff user
     const staff = await prisma.user.create({
       data: {
         name,
         email,
-        hashedPassword, // ✅ schema field
-        role: "USER",   // staff are always regular users
-        businessId,     // link staff to business
+        hashedPassword, // ✅ correct field name in schema
+        role: "USER",   // staff are regular users
+        businessId,     // link staff to the business
       },
     });
 
+    // 5. Return success response
     return NextResponse.json(
-      { message: "Staff member created", staff },
+      { message: "Staff member created successfully", staff },
       { status: 201 }
     );
   } catch (error) {
