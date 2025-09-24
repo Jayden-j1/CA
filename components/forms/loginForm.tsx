@@ -2,21 +2,24 @@
 
 import { useState, FormEvent } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation"; // ✅ use router for smooth navigation
-import { showRoleToast, showRoleErrorToast } from "@/lib/toastMessages"; // ✅ success + error toast helpers
+import { useRouter } from "next/navigation"; // ✅ smooth navigation
+import {
+  showRoleToast,
+  showRoleErrorToast,
+  showSystemErrorToast,
+} from "@/lib/toastMessages"; // ✅ success, error, and system error toasts
 
 export default function LoginForm() {
   // ------------------------------
   // State variables
   // ------------------------------
   const [showPassword, setShowPassword] = useState(false); // toggle password visibility
-  const [email, setEmail] = useState(""); // store user email
-  const [password, setPassword] = useState(""); // store user password
+  const [email, setEmail] = useState(""); // user email
+  const [password, setPassword] = useState(""); // user password
   const [loading, setLoading] = useState(false); // button loading state
 
-  const router = useRouter(); // ✅ Next.js router for navigation
+  const router = useRouter(); // ✅ use Next.js router
 
-  // Toggle password visibility
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
 
   // ------------------------------
@@ -26,36 +29,38 @@ export default function LoginForm() {
     e.preventDefault();
     setLoading(true);
 
-    // ✅ Attempt NextAuth sign-in (no redirect yet)
-    const result = await signIn("credentials", {
-      redirect: false, // disable auto redirect
-      email,
-      password,
-    });
+    try {
+      // ✅ Attempt login via NextAuth
+      const result = await signIn("credentials", {
+        redirect: false,
+        email,
+        password,
+      });
 
-    if (result?.error) {
-      // ------------------------
-      // Role-aware error toast
-      // ------------------------
-      // We don’t know role if login failed → fallback to "USER"
-      showRoleErrorToast("USER");
-    } else {
-      // ✅ Fetch session so we know the logged-in user's role
-      const sessionRes = await fetch("/api/auth/session");
-      const session = await sessionRes.json();
+      if (result?.error) {
+        // Known login failure → role-aware error toast
+        showRoleErrorToast("USER");
+      } else {
+        // ✅ Fetch session to determine role
+        const sessionRes = await fetch("/api/auth/session");
+        if (!sessionRes.ok) throw new Error("Failed to fetch session");
+        const session = await sessionRes.json();
 
-      // ------------------------
-      // Role-aware success toast
-      // ------------------------
-      showRoleToast(session?.user?.role);
+        // ✅ Role-aware success toast
+        showRoleToast(session?.user?.role);
 
-      // ✅ Smooth redirect (toast stays visible because router.push doesn’t reload the page)
-      setTimeout(() => {
-        router.push("/dashboard");
-      }, 500); // slight delay so toast displays before redirect
+        // ✅ Smooth redirect (toast remains visible)
+        setTimeout(() => {
+          router.push("/dashboard");
+        }, 500);
+      }
+    } catch (err) {
+      console.error("❌ [LoginForm] Unexpected error:", err);
+      // System-level error (e.g., server down, fetch failed)
+      showSystemErrorToast();
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (
@@ -93,7 +98,6 @@ export default function LoginForm() {
           required
           className="block w-full border-white border-2 rounded-2xl px-4 py-3 pr-20 bg-transparent text-white placeholder-white"
         />
-        {/* Toggle button for password visibility */}
         <button
           type="button"
           onClick={togglePasswordVisibility}
@@ -136,6 +140,153 @@ export default function LoginForm() {
     </form>
   );
 }
+
+
+
+
+
+
+
+
+
+// 'use client';
+
+// import { useState, FormEvent } from "react";
+// import { signIn } from "next-auth/react";
+// import { useRouter } from "next/navigation"; // ✅ use router for smooth navigation
+// import { showRoleToast, showRoleErrorToast } from "@/lib/toastMessages"; // ✅ success + error toast helpers
+
+// export default function LoginForm() {
+//   // ------------------------------
+//   // State variables
+//   // ------------------------------
+//   const [showPassword, setShowPassword] = useState(false); // toggle password visibility
+//   const [email, setEmail] = useState(""); // store user email
+//   const [password, setPassword] = useState(""); // store user password
+//   const [loading, setLoading] = useState(false); // button loading state
+
+//   const router = useRouter(); // ✅ Next.js router for navigation
+
+//   // Toggle password visibility
+//   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
+
+//   // ------------------------------
+//   // Handle login submission
+//   // ------------------------------
+//   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+//     e.preventDefault();
+//     setLoading(true);
+
+//     // ✅ Attempt NextAuth sign-in (no redirect yet)
+//     const result = await signIn("credentials", {
+//       redirect: false, // disable auto redirect
+//       email,
+//       password,
+//     });
+
+//     if (result?.error) {
+//       // ------------------------
+//       // Role-aware error toast
+//       // ------------------------
+//       // We don’t know role if login failed → fallback to "USER"
+//       showRoleErrorToast("USER");
+//     } else {
+//       // ✅ Fetch session so we know the logged-in user's role
+//       const sessionRes = await fetch("/api/auth/session");
+//       const session = await sessionRes.json();
+
+//       // ------------------------
+//       // Role-aware success toast
+//       // ------------------------
+//       showRoleToast(session?.user?.role);
+
+//       // ✅ Smooth redirect (toast stays visible because router.push doesn’t reload the page)
+//       setTimeout(() => {
+//         router.push("/dashboard");
+//       }, 500); // slight delay so toast displays before redirect
+//     }
+
+//     setLoading(false);
+//   };
+
+//   return (
+//     <form
+//       onSubmit={handleSubmit}
+//       className="flex flex-col gap-4 p-6 sm:p-8 md:p-10 w-[90%] sm:w-[400px] md:w-[450px] lg:w-[500px]"
+//     >
+//       {/* -------------------------
+//           Email input
+//       ------------------------- */}
+//       <label htmlFor="email" className="text-left text-white font-bold text-sm md:text-base">
+//         Email
+//       </label>
+//       <input
+//         type="email"
+//         id="email"
+//         value={email}
+//         onChange={(e) => setEmail(e.target.value)}
+//         required
+//         className="block w-full border-white border-2 rounded-2xl px-4 py-3 bg-transparent text-white placeholder-white"
+//       />
+
+//       {/* -------------------------
+//           Password input + toggle
+//       ------------------------- */}
+//       <label htmlFor="password" className="text-left text-white font-bold text-sm md:text-base">
+//         Password
+//       </label>
+//       <div className="relative">
+//         <input
+//           type={showPassword ? "text" : "password"}
+//           id="password"
+//           value={password}
+//           onChange={(e) => setPassword(e.target.value)}
+//           required
+//           className="block w-full border-white border-2 rounded-2xl px-4 py-3 pr-20 bg-transparent text-white placeholder-white"
+//         />
+//         {/* Toggle button for password visibility */}
+//         <button
+//           type="button"
+//           onClick={togglePasswordVisibility}
+//           className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline focus:outline-none"
+//           tabIndex={-1}
+//         >
+//           {showPassword ? "Hide" : "Show"}
+//         </button>
+//       </div>
+
+//       {/* -------------------------
+//           Submit button
+//       ------------------------- */}
+//       <div className="text-center">
+//         <button
+//           type="submit"
+//           disabled={loading}
+//           className="px-8 py-4 bg-green-600 text-white hover:bg-green-500 font-bold rounded-2xl shadow border-2 border-white"
+//         >
+//           {loading ? "Logging in..." : "Login"}
+//         </button>
+//       </div>
+
+//       {/* -------------------------
+//           Footer links
+//       ------------------------- */}
+//       <aside>
+//         <p className="text-white text-xs sm:text-sm md:text-base mt-2 text-center sm:text-left leading-relaxed">
+//           <a href="/login" className="text-white hover:underline font-bold ml-1">
+//             Forgot your Password?
+//           </a>
+//         </p>
+//         <p className="text-white text-xs sm:text-sm md:text-base mt-2 text-center sm:text-left leading-relaxed">
+//           Don’t have an account?
+//           <a href="/signup" className="text-white hover:underline font-bold ml-1">
+//             Join Now.
+//           </a>
+//         </p>
+//       </aside>
+//     </form>
+//   );
+// }
 
 
 
