@@ -3,7 +3,9 @@
 import Section1 from "@/components/Main/section1";
 import Section2 from "@/components/Main/section2";
 import TopofPageContent from "@/components/topPage/topOfPageStyle";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation"; // ✅ NEW: read query string
+import toast from "react-hot-toast"; // ✅ NEW: trigger logout success toast
 import PopUpMessage from "@/components/PopUpMsgs/popUpTemplate";
 
 export default function Home() {
@@ -25,6 +27,22 @@ export default function Home() {
 
   // Function to close the modal
   const closeAcknowledgement = () => setModalOpen(false);
+
+  // ✅ NEW: show a toast if redirected after logout
+  // We look for "?logout=success" (set by signOut callbackUrl) and show a success toast.
+  // The toast duration is longer so users can see it even if they start scrolling.
+  const params = useSearchParams();
+  useEffect(() => {
+    const logoutFlag = params.get("logout");
+    if (logoutFlag === "success") {
+      toast.success("You’ve been logged out successfully.", {
+        duration: 6000,
+      });
+      // Optional: If you’d like to clean up the query from the address bar
+      // you can replace the URL without a full navigation:
+      // history.replaceState(null, "", "/");
+    }
+  }, [params]);
 
   return (
     <>
@@ -49,6 +67,66 @@ export default function Home() {
     </>
   );
 }
+
+
+
+
+
+
+
+
+
+// 'use client';
+
+// import Section1 from "@/components/Main/section1";
+// import Section2 from "@/components/Main/section2";
+// import TopofPageContent from "@/components/topPage/topOfPageStyle";
+// import { useState } from "react";
+// import PopUpMessage from "@/components/PopUpMsgs/popUpTemplate";
+
+// export default function Home() {
+//   // Heading for Acknowledgement of Country
+//   const title = "Acknowledgement of Country";
+
+//   // Message for Acknowledgement of Country
+//   const message =
+//     "We acknowledge the Traditional Custodians of the lands on which we work and live. We pay our respects to Elders past and present and extend that respect to all First Nations peoples.";
+
+//   // State to control the modal's visibility
+//   const [isModalOpen, setModalOpen] = useState(false);
+
+//   // Function to open the modal, receives the mouse event
+//   const openAcknowledge = (e: React.MouseEvent<HTMLAnchorElement>) => {
+//     e.preventDefault(); // prevent default link behavior
+//     setModalOpen(true);
+//   };
+
+//   // Function to close the modal
+//   const closeAcknowledgement = () => setModalOpen(false);
+
+//   return (
+//     <>
+//       {/* Top of page content, including Acknowledgement of Country link */}
+//       <TopofPageContent
+//         HeadingOneTitle="Nyangbul Cultural Awareness"
+//         paragraphContent="Cultural Awareness training from the Grass-Roots Community"
+//         linkOne="Acknowledgement of Country"
+//         onClick={openAcknowledge} // now fully typed
+//       />
+
+//       {/* Modal component (pop up message) */}
+//       <PopUpMessage
+//         isOpen={isModalOpen}
+//         onClose={closeAcknowledgement}
+//         heading={title}
+//         message={message}
+//       />
+
+//       <Section1 />
+//       <Section2 />
+//     </>
+//   );
+// }
 
 
 
