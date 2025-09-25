@@ -4,14 +4,14 @@
 // - Interactive Map page inside the dashboard.
 // - Uses the shared /api/payments/check API for gating.
 // - Displays package type + latest payment details.
-// - Imports and renders the GoogleMapComponent (from components/GoogleMap/GoogleMap.tsx).
-// - Redirects unpaid users to /dashboard/upgrade.
+// - Imports and renders the GoogleMapComponent.
+// - Layout fix: ensures map is centered inside its container.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent"; // ✅ Import map component
+import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent";
 
 interface PaymentCheckResponse {
   hasAccess: boolean;
@@ -27,7 +27,8 @@ export default function MapPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
-  const [packageType, setPackageType] = useState<"individual" | "business" | null>(null);
+  const [packageType, setPackageType] =
+    useState<"individual" | "business" | null>(null);
   const [latestPayment, setLatestPayment] =
     useState<PaymentCheckResponse["latestPayment"]>(null);
 
@@ -83,9 +84,11 @@ export default function MapPage() {
         </p>
       )}
 
-      {/* ✅ Render Google Map component */}
-      <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl p-2">
-        <GoogleMapComponent />
+      {/* ✅ Wrapper ensures the map is centered */}
+      <div className="w-full flex justify-center">
+        <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl overflow-hidden">
+          <GoogleMapComponent />
+        </div>
       </div>
     </section>
   );

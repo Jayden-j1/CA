@@ -2,21 +2,15 @@
 //
 // Purpose:
 // - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
-// - Shows current staff and provides form to add new staff.
-// - When adding staff, user is redirected to Stripe checkout.
-// - On returning from Stripe (?success / ?canceled), display toasts
-//   to confirm payment success/failure and refresh staff list.
-//
-// Fix:
-// - Refactored to use <SearchParamsWrapper> to safely handle useSearchParams()
-//   inside Suspense, preventing Vercel build errors.
+// - Shows a list of current staff users.
+// - Allows BUSINESS_OWNER/ADMIN to remove staff (unassign from business).
+// - Handles Stripe success/cancel toasts when coming back from add staff flow.
 
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation"; // ✅ read query params (?success / ?canceled)
-import toast from "react-hot-toast"; // ✅ toast notifications
-import AddStaffForm from "@/components/forms/addStaffForm";
+import { useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
 import RequireRole from "@/components/auth/requiredRole";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
@@ -41,7 +35,7 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   useEffect(() => {
     const success = searchParams.get("success");
     const canceled = searchParams.get("canceled");
-    const staffEmail = searchParams.get("staff"); // optional, for better context
+    const staffEmail = searchParams.get("staff");
 
     if (success) {
       toast.success(
@@ -51,10 +45,10 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         { duration: 6000 }
       );
 
-      // ✅ Refresh staff list after payment
+      // Refresh staff list
       onSuccess();
 
-      // ✅ Clean query params so toast doesn’t repeat
+      // Clean query params
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -66,12 +60,12 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         { duration: 6000 }
       );
 
-      // ✅ Clean query params
+      // Clean query params
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, [searchParams, onSuccess]);
 
-  return null; // no UI, just side effects
+  return null;
 }
 
 // ------------------------------
@@ -80,14 +74,13 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
 // Handles:
 // - Fetching staff list from API
 // - Rendering staff table
-// - Integrating AddStaffForm
-// - Includes StaffToastHandler for payment feedback
+// - Removing staff via API
 function StaffDashboardContent() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Fetch staff list from API
+  // Fetch staff list
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
@@ -108,14 +101,38 @@ function StaffDashboardContent() {
     }
   };
 
-  // Fetch staff once on mount
   useEffect(() => {
     fetchStaff();
   }, []);
 
+  // Remove staff handler
+  const handleRemove = async (staffId: string, staffEmail: string) => {
+    if (!confirm(`Remove ${staffEmail} from your business?`)) return;
+
+    try {
+      const res = await fetch("/api/staff/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to remove staff");
+        return;
+      }
+
+      toast.success(`Removed ${staffEmail} successfully.`);
+      fetchStaff(); // refresh list
+    } catch (err) {
+      console.error("[StaffDashboard] Remove error:", err);
+      toast.error("Internal error");
+    }
+  };
+
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
-      {/* ✅ Toast handler wrapped in <SearchParamsWrapper> */}
+      {/* ✅ Toast handler */}
       <SearchParamsWrapper>
         <StaffToastHandler onSuccess={fetchStaff} />
       </SearchParamsWrapper>
@@ -137,18 +154,24 @@ function StaffDashboardContent() {
         ) : (
           <ul className="divide-y divide-gray-200">
             {staffList.map((staff) => (
-              <li key={staff.id} className="py-2 flex justify-between">
-                <span>{staff.name}</span>
-                <span className="text-gray-500">{staff.email}</span>
+              <li
+                key={staff.id}
+                className="py-3 flex justify-between items-center"
+              >
+                <div>
+                  <p className="font-semibold">{staff.name}</p>
+                  <p className="text-gray-500 text-sm">{staff.email}</p>
+                </div>
+                <button
+                  onClick={() => handleRemove(staff.id, staff.email)}
+                  className="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 transition"
+                >
+                  Remove
+                </button>
               </li>
             ))}
           </ul>
         )}
-      </div>
-
-      {/* Add Staff Form */}
-      <div className="w-[90%] sm:w-[600px] md:w-[800px]">
-        <AddStaffForm onSuccess={fetchStaff} />
       </div>
     </section>
   );
@@ -157,8 +180,6 @@ function StaffDashboardContent() {
 // ------------------------------
 // StaffDashboardPage (wrapper)
 // ------------------------------
-// Protects this route with <RequireRole> so only
-// BUSINESS_OWNER + ADMIN can access it.
 export default function StaffDashboardPage() {
   return (
     <RequireRole allowed={["BUSINESS_OWNER", "ADMIN"]}>
