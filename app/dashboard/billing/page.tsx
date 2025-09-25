@@ -1,15 +1,14 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Dashboard page that lists ALL payments for the logged-in user.
-// - Useful for regular users (to see history) and especially for business owners/admins.
-// - Calls /api/payments/history (new API you’ll create) to fetch all payment records.
-// - Shows amount, description, and purchase date.
+// - Dashboard billing page.
+// - Shows payment history depending on role:
+//   - USER / BUSINESS_OWNER → only their own payments
+//   - ADMIN → all payments across the platform
 //
 // Notes:
-// - Requires user to be logged in (middleware protects /dashboard/*).
-// - Relies on backend endpoint for data (no direct Prisma call here).
-// - Could be extended later to show invoices, receipts, etc.
+// - Uses /api/payments/history to fetch data
+// - Renders differently if ADMIN (adds extra user info)
 
 "use client";
 
@@ -24,6 +23,12 @@ interface PaymentRecord {
   currency: string;
   description: string;
   createdAt: string;
+  // Present only if ADMIN fetched all payments
+  user?: {
+    email: string;
+    name: string | null;
+    role: string;
+  };
 }
 
 export default function BillingPage() {
@@ -70,23 +75,40 @@ export default function BillingPage() {
       ) : payments.length === 0 ? (
         <p className="text-white">No payments found.</p>
       ) : (
-        <div className="w-[90%] sm:w-[600px] md:w-[800px] bg-white rounded-xl shadow-xl p-6">
-          <h2 className="font-bold text-xl mb-4">Your Payments</h2>
-          <ul className="divide-y divide-gray-200">
-            {payments.map((p) => (
-              <li key={p.id} className="py-3 flex justify-between items-center">
-                <div>
-                  <p className="font-semibold">{p.description}</p>
-                  <p className="text-gray-500 text-sm">
+        <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl shadow-xl p-6 overflow-x-auto">
+          <h2 className="font-bold text-xl mb-4">Payment Records</h2>
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="text-left border-b border-gray-300">
+                {/* If admin → show user column */}
+                {payments[0]?.user && <th className="py-2 px-3">User</th>}
+                <th className="py-2 px-3">Description</th>
+                <th className="py-2 px-3">Amount</th>
+                <th className="py-2 px-3">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map((p) => (
+                <tr key={p.id} className="border-b border-gray-200">
+                  {p.user && (
+                    <td className="py-2 px-3 text-sm text-gray-700">
+                      {p.user.name || "Unnamed"} <br />
+                      <span className="text-xs text-gray-500">{p.user.email}</span>
+                      <br />
+                      <span className="text-xs text-gray-400">({p.user.role})</span>
+                    </td>
+                  )}
+                  <td className="py-2 px-3">{p.description}</td>
+                  <td className="py-2 px-3 font-bold">
+                    ${p.amount} {p.currency.toUpperCase()}
+                  </td>
+                  <td className="py-2 px-3">
                     {new Date(p.createdAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <p className="font-bold">
-                  ${p.amount} {p.currency.toUpperCase()}
-                </p>
-              </li>
-            ))}
-          </ul>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
