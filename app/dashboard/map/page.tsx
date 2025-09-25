@@ -5,7 +5,7 @@
 // - Uses the shared /api/payments/check API for gating.
 // - Displays package type + latest payment details.
 // - Imports and renders the GoogleMapComponent.
-// - Layout fix: ensures map is centered inside its container.
+// - Layout fix: ensures map is dead-centre inside container with even spacing.
 
 "use client";
 
@@ -84,9 +84,9 @@ export default function MapPage() {
         </p>
       )}
 
-      {/* ✅ Wrapper ensures the map is centered */}
-      <div className="w-full flex justify-center">
-        <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl overflow-hidden">
+      {/* ✅ Wrapper ensures map is perfectly centered */}
+      <div className="w-full flex justify-center items-center">
+        <div className="w-[90%] sm:w-[600px] md:w-[900px] max-h-[80vh] aspect-video bg-white rounded-xl shadow-xl flex items-center justify-center overflow-hidden">
           <GoogleMapComponent />
         </div>
       </div>

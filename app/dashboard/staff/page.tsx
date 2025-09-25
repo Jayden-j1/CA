@@ -5,6 +5,7 @@
 // - Shows a list of current staff users.
 // - Allows BUSINESS_OWNER/ADMIN to remove staff (unassign from business).
 // - Handles Stripe success/cancel toasts when coming back from add staff flow.
+// - Shows confirmation toast after removal (consistent style with Stripe toasts).
 
 "use client";
 
@@ -14,9 +15,6 @@ import toast from "react-hot-toast";
 import RequireRole from "@/components/auth/requiredRole";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-// ------------------------------
-// Staff Type (matches API /api/staff/list)
-// ------------------------------
 interface Staff {
   id: string;
   name: string;
@@ -24,11 +22,6 @@ interface Staff {
   createdAt: string;
 }
 
-// ------------------------------
-// StaffToastHandler
-// ------------------------------
-// Handles toasts for Stripe redirect (?success / ?canceled).
-// Runs inside <SearchParamsWrapper> so it's Suspense-safe.
 function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
 
@@ -44,11 +37,7 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         }`,
         { duration: 6000 }
       );
-
-      // Refresh staff list
       onSuccess();
-
-      // Clean query params
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -59,8 +48,6 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         }`,
         { duration: 6000 }
       );
-
-      // Clean query params
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, [searchParams, onSuccess]);
@@ -68,19 +55,11 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   return null;
 }
 
-// ------------------------------
-// StaffDashboardContent
-// ------------------------------
-// Handles:
-// - Fetching staff list from API
-// - Rendering staff table
-// - Removing staff via API
 function StaffDashboardContent() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Fetch staff list
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
@@ -105,7 +84,6 @@ function StaffDashboardContent() {
     fetchStaff();
   }, []);
 
-  // Remove staff handler
   const handleRemove = async (staffId: string, staffEmail: string) => {
     if (!confirm(`Remove ${staffEmail} from your business?`)) return;
 
@@ -118,31 +96,32 @@ function StaffDashboardContent() {
 
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || "Failed to remove staff");
+        toast.error(data.error || "Failed to remove staff", { duration: 6000 });
         return;
       }
 
-      toast.success(`Removed ${staffEmail} successfully.`);
+      // ✅ Confirmation toast styled consistently with Stripe feedback
+      toast.success(`✅ Removed ${staffEmail} successfully.`, {
+        duration: 6000,
+      });
+
       fetchStaff(); // refresh list
     } catch (err) {
       console.error("[StaffDashboard] Remove error:", err);
-      toast.error("Internal error");
+      toast.error("Internal error", { duration: 6000 });
     }
   };
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
-      {/* ✅ Toast handler */}
       <SearchParamsWrapper>
         <StaffToastHandler onSuccess={fetchStaff} />
       </SearchParamsWrapper>
 
-      {/* Page Heading */}
       <h1 className="text-white font-bold text-4xl sm:text-5xl text-center">
         Staff Management
       </h1>
 
-      {/* Staff List */}
       <div className="w-[90%] sm:w-[600px] md:w-[800px] bg-white rounded-xl p-6 shadow-xl">
         <h2 className="font-bold text-xl mb-4">Current Staff</h2>
         {loading ? (
@@ -177,9 +156,6 @@ function StaffDashboardContent() {
   );
 }
 
-// ------------------------------
-// StaffDashboardPage (wrapper)
-// ------------------------------
 export default function StaffDashboardPage() {
   return (
     <RequireRole allowed={["BUSINESS_OWNER", "ADMIN"]}>
