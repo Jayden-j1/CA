@@ -3,17 +3,16 @@
 // Purpose:
 // - Interactive Map page inside the dashboard.
 // - Uses the shared /api/payments/check API for gating.
-// - Displays package type (e.g., Individual/Business) + latest payment details.
+// - Displays package type + latest payment details.
+// - Imports and renders the GoogleMapComponent (from components/GoogleMap/GoogleMap.tsx).
 // - Redirects unpaid users to /dashboard/upgrade.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent"; // ✅ Import map component
 
-// ------------------------------
-// Shape of API response
-// ------------------------------
 interface PaymentCheckResponse {
   hasAccess: boolean;
   packageType: "individual" | "business" | null;
@@ -29,9 +28,9 @@ export default function MapPage() {
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
   const [packageType, setPackageType] = useState<"individual" | "business" | null>(null);
-  const [latestPayment, setLatestPayment] = useState<PaymentCheckResponse["latestPayment"]>(null);
+  const [latestPayment, setLatestPayment] =
+    useState<PaymentCheckResponse["latestPayment"]>(null);
 
-  // ✅ Check access using /api/payments/check
   const checkAccess = async () => {
     try {
       const res = await fetch("/api/payments/check");
@@ -66,14 +65,12 @@ export default function MapPage() {
 
   if (!hasAccess) return null;
 
-  // ✅ Authorized → show the map content
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-4">
         Interactive Map
       </h1>
 
-      {/* Show package + payment info */}
       {packageType && (
         <p className="text-white mb-2 text-lg">
           You are on the <strong>{packageType}</strong> package.
@@ -86,10 +83,9 @@ export default function MapPage() {
         </p>
       )}
 
-      <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl shadow-xl p-6">
-        <p className="text-gray-700">
-          🌍 Map content goes here (only visible to paid users).
-        </p>
+      {/* ✅ Render Google Map component */}
+      <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl p-2">
+        <GoogleMapComponent />
       </div>
     </section>
   );
