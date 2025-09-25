@@ -1,9 +1,15 @@
 // app/api/staff/remove/route.ts
 //
 // Purpose:
-// - Allow BUSINESS_OWNER/ADMIN to remove staff from their business.
-// - Implementation: simply sets staff.businessId = null.
-// - Safer than deleting users (preserves payments, history, etc).
+// - Allow BUSINESS_OWNER/ADMIN to permanently delete staff from their business.
+// - Returns the removed staff’s email so the frontend can show a success toast.
+// - Enforces strict role checks: only BUSINESS_OWNER (own business) or ADMIN can delete staff.
+//
+// Notes:
+// - Hard delete (prisma.user.delete) is used here.
+// - This is irreversible, so ensure your frontend asks for confirmation before calling.
+// - Safer for production if combined with a "soft delete" pattern (e.g., archived flag).
+//   But since you requested hard delete, we implement it here.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -12,12 +18,17 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
   try {
+    // ---------------------------
+    // 1) Verify authentication
+    // ---------------------------
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Restrict to BUSINESS_OWNER + ADMIN
+    // ---------------------------
+    // 2) Enforce roles
+    // ---------------------------
     if (
       session.user.role !== "BUSINESS_OWNER" &&
       session.user.role !== "ADMIN"
@@ -25,6 +36,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    // ---------------------------
+    // 3) Parse request body
+    // ---------------------------
     const { staffId } = await req.json();
     if (!staffId) {
       return NextResponse.json(
@@ -33,13 +47,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch staff
-    const staff = await prisma.user.findUnique({ where: { id: staffId } });
+    // ---------------------------
+    // 4) Fetch staff user
+    // ---------------------------
+    const staff = await prisma.user.findUnique({
+      where: { id: staffId },
+    });
+
     if (!staff) {
       return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
-    // Business owner can only remove from their own business
+    // ---------------------------
+    // 5) Business owner restriction
+    // ---------------------------
     if (
       session.user.role === "BUSINESS_OWNER" &&
       staff.businessId !== session.user.businessId
@@ -50,13 +71,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Update staff: unassign from business
-    await prisma.user.update({
+    // ---------------------------
+    // 6) Hard delete staff
+    // ---------------------------
+    const deletedStaff = await prisma.user.delete({
       where: { id: staffId },
-      data: { businessId: null },
+      select: { email: true }, // only return email for toast feedback
     });
 
-    return NextResponse.json({ message: "Staff removed" });
+    // ---------------------------
+    // 7) Return success
+    // ---------------------------
+    return NextResponse.json({
+      message: `Staff removed`,
+      email: deletedStaff.email,
+    });
   } catch (error) {
     console.error("[API] Staff remove error:", error);
     return NextResponse.json(
