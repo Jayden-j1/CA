@@ -3,9 +3,9 @@
 // Purpose:
 // - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
 // - Shows current staff list with "Remove" buttons.
-// - Includes AddStaffForm to add new staff.
-// - Displays toasts for Stripe success/cancel redirects AND staff removals.
-// - Uses the new /api/staff/remove route for hard deletes.
+// - Removal flow now has a confirmation step via toast with Yes/Cancel.
+// - Uses /api/staff/remove (hard delete).
+// - Displays toasts for Stripe success/cancel AND staff removals.
 
 "use client";
 
@@ -30,7 +30,7 @@ interface Staff {
 // StaffToastHandler
 // ------------------------------
 // - Handles toasts for Stripe redirect (?success / ?canceled).
-// - Also cleans query params to prevent repeat toasts on refresh.
+// - Cleans query params to prevent repeats on refresh.
 function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
 
@@ -108,18 +108,44 @@ function StaffDashboardContent() {
         return;
       }
 
-      // Show confirmation toast
       toast.success(`✅ Removed staff: ${staffEmail}`, { duration: 4000 });
-
-      // Refresh staff list
       fetchStaff();
-
-      // Clean query params (in case ?removed=true is added later)
       window.history.replaceState(null, "", window.location.pathname);
     } catch (err) {
       console.error("[StaffDashboard] Remove error:", err);
       toast.error("Internal error removing staff");
     }
+  };
+
+  // ✅ Show confirmation toast
+  const confirmRemoveStaff = (staffId: string, staffEmail: string) => {
+    toast.custom(
+      (t) => (
+        <div className="bg-white shadow-md rounded-lg p-4 flex flex-col gap-3 text-center w-[280px]">
+          <p className="font-semibold text-gray-800">
+            Remove <span className="text-red-600">{staffEmail}</span>?
+          </p>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => {
+                toast.dismiss(t.id); // close confirmation toast
+                removeStaff(staffId, staffEmail); // proceed with removal
+              }}
+              className="bg-red-600 text-white px-4 py-1 rounded hover:bg-red-700"
+            >
+              Yes
+            </button>
+            <button
+              onClick={() => toast.dismiss(t.id)} // cancel
+              className="bg-gray-300 text-gray-800 px-4 py-1 rounded hover:bg-gray-400"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ),
+      { duration: 5000 } // auto-dismiss if no action
+    );
   };
 
   // Fetch staff on first mount
@@ -160,7 +186,7 @@ function StaffDashboardContent() {
                   <span className="text-gray-500">{staff.email}</span>
                 </div>
                 <button
-                  onClick={() => removeStaff(staff.id, staff.email)}
+                  onClick={() => confirmRemoveStaff(staff.id, staff.email)}
                   className="text-red-600 hover:text-red-800 font-bold text-sm"
                 >
                   Remove
