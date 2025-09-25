@@ -2,19 +2,21 @@
 //
 // Purpose:
 // - Allow BUSINESS_OWNER/ADMIN to add staff AND immediately start a Stripe Checkout session.
-// - The Checkout session ensures the new staff member's access is only unlocked after payment.
-// - Metadata ensures your webhook links the Payment to the *staff user*, not just the payer.
+// - Ensures that staff access is only unlocked after successful payment.
+// - Stripe metadata links the payment to the *staff user*, not just the payer.
 //
 // Flow:
-//  1) Verify authentication + role.
-//  2) Validate inputs.
-//  3) Create staff user (role=USER, business-linked).
-//  4) Create Stripe Checkout session → metadata.userId = staff.id.
-//  5) Return checkoutUrl so client redirects to Stripe.
+//  1) Verify authentication + role (must be BUSINESS_OWNER or ADMIN).
+//  2) Validate request inputs.
+//  3) Create staff user in the database (role = USER, linked to business).
+//  4) Start a Stripe Checkout session (payment required for access).
+//  5) Redirect after payment → back to /dashboard/staff with success/cancel.
+//  6) Return Stripe checkout URL to frontend for redirect.
 //
 // Notes:
-// - If payment is canceled, staff user exists but has no Payment → no access until paid.
-// - This is acceptable, as your gating logic checks Payment table for access.
+// - If payment is canceled → staff user exists but has *no payment record*.
+//   This means access remains locked until a valid Payment is stored.
+// - Business logic can later check `Payment` table for entitlement.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -23,18 +25,22 @@ import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import Stripe from "stripe";
 
-// ✅ Stripe client (no explicit apiVersion to avoid type mismatch)
+// ✅ Initialize Stripe client using secret key from .env
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: NextRequest) {
   try {
+    // ------------------------------
     // 1) Verify authentication
+    // ------------------------------
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // ------------------------------
     // 2) Allow only BUSINESS_OWNER or ADMIN
+    // ------------------------------
     if (
       session.user.role !== "BUSINESS_OWNER" &&
       session.user.role !== "ADMIN"
@@ -42,7 +48,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 3) Parse request body
+    // ------------------------------
+    // 3) Parse + validate request body
+    // ------------------------------
     const { name, email, password, businessId } = await req.json();
 
     if (!name || !email || !password || !businessId) {
@@ -52,7 +60,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4) Ensure owner can only add staff to their own business
+    // Ensure BUSINESS_OWNER can only add staff to *their own* business
     if (
       session.user.role === "BUSINESS_OWNER" &&
       session.user.businessId !== businessId
@@ -63,7 +71,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 5) Prevent duplicate users
+    // ------------------------------
+    // 4) Prevent duplicate users
+    // ------------------------------
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json(
@@ -72,35 +82,42 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 6) Hash password
+    // ------------------------------
+    // 5) Hash password securely
+    // ------------------------------
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 7) Create staff user
+    // ------------------------------
+    // 6) Create staff user (role = USER)
+    // ------------------------------
     const staff = await prisma.user.create({
       data: {
         name,
         email,
         hashedPassword,
-        role: "USER",
+        role: "USER", // staff = regular user role
         businessId,
       },
       select: { id: true, email: true, businessId: true },
     });
 
-    // 8) Create Stripe Checkout session
+    // ------------------------------
+    // 7) Create Stripe Checkout session
+    // ------------------------------
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      mode: "payment",
+      mode: "payment", // one-time purchase
       line_items: [
         {
           price_data: {
-            currency: "aud", // Default AUD — can make dynamic later
+            currency: "aud", // default AUD for now
             product_data: { name: `Staff seat for ${email}` },
             unit_amount: 9900, // $99.00 AUD in cents
           },
           quantity: 1,
         },
       ],
+      // ✅ Success/cancel now redirect to /dashboard/staff
       success_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(
         staff.email
       )}`,
@@ -111,11 +128,13 @@ export async function POST(req: NextRequest) {
         userId: staff.id, // staff that payment unlocks
         payerId: session.user.id, // business owner/admin
         businessId: staff.businessId || "",
-        purpose: "STAFF_SEAT",
+        purpose: "STAFF_SEAT", // makes it clear in webhook what this payment is for
       },
     });
 
-    // 9) Respond with checkoutUrl
+    // ------------------------------
+    // 8) Return checkout URL to frontend
+    // ------------------------------
     return NextResponse.json(
       {
         message: "Staff created, redirect to Stripe Checkout",
