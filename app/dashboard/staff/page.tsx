@@ -2,15 +2,14 @@
 //
 // Purpose:
 // - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
-// - Shows a list of current staff users.
-// - Allows BUSINESS_OWNER/ADMIN to remove staff (unassign from business).
-// - Handles Stripe success/cancel toasts when coming back from add staff flow.
-// - Shows confirmation toast after removal (consistent style with Stripe toasts).
+// - Lists staff and allows removal.
+// - Shows Stripe success/cancel toasts AND removal confirmation toast.
+// - Auto-cleans query params (?success, ?canceled, ?removed) so toasts never re-trigger on refresh.
 
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import RequireRole from "@/components/auth/requiredRole";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
@@ -22,7 +21,11 @@ interface Staff {
   createdAt: string;
 }
 
-function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
+// ------------------------------
+// StaffStripeToastHandler
+// ------------------------------
+// Handles toasts for Stripe checkout (?success / ?canceled).
+function StaffStripeToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -55,10 +58,35 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   return null;
 }
 
+// ------------------------------
+// StaffRemovalToastHandler
+// ------------------------------
+// Detects ?removed=email and shows confirmation toast.
+// Cleans query params to prevent duplicate toasts on refresh.
+function StaffRemovalToastHandler() {
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const removedEmail = searchParams.get("removed");
+
+    if (removedEmail) {
+      toast.success(`✅ Removed ${removedEmail} successfully.`, {
+        duration: 6000,
+      });
+
+      // Clean query params
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [searchParams]);
+
+  return null;
+}
+
 function StaffDashboardContent() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const router = useRouter();
 
   const fetchStaff = async () => {
     setLoading(true);
@@ -100,12 +128,8 @@ function StaffDashboardContent() {
         return;
       }
 
-      // ✅ Confirmation toast styled consistently with Stripe feedback
-      toast.success(`✅ Removed ${staffEmail} successfully.`, {
-        duration: 6000,
-      });
-
-      fetchStaff(); // refresh list
+      // ✅ Redirect with ?removed=email → toast will be handled in StaffRemovalToastHandler
+      router.push(`/dashboard/staff?removed=${encodeURIComponent(staffEmail)}`);
     } catch (err) {
       console.error("[StaffDashboard] Remove error:", err);
       toast.error("Internal error", { duration: 6000 });
@@ -115,7 +139,8 @@ function StaffDashboardContent() {
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
       <SearchParamsWrapper>
-        <StaffToastHandler onSuccess={fetchStaff} />
+        <StaffStripeToastHandler onSuccess={fetchStaff} />
+        <StaffRemovalToastHandler />
       </SearchParamsWrapper>
 
       <h1 className="text-white font-bold text-4xl sm:text-5xl text-center">
