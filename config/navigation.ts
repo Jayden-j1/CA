@@ -23,7 +23,7 @@ export const publicNavigation: NavItem[] = [
   { name: "Services", href: "/services", align: "left" },
   { name: "Map", href: "/map", align: "left" },
   { name: "Contact", href: "/contact", align: "left" },
-  { name: "Login/Signup", href: "/login", align: "right" }, // ✅ floats right
+  { name: "Login/Signup", href: "/login", align: "right" },
 ];
 
 // ---------------------------
@@ -31,8 +31,26 @@ export const publicNavigation: NavItem[] = [
 // ---------------------------
 export const dashboardNavigation: NavItem[] = [
   { name: "Home", href: "/dashboard", align: "left" },
-  { name: "Add Staff", href: "/dashboard/add-staff", requiresRole: "BUSINESS_OWNER", align: "left" },
-  { name: "Course Content", href: "/dashboard/content", align: "left" },
   { name: "Map", href: "/dashboard/map", align: "left" },
-  { name: "Logout", href: "/logout", align: "right" }, // ✅ floats right
+  { name: "Course", href: "/dashboard/course", align: "left" },
+  {
+    name: "Staff",
+    href: "/dashboard/staff",
+    requiresRole: ["BUSINESS_OWNER", "ADMIN"],
+    align: "left",
+  },
+  {
+    name: "Add Staff",
+    href: "/dashboard/add-staff",
+    requiresRole: ["BUSINESS_OWNER", "ADMIN"],
+    align: "left",
+  },
+  { name: "Upgrade", href: "/dashboard/upgrade", align: "left" },
+  {
+    name: "Admin",
+    href: "/dashboard/admin",
+    requiresRole: "ADMIN",
+    align: "left",
+  },
+  { name: "Logout", href: "/logout", align: "right" },
 ];

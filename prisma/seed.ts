@@ -1,43 +1,64 @@
 // prisma/seed.ts
 //
 // Purpose:
-// - Seed your Neon/Postgres DB with multiple test users (USER, BUSINESS_OWNER, ADMIN).
-// - Each account has a hashed password (bcrypt) so you can log in directly via your login form.
-// - BUSINESS_OWNER also gets a Business record created + linked.
+// - Seed your DB with multiple test users + payments.
+// - Includes both unpaid and paid users for testing access gating.
+//
+// Accounts created:
+// - user-no-pay@example.com → USER (unpaid)
+// - user-paid@example.com → USER (paid, Individual Package)
+// - owner@example.com → BUSINESS_OWNER (paid, Business Package)
+// - admin@example.com → ADMIN
 //
 // Usage:
-//   1. Run: npm run seed
-//   2. Use the credentials shown in console logs to log in.
-//
-// Notes:
-// - Uses Prisma's `upsert` (update or insert) so running it twice won't duplicate users.
-// - Safe for development/testing.
+//   npm run seed
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
-
-// Shared password for all seed users
 const plainPassword = "password123";
 
 async function main() {
-  // Hash password once and reuse
   const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
-  // --- 1. Regular USER ---
-  const user = await prisma.user.upsert({
-    where: { email: "user@example.com" },
+  // --- 1. USER with no payment ---
+  const userNoPay = await prisma.user.upsert({
+    where: { email: "user-no-pay@example.com" },
     update: {},
     create: {
-      name: "Regular User",
-      email: "user@example.com",
+      name: "User NoPay",
+      email: "user-no-pay@example.com",
       hashedPassword,
       role: "USER",
     },
   });
 
-  // --- 2. Business Owner ---
+  // --- 2. USER with Individual Package payment ---
+  const userPaid = await prisma.user.upsert({
+    where: { email: "user-paid@example.com" },
+    update: {},
+    create: {
+      name: "User Paid",
+      email: "user-paid@example.com",
+      hashedPassword,
+      role: "USER",
+    },
+  });
+
+  // ❌ FIX: cannot use upsert on Payment since stripeId isn’t unique
+  // ✅ Instead, just create payment record (clear DB before reseeding if needed)
+  await prisma.payment.create({
+    data: {
+      userId: userPaid.id,
+      amount: 50,
+      currency: "aud",
+      stripeId: "test_stripe_individual",
+      description: "Individual Package",
+    },
+  });
+
+  // --- 3. Business Owner with Business Package ---
   const businessOwner = await prisma.user.upsert({
     where: { email: "owner@example.com" },
     update: {},
@@ -49,9 +70,9 @@ async function main() {
     },
   });
 
-  // Ensure this owner has a Business record
+  // Ensure Business record exists
   const business = await prisma.business.upsert({
-    where: { domain: "example.com" }, // domain = part after @ in email
+    where: { domain: "example.com" },
     update: { ownerId: businessOwner.id },
     create: {
       name: "Example Corp",
@@ -60,8 +81,19 @@ async function main() {
     },
   });
 
-  // --- 3. Admin ---
-  const admin = await prisma.user.upsert({
+  // Create Business Package payment
+  await prisma.payment.create({
+    data: {
+      userId: businessOwner.id,
+      amount: 150,
+      currency: "aud",
+      stripeId: "test_stripe_business",
+      description: "Business Package",
+    },
+  });
+
+  // --- 4. Admin (no payment needed) ---
+  await prisma.user.upsert({
     where: { email: "admin@example.com" },
     update: {},
     create: {
@@ -72,31 +104,20 @@ async function main() {
     },
   });
 
-  // --- Log results so you know credentials ---
+  // ✅ Log credentials
   console.log("✅ Seed complete!");
-  console.log("➡️  USER: user@example.com /", plainPassword);
+  console.log("➡️  USER (no pay): user-no-pay@example.com /", plainPassword);
+  console.log("➡️  USER (paid): user-paid@example.com /", plainPassword);
   console.log("➡️  BUSINESS_OWNER: owner@example.com /", plainPassword);
   console.log("➡️  ADMIN: admin@example.com /", plainPassword);
   console.log("Business linked:", business.name, "Domain:", business.domain);
 }
 
-// Run seeding + safe disconnect
+// Run safely
 main()
-  .then(async () => {
-    await prisma.$disconnect();
-  })
+  .then(async () => await prisma.$disconnect())
   .catch(async (e) => {
     console.error("❌ Seed error:", e);
     await prisma.$disconnect();
     process.exit(1);
   });
-
-
-
-
-
-
-
-
-
-
