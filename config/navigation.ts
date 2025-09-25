@@ -4,6 +4,7 @@
 // - Centralized navigation definitions for public and dashboard navbars.
 // - Supports role-based navigation and alignment (left/right).
 // - Makes it easy to manage links in one place.
+// - Updated so that "Billing" is only visible for USER, BUSINESS_OWNER, and ADMIN.
 
 export type Role = "USER" | "BUSINESS_OWNER" | "ADMIN";
 
@@ -30,18 +31,21 @@ export const publicNavigation: NavItem[] = [
 // Dashboard navigation
 // ---------------------------
 // Notes:
-// - All dashboard links live here for consistency.
-// - Role-based filtering happens at runtime in the Navbar component.
-// - "Billing" has no requiresRole → shown to all authenticated users.
+// - Role-based filtering happens at runtime inside your Navbar component.
+// - Billing is restricted to USER, BUSINESS_OWNER, and ADMIN.
+// - Staff management (Staff, Add Staff) is restricted to BUSINESS_OWNER + ADMIN.
+// - Admin panel is only for ADMIN.
 export const dashboardNavigation: NavItem[] = [
+  // Always visible to any authenticated user
   { name: "Home", href: "/dashboard", align: "left" },
   { name: "Map", href: "/dashboard/map", align: "left" },
   { name: "Course", href: "/dashboard/course", align: "left" },
 
+  // Staff management — only for BUSINESS_OWNER and ADMIN
   {
     name: "Staff",
     href: "/dashboard/staff",
-    requiresRole: ["BUSINESS_OWNER", "ADMIN"], // only business owners & admins
+    requiresRole: ["BUSINESS_OWNER", "ADMIN"],
     align: "left",
   },
   {
@@ -51,15 +55,22 @@ export const dashboardNavigation: NavItem[] = [
     align: "left",
   },
 
+  // Upgrade option — anyone without an active package
   { name: "Upgrade", href: "/dashboard/upgrade", align: "left" },
 
-  // ✅ NEW: Billing page — available to all logged-in users
-  { name: "Billing", href: "/dashboard/billing", align: "left" },
+  // ✅ Billing — available for USER, BUSINESS_OWNER, ADMIN
+  {
+    name: "Billing",
+    href: "/dashboard/billing",
+    requiresRole: ["USER", "BUSINESS_OWNER", "ADMIN"],
+    align: "left",
+  },
 
+  // Admin-only panel
   {
     name: "Admin",
     href: "/dashboard/admin",
-    requiresRole: "ADMIN", // only admins
+    requiresRole: "ADMIN",
     align: "left",
   },
 
