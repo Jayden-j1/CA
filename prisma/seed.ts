@@ -2,16 +2,23 @@
 //
 // Purpose:
 // - Seed your DB with multiple test users + payments.
-// - Includes both unpaid and paid users for testing access gating.
+// - Includes both unpaid and paid users for testing access gating + billing history.
 //
 // Accounts created:
 // - user-no-pay@example.com → USER (unpaid)
-// - user-paid@example.com → USER (paid, Individual Package)
-// - owner@example.com → BUSINESS_OWNER (paid, Business Package)
+// - user-paid@example.com → USER (paid, Individual Package, 2 payments)
+// - owner@example.com → BUSINESS_OWNER (paid, Business Package, 2 payments)
 // - admin@example.com → ADMIN
 //
 // Usage:
-//   npm run seed
+//   1. Run `npx prisma migrate reset` (recommended → clears DB & applies schema)
+//   2. Run `npm run seed`
+//   3. Log in with printed credentials
+//
+// Notes:
+// - `upsert` ensures users/business aren’t duplicated
+// - Payments use `create` only → duplicates possible if not reset first
+// - Useful for testing Billing page with multiple history rows
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -34,7 +41,7 @@ async function main() {
     },
   });
 
-  // --- 2. USER with Individual Package payment ---
+  // --- 2. USER with Individual Package payments ---
   const userPaid = await prisma.user.upsert({
     where: { email: "user-paid@example.com" },
     update: {},
@@ -46,19 +53,27 @@ async function main() {
     },
   });
 
-  // ❌ FIX: cannot use upsert on Payment since stripeId isn’t unique
-  // ✅ Instead, just create payment record (clear DB before reseeding if needed)
+  // Multiple payments for history testing
   await prisma.payment.create({
     data: {
       userId: userPaid.id,
       amount: 50,
       currency: "aud",
-      stripeId: "test_stripe_individual",
-      description: "Individual Package",
+      stripeId: "test_stripe_individual_1",
+      description: "Individual Package - Initial Purchase",
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      userId: userPaid.id,
+      amount: 50,
+      currency: "aud",
+      stripeId: "test_stripe_individual_2",
+      description: "Individual Package - Renewal",
     },
   });
 
-  // --- 3. Business Owner with Business Package ---
+  // --- 3. Business Owner with Business Package payments ---
   const businessOwner = await prisma.user.upsert({
     where: { email: "owner@example.com" },
     update: {},
@@ -81,18 +96,27 @@ async function main() {
     },
   });
 
-  // Create Business Package payment
+  // Multiple payments for history testing
   await prisma.payment.create({
     data: {
       userId: businessOwner.id,
       amount: 150,
       currency: "aud",
-      stripeId: "test_stripe_business",
-      description: "Business Package",
+      stripeId: "test_stripe_business_1",
+      description: "Business Package - Initial Purchase",
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      userId: businessOwner.id,
+      amount: 150,
+      currency: "aud",
+      stripeId: "test_stripe_business_2",
+      description: "Business Package - Renewal",
     },
   });
 
-  // --- 4. Admin (no payment needed) ---
+  // --- 4. Admin (no payments) ---
   await prisma.user.upsert({
     where: { email: "admin@example.com" },
     update: {},
