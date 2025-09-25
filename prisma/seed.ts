@@ -18,7 +18,7 @@
 // Notes:
 // - `upsert` ensures users/business aren’t duplicated
 // - Payments use `create` only → duplicates possible if not reset first
-// - Useful for testing Billing page with multiple history rows
+// - Console logs confirm number of payments created per user
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -72,6 +72,7 @@ async function main() {
       description: "Individual Package - Renewal",
     },
   });
+  console.log(`💳 Created 2 payments for ${userPaid.email}`);
 
   // --- 3. Business Owner with Business Package payments ---
   const businessOwner = await prisma.user.upsert({
@@ -115,6 +116,7 @@ async function main() {
       description: "Business Package - Renewal",
     },
   });
+  console.log(`💳 Created 2 payments for ${businessOwner.email}`);
 
   // --- 4. Admin (no payments) ---
   await prisma.user.upsert({
