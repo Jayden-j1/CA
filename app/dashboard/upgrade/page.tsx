@@ -4,30 +4,63 @@
 // - Shown to logged-in users who have NOT purchased a package.
 // - Encourages upgrading to unlock Map + Course Content.
 // - Integrates with /api/payments to create a Stripe Checkout session.
+// - After Stripe redirects back (?success / ?canceled),
+//   display toast feedback so users know what happened.
 //
-// Notes:
-// - Uses fetch → /api/payments (which you already have).
-// - Business rules can adjust available packages.
+// Dependencies:
+// - react-hot-toast (for toasts).
+// - /api/payments API route (already exists).
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation"; // ✅ to detect Stripe return params
+import toast from "react-hot-toast";
 
 export default function UpgradePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Handler → call /api/payments
+  const searchParams = useSearchParams();
+
+  // ------------------------------
+  // Handle Stripe success/canceled redirects
+  // ------------------------------
+  useEffect(() => {
+    const success = searchParams.get("success");
+    const canceled = searchParams.get("canceled");
+
+    if (success) {
+      toast.success("🎉 Payment successful! You now have full access.", {
+        duration: 6000,
+      });
+      // ✅ Clean query params so toast won’t repeat on refresh
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+
+    if (canceled) {
+      toast.error("❌ Payment canceled. No changes were made.", {
+        duration: 6000,
+      });
+      // ✅ Clean query params
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [searchParams]);
+
+  // ------------------------------
+  // Checkout handler
+  // ------------------------------
   const handleCheckout = async (packageType: "individual" | "business") => {
     setLoading(true);
     setError("");
 
     try {
+      // Call backend → /api/payments
       const res = await fetch("/api/payments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: packageType === "individual" ? 5000 : 15000, // AUD $50 or $150 (example)
+          amount: packageType === "individual" ? 5000 : 15000, // AUD $50 or $150
           currency: "aud",
           description:
             packageType === "individual"
@@ -44,7 +77,7 @@ export default function UpgradePage() {
         return;
       }
 
-      //  Redirect to Stripe Checkout
+      // ✅ Redirect to Stripe Checkout
       window.location.href = data.url;
     } catch (err) {
       console.error("Checkout error:", err);
@@ -53,17 +86,23 @@ export default function UpgradePage() {
     }
   };
 
+  // ------------------------------
+  // Render page
+  // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
+      {/* Heading */}
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
         Upgrade Required
       </h1>
+
+      {/* Subtext */}
       <p className="text-white text-lg sm:text-xl mb-6 text-center max-w-xl">
-        🚀 Unlock the Interactive Map and Course Content by purchasing a
-        package. Choose the option that fits you best.
+        🚀 Unlock the Interactive Map and Course Content by purchasing a package.
+        Choose the option that fits you best.
       </p>
 
-      {/* Error message */}
+      {/* Error message (if any API issue) */}
       {error && <p className="text-red-300 mb-4">{error}</p>}
 
       {/* Package Buttons */}
