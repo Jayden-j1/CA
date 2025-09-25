@@ -7,19 +7,23 @@
 // - Displays success/error toasts based on Stripe redirect.
 //
 // Fix:
-// - Wrapped useSearchParams() in Suspense to resolve Vercel build error.
+// - Refactored to use <SearchParamsWrapper> (with Suspense) to handle query params safely.
+// - Prevents build errors caused by using useSearchParams() directly.
 
 "use client";
 
 import { useEffect } from "react";
-import { Suspense } from "react"; // ✅ Needed for useSearchParams
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
 import CheckoutButton from "@/components/payments/CheckoutButton";
+import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
 // ------------------------------
 // Inner handler for query params
 // ------------------------------
+// This component runs inside <SearchParamsWrapper> so that
+// useSearchParams() is always inside a Suspense boundary.
+// It listens for ?success=true or ?canceled=true after Stripe checkout.
 function UpgradeToastHandler() {
   const searchParams = useSearchParams();
 
@@ -31,6 +35,7 @@ function UpgradeToastHandler() {
       toast.success("🎉 Payment successful! You now have full access.", {
         duration: 6000,
       });
+      // ✅ Clean the URL so the toast won’t repeat on refresh
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -42,16 +47,19 @@ function UpgradeToastHandler() {
     }
   }, [searchParams]);
 
-  return null;
+  return null; // no UI, only toast side effects
 }
 
+// ------------------------------
+// Main Upgrade Page
+// ------------------------------
 export default function UpgradePage() {
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
-      {/* ✅ Toast handler wrapped in Suspense */}
-      <Suspense fallback={null}>
+      {/* ✅ Toast handler safely wrapped with <SearchParamsWrapper> */}
+      <SearchParamsWrapper>
         <UpgradeToastHandler />
-      </Suspense>
+      </SearchParamsWrapper>
 
       {/* Heading */}
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
@@ -64,7 +72,7 @@ export default function UpgradePage() {
         package. Choose the option that fits you best.
       </p>
 
-      {/* Package Buttons using reusable component */}
+      {/* Package Buttons using reusable <CheckoutButton /> */}
       <div className="flex flex-col sm:flex-row gap-6">
         <CheckoutButton
           packageType="individual"
