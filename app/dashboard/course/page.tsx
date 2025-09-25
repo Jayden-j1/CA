@@ -3,7 +3,7 @@
 // Purpose:
 // - Internal course content page (dashboard).
 // - Uses centralized /api/payments/check API for gating.
-// - Displays package type for testing/debugging.
+// - Displays package type + latest payment details.
 // - Redirects unpaid users to /dashboard/upgrade.
 
 "use client";
@@ -11,27 +11,24 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-// ------------------------------
-// Shape of API response
-// ------------------------------
 interface PaymentCheckResponse {
   hasAccess: boolean;
   packageType: "individual" | "business" | null;
+  latestPayment: {
+    id: string;
+    createdAt: string;
+    amount: number;
+  } | null;
 }
 
 export default function CourseContentPage() {
   const router = useRouter();
 
-  // ✅ Local state
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
-  const [packageType, setPackageType] = useState<
-    "individual" | "business" | null
-  >(null);
+  const [packageType, setPackageType] = useState<"individual" | "business" | null>(null);
+  const [latestPayment, setLatestPayment] = useState<PaymentCheckResponse["latestPayment"]>(null);
 
-  // ------------------------------
-  // Call backend → /api/payments/check
-  // ------------------------------
   const checkAccess = async () => {
     try {
       const res = await fetch("/api/payments/check");
@@ -42,6 +39,7 @@ export default function CourseContentPage() {
       } else {
         setHasAccess(true);
         setPackageType(data.packageType);
+        setLatestPayment(data.latestPayment);
       }
     } catch (err) {
       console.error("[CourseContent] Access check failed:", err);
@@ -65,17 +63,22 @@ export default function CourseContentPage() {
 
   if (!hasAccess) return null;
 
-  // ✅ Paid user → render course content
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
       <h1 className="text-white font-bold text-4xl sm:text-5xl text-center">
         Course Content
       </h1>
 
-      {/* Show package type info */}
+      {/* Show package + payment info */}
       {packageType && (
-        <p className="text-white mb-6 text-lg">
+        <p className="text-white mb-2 text-lg">
           You are on the <strong>{packageType}</strong> package.
+        </p>
+      )}
+      {latestPayment && (
+        <p className="text-white mb-6 text-md">
+          Last purchase: <strong>${latestPayment.amount}</strong> on{" "}
+          {new Date(latestPayment.createdAt).toLocaleDateString()}
         </p>
       )}
 

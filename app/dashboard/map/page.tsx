@@ -2,8 +2,8 @@
 //
 // Purpose:
 // - Interactive Map page inside the dashboard.
-// - Uses the shared /api/payments/check API to gate access (same as course page).
-// - Displays the user’s package type (e.g., Individual / Business).
+// - Uses the shared /api/payments/check API for gating.
+// - Displays package type (e.g., Individual/Business) + latest payment details.
 // - Redirects unpaid users to /dashboard/upgrade.
 
 "use client";
@@ -17,15 +17,19 @@ import { useRouter } from "next/navigation";
 interface PaymentCheckResponse {
   hasAccess: boolean;
   packageType: "individual" | "business" | null;
+  latestPayment: {
+    id: string;
+    createdAt: string;
+    amount: number;
+  } | null;
 }
 
 export default function MapPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
-  const [packageType, setPackageType] = useState<
-    "individual" | "business" | null
-  >(null);
+  const [packageType, setPackageType] = useState<"individual" | "business" | null>(null);
+  const [latestPayment, setLatestPayment] = useState<PaymentCheckResponse["latestPayment"]>(null);
 
   // ✅ Check access using /api/payments/check
   const checkAccess = async () => {
@@ -34,10 +38,11 @@ export default function MapPage() {
       const data: PaymentCheckResponse = await res.json();
 
       if (!res.ok || !data.hasAccess) {
-        router.push("/dashboard/upgrade"); // 🚫 redirect if unpaid
+        router.push("/dashboard/upgrade");
       } else {
         setHasAccess(true);
         setPackageType(data.packageType);
+        setLatestPayment(data.latestPayment);
       }
     } catch (err) {
       console.error("[MapPage] Access check failed:", err);
@@ -59,7 +64,7 @@ export default function MapPage() {
     );
   }
 
-  if (!hasAccess) return null; // don’t render flicker
+  if (!hasAccess) return null;
 
   // ✅ Authorized → show the map content
   return (
@@ -68,14 +73,19 @@ export default function MapPage() {
         Interactive Map
       </h1>
 
-      {/* Show package type info */}
+      {/* Show package + payment info */}
       {packageType && (
-        <p className="text-white mb-6 text-lg">
+        <p className="text-white mb-2 text-lg">
           You are on the <strong>{packageType}</strong> package.
         </p>
       )}
+      {latestPayment && (
+        <p className="text-white mb-6 text-md">
+          Last purchase: <strong>${latestPayment.amount}</strong> on{" "}
+          {new Date(latestPayment.createdAt).toLocaleDateString()}
+        </p>
+      )}
 
-      {/* Replace this with your actual map component later */}
       <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl shadow-xl p-6">
         <p className="text-gray-700">
           🌍 Map content goes here (only visible to paid users).
