@@ -18,7 +18,7 @@
 // Notes:
 // - `upsert` ensures users/business aren’t duplicated
 // - Payments use `create` only → duplicates possible if not reset first
-// - Console logs confirm number of payments created per user
+// - Console logs confirm each payment (amount + description)
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -54,7 +54,7 @@ async function main() {
   });
 
   // Multiple payments for history testing
-  await prisma.payment.create({
+  const userPayment1 = await prisma.payment.create({
     data: {
       userId: userPaid.id,
       amount: 50,
@@ -63,7 +63,11 @@ async function main() {
       description: "Individual Package - Initial Purchase",
     },
   });
-  await prisma.payment.create({
+  console.log(
+    `💳 Created payment for ${userPaid.email}: $${userPayment1.amount} ${userPayment1.currency.toUpperCase()} — ${userPayment1.description}`
+  );
+
+  const userPayment2 = await prisma.payment.create({
     data: {
       userId: userPaid.id,
       amount: 50,
@@ -72,7 +76,9 @@ async function main() {
       description: "Individual Package - Renewal",
     },
   });
-  console.log(`💳 Created 2 payments for ${userPaid.email}`);
+  console.log(
+    `💳 Created payment for ${userPaid.email}: $${userPayment2.amount} ${userPayment2.currency.toUpperCase()} — ${userPayment2.description}`
+  );
 
   // --- 3. Business Owner with Business Package payments ---
   const businessOwner = await prisma.user.upsert({
@@ -97,8 +103,7 @@ async function main() {
     },
   });
 
-  // Multiple payments for history testing
-  await prisma.payment.create({
+  const businessPayment1 = await prisma.payment.create({
     data: {
       userId: businessOwner.id,
       amount: 150,
@@ -107,7 +112,11 @@ async function main() {
       description: "Business Package - Initial Purchase",
     },
   });
-  await prisma.payment.create({
+  console.log(
+    `💳 Created payment for ${businessOwner.email}: $${businessPayment1.amount} ${businessPayment1.currency.toUpperCase()} — ${businessPayment1.description}`
+  );
+
+  const businessPayment2 = await prisma.payment.create({
     data: {
       userId: businessOwner.id,
       amount: 150,
@@ -116,7 +125,9 @@ async function main() {
       description: "Business Package - Renewal",
     },
   });
-  console.log(`💳 Created 2 payments for ${businessOwner.email}`);
+  console.log(
+    `💳 Created payment for ${businessOwner.email}: $${businessPayment2.amount} ${businessPayment2.currency.toUpperCase()} — ${businessPayment2.description}`
+  );
 
   // --- 4. Admin (no payments) ---
   await prisma.user.upsert({
