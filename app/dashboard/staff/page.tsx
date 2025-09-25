@@ -1,9 +1,10 @@
 // app/dashboard/staff/page.tsx
 //
 // Purpose:
-// - Staff management dashboard (business owners + admins only).
-// - Middleware + <RequireRole> ensure only authorized users access.
-// - Fetches staff list and displays management UI.
+// - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
+// - Shows current staff and provides form to add new staff.
+// - If staff are added → redirected to Stripe checkout for payment.
+// - After Stripe redirect back (?success / ?canceled), parent can refetch staff list.
 
 "use client";
 
@@ -23,7 +24,7 @@ function StaffDashboardContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Fetch staff list from API
+  // Fetch staff from API
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
