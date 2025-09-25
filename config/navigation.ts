@@ -29,14 +29,19 @@ export const publicNavigation: NavItem[] = [
 // ---------------------------
 // Dashboard navigation
 // ---------------------------
+// Notes:
+// - All dashboard links live here for consistency.
+// - Role-based filtering happens at runtime in the Navbar component.
+// - "Billing" has no requiresRole → shown to all authenticated users.
 export const dashboardNavigation: NavItem[] = [
   { name: "Home", href: "/dashboard", align: "left" },
   { name: "Map", href: "/dashboard/map", align: "left" },
   { name: "Course", href: "/dashboard/course", align: "left" },
+
   {
     name: "Staff",
     href: "/dashboard/staff",
-    requiresRole: ["BUSINESS_OWNER", "ADMIN"],
+    requiresRole: ["BUSINESS_OWNER", "ADMIN"], // only business owners & admins
     align: "left",
   },
   {
@@ -45,12 +50,19 @@ export const dashboardNavigation: NavItem[] = [
     requiresRole: ["BUSINESS_OWNER", "ADMIN"],
     align: "left",
   },
+
   { name: "Upgrade", href: "/dashboard/upgrade", align: "left" },
+
+  // ✅ NEW: Billing page — available to all logged-in users
+  { name: "Billing", href: "/dashboard/billing", align: "left" },
+
   {
     name: "Admin",
     href: "/dashboard/admin",
-    requiresRole: "ADMIN",
+    requiresRole: "ADMIN", // only admins
     align: "left",
   },
+
+  // Always keep logout aligned to the right
   { name: "Logout", href: "/logout", align: "right" },
 ];
