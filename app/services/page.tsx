@@ -1,28 +1,22 @@
 // app/services/page.tsx
 //
-// Purpose:
-// - Public-facing services page with pricing cards.
-// - Adds toast feedback when users return from Stripe checkout.
-//   ?success=true → green success toast
-//   ?canceled=true → red error toast
-//
-// Notes:
-// - Uses <PricingCardSection /> (smart cards: show Buy Now or Sign Up).
-// - Ensures a smooth flow for both guests and logged-in users.
+// Updated: wrapped useSearchParams logic in <Suspense> boundary
+// to fix Vercel build error.
 
 "use client";
 
 import TopofPageContent from "@/components/topPage/topOfPageStyle";
 import PricingCardSection from "@/components/pricingCards/pricingCards";
-import { MouseEvent, useEffect } from "react";
+import { MouseEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
+import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-export default function ServicesPage() {
+function ServicesContent() {
   const searchParams = useSearchParams();
 
-  // ✅ Handle Stripe redirect success/cancel
-  useEffect(() => {
+  // ✅ Stripe success/cancel handling
+  if (typeof window !== "undefined") {
     const success = searchParams.get("success");
     const canceled = searchParams.get("canceled");
 
@@ -30,7 +24,6 @@ export default function ServicesPage() {
       toast.success("🎉 Payment successful! You now have access.", {
         duration: 6000,
       });
-      // ✅ Clean query params so it doesn’t repeat on refresh
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -40,9 +33,8 @@ export default function ServicesPage() {
       });
       window.history.replaceState(null, "", window.location.pathname);
     }
-  }, [searchParams]);
+  }
 
-  // Smooth scroll to pricing section
   const handleScrollToPricing = (e: MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     const pricingSection = document.querySelector<HTMLDivElement>("#pricing");
@@ -59,8 +51,16 @@ export default function ServicesPage() {
         onClick={handleScrollToPricing}
       />
 
-      {/* ✅ Smart Pricing Cards with checkout buttons */}
+      {/* ✅ Smart Pricing Cards */}
       <PricingCardSection />
     </main>
+  );
+}
+
+export default function ServicesPage() {
+  return (
+    <SearchParamsWrapper>
+      <ServicesContent />
+    </SearchParamsWrapper>
   );
 }
