@@ -143,7 +143,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         <button
           type="button"
           onClick={() => setShowInfo((prev) => !prev)}
-          className="ml-2 text-white hover:text-blue-300 font-bold"
+          className="ml-2 text-white hover:text-blue-300 font-bold cursor-pointer"
         >
           ℹ️
         </button>

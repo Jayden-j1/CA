@@ -1,28 +1,35 @@
 // types/next-auth.d.ts
-import NextAuth, { DefaultSession, DefaultUser } from "next-auth";
+//
+// Purpose:
+// - Augment NextAuth types to include our custom fields (role, businessId, hasPaid).
+// - Fixes TS errors such as "Property 'role' does not exist on type 'User'".
+//
+// Setup:
+// - Place this file in `types/` directory.
+// - Ensure tsconfig.json has:
+//   "typeRoots": ["./types", "./node_modules/@types"]
 
+import NextAuth, { DefaultSession } from "next-auth";
+
+// -------------------------
+// Extend NextAuth definitions
+// -------------------------
 declare module "next-auth" {
-  // Extending the built-in Session type
-  interface Session {
-    user: {
-      id: string; // from Prisma User.id
-      businessId?: string | null; // from User.businessId
-      role?: string | null; // from User.role
-    } & DefaultSession["user"];
-  }
-
-  // Extending the built-in User type (Prisma user fields)
-  interface User extends DefaultUser {
+  interface User {
+    id: string;
+    role: "USER" | "BUSINESS_OWNER" | "ADMIN";
     businessId?: string | null;
-    role?: string | null;
+    hasPaid?: boolean;
   }
-}
 
-declare module "next-auth/jwt" {
-  // Extending JWT so custom fields survive refresh
+  interface Session {
+    user: User & DefaultSession["user"];
+  }
+
   interface JWT {
     id: string;
+    role: "USER" | "BUSINESS_OWNER" | "ADMIN";
     businessId?: string | null;
-    role?: string | null;
+    hasPaid?: boolean;
   }
 }
