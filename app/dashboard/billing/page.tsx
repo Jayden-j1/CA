@@ -2,21 +2,20 @@
 //
 // Purpose:
 // - Billing dashboard with payments table + filters.
-// - Fetches data from /api/payments/history with server-side filtering.
-// - Admins get both `payments` and a separate `users` array for dropdown.
-// - Filters: Purpose (All / Package / Staff Seat) and User (for Admins only).
-// - Filters are persisted in localStorage for convenience across sessions.
+// - Admins can now use a searchable user dropdown with autocomplete
+//   (instead of scrolling a huge list).
 //
 // Updates in this version:
-// - Uses `users` array returned from API instead of deriving from payments.
-// - Clean separation of payment results vs available user filter options.
-// - Dropdown remains stable regardless of current filter.
+// - Added a user search input + dropdown suggestions.
+// - Dropdown suggestions come from `users` array returned by API.
+// - Filters are persisted in localStorage (purpose + user email).
+// - API request includes filters (server-side filtering).
 //
-// Data Flow:
-// 1. On mount → fetch(`/api/payments/history?purpose=...&user=...`).
-// 2. Save filters to localStorage so they persist between visits.
-// 3. Render purpose + user filter controls.
-// 4. Render table of payments.
+// Flow:
+// 1. On mount → restore filters from localStorage, then fetch payments & users.
+// 2. When Admin types into "User search", suggestions appear (autocomplete).
+// 3. Clicking a suggestion sets `userFilter` to that email.
+// 4. Filters saved in localStorage + payments refetched from API.
 
 "use client";
 
@@ -45,7 +44,7 @@ interface UserOption {
 }
 
 // ------------------------------
-// Badge component for payment purpose
+// Badge for payment purpose
 // ------------------------------
 function PurposeBadge({ purpose }: { purpose: string }) {
   const style =
@@ -61,15 +60,19 @@ function PurposeBadge({ purpose }: { purpose: string }) {
 }
 
 export default function BillingPage() {
-  // State for data
+  // Data state
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
-  const [users, setUsers] = useState<UserOption[]>([]); // ✅ From API, not derived
+  const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   // Filter states
   const [purposeFilter, setPurposeFilter] = useState("ALL");
   const [userFilter, setUserFilter] = useState("");
+
+  // For autocomplete
+  const [userSearch, setUserSearch] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   // ------------------------------
   // Load filters from localStorage (persistency)
@@ -78,11 +81,14 @@ export default function BillingPage() {
     const storedPurpose = localStorage.getItem("billing:purposeFilter");
     const storedUser = localStorage.getItem("billing:userFilter");
     if (storedPurpose) setPurposeFilter(storedPurpose);
-    if (storedUser) setUserFilter(storedUser);
+    if (storedUser) {
+      setUserFilter(storedUser);
+      setUserSearch(storedUser); // populate input with saved email
+    }
   }, []);
 
   // ------------------------------
-  // Fetch payments (server-side filtering)
+  // Fetch payments + users (server-side filtering)
   // ------------------------------
   const fetchPayments = async () => {
     try {
@@ -99,7 +105,7 @@ export default function BillingPage() {
       }
 
       setPayments(data.payments || []);
-      setUsers(data.users || []); // ✅ Admins get distinct users
+      setUsers(data.users || []); // full distinct list of users for Admins
     } catch (err: any) {
       console.error("[BillingPage] Error fetching payments:", err);
       setError(err.message || "Internal error");
@@ -119,6 +125,15 @@ export default function BillingPage() {
   }, [purposeFilter, userFilter]);
 
   // ------------------------------
+  // Filter suggestion list based on search
+  // ------------------------------
+  const filteredSuggestions = users.filter(
+    (u) =>
+      u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
+      (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase()))
+  );
+
+  // ------------------------------
   // Render
   // ------------------------------
   return (
@@ -128,7 +143,7 @@ export default function BillingPage() {
       </h1>
 
       {/* Filter Controls */}
-      <div className="flex flex-col sm:flex-row gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row gap-4 mb-6 relative">
         {/* Purpose Filter */}
         <select
           value={purposeFilter}
@@ -140,20 +155,52 @@ export default function BillingPage() {
           <option value="STAFF_SEAT">Staff Seats</option>
         </select>
 
-        {/* User Filter (only render if API provided users → Admin only) */}
+        {/* User Filter (Admin only, if API returned users) */}
         {users.length > 0 && (
-          <select
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow"
-          >
-            <option value="">All Users</option>
-            {users.map((u) => (
-              <option key={u.email} value={u.email}>
-                {u.name || u.email} ({u.email})
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            {/* Input for search/autocomplete */}
+            <input
+              type="text"
+              placeholder="Search user..."
+              value={userSearch}
+              onChange={(e) => {
+                setUserSearch(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow w-64"
+            />
+
+            {/* Suggestions dropdown */}
+            {showSuggestions && filteredSuggestions.length > 0 && (
+              <ul className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto w-full">
+                {/* "All Users" option */}
+                <li
+                  onClick={() => {
+                    setUserFilter("");
+                    setUserSearch("");
+                    setShowSuggestions(false);
+                  }}
+                  className="px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-100"
+                >
+                  All Users
+                </li>
+                {filteredSuggestions.map((u) => (
+                  <li
+                    key={u.email}
+                    onClick={() => {
+                      setUserFilter(u.email);
+                      setUserSearch(u.email);
+                      setShowSuggestions(false);
+                    }}
+                    className="px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-100"
+                  >
+                    {u.name || "Unnamed"} ({u.email})
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
 
