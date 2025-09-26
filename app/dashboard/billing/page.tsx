@@ -1,21 +1,19 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Dashboard billing page.
-// - Displays payment history differently based on role:
-//   - USER / BUSINESS_OWNER → only their own payments
-//   - ADMIN → all payments across the platform
+// - Dashboard billing page with payment history.
+// - Supports filtering by purpose: Show All, Packages, Staff Seats.
+// - Makes it easier to distinguish subscription payments from staff seat purchases.
 //
 // Updates in this version:
-// - Added a "Purpose" column (PACKAGE vs STAFF_SEAT).
-// - Uses a <PurposeBadge> component for clear visual distinction.
-// - Badges are color-coded:
-//     - Green = PACKAGE (subscriptions / plans)
-//     - Yellow = STAFF_SEAT (extra staff members)
+// - Added <FilterToggle> component.
+// - Added state for current filter (ALL | PACKAGE | STAFF_SEAT).
+// - Payment table respects selected filter.
+// - UI highlights active filter option.
 //
 // Notes:
-// - Payments are fetched from /api/payments/history which now returns
-//   { purpose: "PACKAGE" | "STAFF_SEAT" } alongside other fields.
+// - Payments are fetched from /api/payments/history with a `purpose` field.
+// - Admins still see a "User" column with who paid.
 
 "use client";
 
@@ -29,9 +27,8 @@ interface PaymentRecord {
   amount: number;
   currency: string;
   description: string;
-  purpose: "PACKAGE" | "STAFF_SEAT"; // ✅ enum, comes from Prisma
+  purpose: "PACKAGE" | "STAFF_SEAT";
   createdAt: string;
-  // Only present for ADMIN queries
   user?: {
     email: string;
     name: string | null;
@@ -43,7 +40,6 @@ interface PaymentRecord {
 // Small badge for payment purpose
 // ------------------------------
 function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
-  // Style differs by purpose
   const style =
     purpose === "STAFF_SEAT"
       ? "bg-yellow-100 text-yellow-800"
@@ -61,14 +57,55 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
 }
 
 // ------------------------------
+// Filter Toggle component
+// ------------------------------
+function FilterToggle({
+  filter,
+  setFilter,
+}: {
+  filter: "ALL" | "PACKAGE" | "STAFF_SEAT";
+  setFilter: (val: "ALL" | "PACKAGE" | "STAFF_SEAT") => void;
+}) {
+  const options: ("ALL" | "PACKAGE" | "STAFF_SEAT")[] = [
+    "ALL",
+    "PACKAGE",
+    "STAFF_SEAT",
+  ];
+
+  return (
+    <div className="flex gap-2 mb-6">
+      {options.map((opt) => {
+        const label =
+          opt === "ALL" ? "Show All" : opt === "PACKAGE" ? "Packages" : "Staff Seats";
+        const active = filter === opt;
+        return (
+          <button
+            key={opt}
+            onClick={() => setFilter(opt)}
+            className={`px-4 py-1 rounded-full border text-sm font-semibold transition ${
+              active
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
+            }`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ------------------------------
 // Billing Page Component
 // ------------------------------
 export default function BillingPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [filter, setFilter] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
 
-  // ✅ Fetch payment history from API
+  // ✅ Fetch payment history
   const fetchPayments = async () => {
     try {
       const res = await fetch("/api/payments/history");
@@ -91,8 +128,14 @@ export default function BillingPage() {
     fetchPayments();
   }, []);
 
+  // ✅ Apply filter before rendering
+  const filteredPayments =
+    filter === "ALL"
+      ? payments
+      : payments.filter((p) => p.purpose === filter);
+
   // ------------------------------
-  // Render UI
+  // Render
   // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
@@ -100,20 +143,22 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
+      {/* Filter toggle */}
+      <FilterToggle filter={filter} setFilter={setFilter} />
+
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (
         <p className="text-red-300">{error}</p>
-      ) : payments.length === 0 ? (
-        <p className="text-white">No payments found.</p>
+      ) : filteredPayments.length === 0 ? (
+        <p className="text-white">No payments found for this filter.</p>
       ) : (
         <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl shadow-xl p-6 overflow-x-auto">
           <h2 className="font-bold text-xl mb-4">Payment Records</h2>
           <table className="w-full border-collapse">
             <thead>
               <tr className="text-left border-b border-gray-300">
-                {/* If ADMIN, show which user made the payment */}
-                {payments[0]?.user && <th className="py-2 px-3">User</th>}
+                {filteredPayments[0]?.user && <th className="py-2 px-3">User</th>}
                 <th className="py-2 px-3">Description</th>
                 <th className="py-2 px-3">Purpose</th>
                 <th className="py-2 px-3">Amount</th>
@@ -121,9 +166,8 @@ export default function BillingPage() {
               </tr>
             </thead>
             <tbody>
-              {payments.map((p) => (
+              {filteredPayments.map((p) => (
                 <tr key={p.id} className="border-b border-gray-200">
-                  {/* Show user details if ADMIN */}
                   {p.user && (
                     <td className="py-2 px-3 text-sm text-gray-700">
                       {p.user.name || "Unnamed"} <br />
@@ -132,21 +176,13 @@ export default function BillingPage() {
                       <span className="text-xs text-gray-400">({p.user.role})</span>
                     </td>
                   )}
-
-                  {/* Description */}
                   <td className="py-2 px-3">{p.description}</td>
-
-                  {/* Purpose Badge */}
                   <td className="py-2 px-3">
                     <PurposeBadge purpose={p.purpose} />
                   </td>
-
-                  {/* Amount */}
                   <td className="py-2 px-3 font-bold">
                     ${p.amount} {p.currency.toUpperCase()}
                   </td>
-
-                  {/* Date */}
                   <td className="py-2 px-3">
                     {new Date(p.createdAt).toLocaleDateString()}
                   </td>
