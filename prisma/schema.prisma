@@ -4,6 +4,8 @@
 // Purpose:
 // - Single source of truth for both development (SQLite) and production (Postgres).
 // - Uses one schema, switching DB via DATABASE_URL in .env.
+// - Now includes a strongly-typed enum for PaymentPurpose so you can
+//   safely distinguish between PACKAGE vs STAFF_SEAT payments.
 // -------------------------------------------------------------------
 
 datasource db {
@@ -19,34 +21,42 @@ generator client {
 // ENUMS
 // -----------------------------
 // ✅ Enum for payment purpose, ensures consistent values across app.
+// - PACKAGE → an individual or business subscription
+// - STAFF_SEAT → adding an extra staff member
 enum PaymentPurpose {
-  PACKAGE     // e.g., an individual or business subscription
-  STAFF_SEAT  // e.g., adding an extra staff member
+  PACKAGE
+  STAFF_SEAT
 }
 
 // -----------------------------
 // User model
 // -----------------------------
 model User {
-  id            String     @id @default(cuid())
-  name          String?
-  email         String     @unique
-  emailVerified DateTime?
-  image         String?
-  hashedPassword String? @map("password")
+  id             String     @id @default(cuid())
+  name           String?
+  email          String     @unique
+  emailVerified  DateTime?
+  image          String?
+  
+  // Store bcrypt-hashed password (not plaintext).
+  // Underlying column still called "password" for backwards-compatibility.
+  hashedPassword String?    @map("password")
 
-  role          String     @default("USER")
+  // Roles: "USER" | "BUSINESS_OWNER" | "ADMIN"
+  role           String     @default("USER")
 
-  businessId    String?
-  business      Business?  @relation(fields: [businessId], references: [id])
-  ownedBusiness Business?  @relation("BusinessOwner")
+  // Optional business association
+  businessId     String?
+  business       Business?  @relation(fields: [businessId], references: [id])
+  ownedBusiness  Business?  @relation("BusinessOwner")
 
-  payments      Payment[]
-  accounts      Account[]
-  sessions      Session[]
+  // Relations
+  payments       Payment[]
+  accounts       Account[]
+  sessions       Session[]
 
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 }
 
 // -----------------------------
@@ -56,8 +66,12 @@ model Business {
   id        String   @id @default(cuid())
   name      String
   domain    String   @unique
+
+  // Each business has exactly one owner
   ownerId   String   @unique
   owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+
+  // Staff linked to this business
   users     User[]
 
   createdAt DateTime @default(now())
@@ -68,15 +82,20 @@ model Business {
 // -----------------------------
 model Payment {
   id          String          @id @default(cuid())
+
+  // Who made the payment
   userId      String
   user        User            @relation(fields: [userId], references: [id])
+
+  // Core payment info
   amount      Float
   currency    String
   stripeId    String
   description String
-  purpose     String   @default("PACKAGE")
 
-  // ✅ NEW: payment purpose enum
+  // ✅ NEW: strongly-typed purpose field
+  // - Now uses enum PaymentPurpose (no duplicate field).
+  // - Default is PACKAGE.
   purpose     PaymentPurpose  @default(PACKAGE)
 
   createdAt   DateTime        @default(now())
