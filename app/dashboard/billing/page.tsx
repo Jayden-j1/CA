@@ -1,28 +1,23 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Dashboard billing page with persistent filters (Purpose + User).
-// - Filters persist BOTH in URL (shareable) and localStorage (fallback).
+// - Billing dashboard with payment history.
+// - Now fetches payments with server-side filtering (purpose + user).
+// - Admins can filter by both purpose AND user email.
+// - Filters persist in localStorage for convenience.
 //
-// Key Updates:
-// - Removed direct reliance on useSearchParams to avoid Suspense build errors.
-// - Added sync to localStorage as a fallback.
-// - On load: initialize from URL > then localStorage > then defaults.
-// - On change: update both URL + localStorage.
-// - Admins see an extra user filter dropdown.
-//
-// Benefits:
-// - Reloads preserve filter state.
-// - Bookmarked/shared URLs open with filters pre-applied.
-// - Large org admins can filter by user.
+// Key UX:
+// - Purpose filter toggle (All / Package / Staff Seat).
+// - Admin-only user filter dropdown (all users who appear in data).
+// - Payments re-fetched whenever filters change.
+// - LocalStorage persistence means filters survive refresh/session.
 
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 // ------------------------------
-// Shape of API response
+// API response shape
 // ------------------------------
 interface PaymentRecord {
   id: string;
@@ -39,7 +34,7 @@ interface PaymentRecord {
 }
 
 // ------------------------------
-// Purpose Badge
+// Badge component for purpose
 // ------------------------------
 function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
   const style =
@@ -54,148 +49,96 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
   );
 }
 
-// ------------------------------
-// Filter Toggle (Purpose)
-// ------------------------------
-function FilterToggle({
-  filter,
-  setFilter,
-}: {
-  filter: "ALL" | "PACKAGE" | "STAFF_SEAT";
-  setFilter: (val: "ALL" | "PACKAGE" | "STAFF_SEAT") => void;
-}) {
-  const options: ("ALL" | "PACKAGE" | "STAFF_SEAT")[] = [
-    "ALL",
-    "PACKAGE",
-    "STAFF_SEAT",
-  ];
-
-  return (
-    <div className="flex gap-2 mb-4">
-      {options.map((opt) => {
-        const label =
-          opt === "ALL" ? "Show All" : opt === "PACKAGE" ? "Packages" : "Staff Seats";
-        const active = filter === opt;
-        return (
-          <button
-            key={opt}
-            onClick={() => setFilter(opt)}
-            className={`px-4 py-1 rounded-full border text-sm font-semibold transition ${
-              active
-                ? "bg-blue-600 text-white border-blue-600"
-                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
-            }`}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ------------------------------
-// Main Page
-// ------------------------------
 export default function BillingPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const router = useRouter();
+  // ------------------------------
+  // Filters
+  // ------------------------------
+  const [purposeFilter, setPurposeFilter] = useState<
+    "ALL" | "PACKAGE" | "STAFF_SEAT"
+  >("ALL");
+  const [userFilter, setUserFilter] = useState<string>("ALL");
+  const [userOptions, setUserOptions] = useState<
+    { email: string; name: string | null }[]
+  >([]);
 
   // ------------------------------
-  // Filters (default = ALL)
-  // ------------------------------
-  const [filter, setFilterState] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
-  const [userFilter, setUserFilterState] = useState<string>("ALL");
-
-  // ------------------------------
-  // Load filters from URL/localStorage on first mount
+  // Load persisted filters from localStorage (once on mount)
   // ------------------------------
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const purposeFromUrl = urlParams.get("purpose") as
-      | "ALL"
-      | "PACKAGE"
-      | "STAFF_SEAT"
-      | null;
-    const userFromUrl = urlParams.get("user");
+    const savedPurpose = localStorage.getItem("billingFilterPurpose");
+    const savedUser = localStorage.getItem("billingFilterUser");
 
-    const savedPurpose = localStorage.getItem("billingPurpose") as
-      | "ALL"
-      | "PACKAGE"
-      | "STAFF_SEAT"
-      | null;
-    const savedUser = localStorage.getItem("billingUser");
-
-    setFilterState(purposeFromUrl || savedPurpose || "ALL");
-    setUserFilterState(userFromUrl || savedUser || "ALL");
+    if (savedPurpose === "PACKAGE" || savedPurpose === "STAFF_SEAT") {
+      setPurposeFilter(savedPurpose);
+    }
+    if (savedUser) {
+      setUserFilter(savedUser);
+    }
   }, []);
 
   // ------------------------------
-  // Persist filters to URL + localStorage whenever they change
+  // Persist filters to localStorage whenever they change
   // ------------------------------
   useEffect(() => {
-    if (filter || userFilter) {
-      const params = new URLSearchParams();
-      if (filter !== "ALL") params.set("purpose", filter);
-      if (userFilter !== "ALL") params.set("user", userFilter);
-
-      // Update URL (without reload)
-      router.replace(`?${params.toString()}`, { scroll: false });
-
-      // Save locally too
-      localStorage.setItem("billingPurpose", filter);
-      localStorage.setItem("billingUser", userFilter);
-    }
-  }, [filter, userFilter, router]);
+    localStorage.setItem("billingFilterPurpose", purposeFilter);
+    localStorage.setItem("billingFilterUser", userFilter);
+  }, [purposeFilter, userFilter]);
 
   // ------------------------------
-  // Fetch payments from API
+  // Fetch payments from server API
   // ------------------------------
   const fetchPayments = async () => {
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch("/api/payments/history");
+      const params = new URLSearchParams();
+
+      if (purposeFilter !== "ALL") {
+        params.set("purpose", purposeFilter);
+      }
+      if (userFilter !== "ALL") {
+        params.set("user", userFilter);
+      }
+
+      const url = `/api/payments/history${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
+
+      const res = await fetch(url);
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || "Failed to load payments");
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to load payments");
+      }
+
       setPayments(data.payments);
+
+      // If admin, build dropdown user options
+      if (data.payments.length > 0 && data.payments[0].user) {
+        const uniqueUsers: Record<string, { email: string; name: string | null }> = {};
+        data.payments.forEach((p: PaymentRecord) => {
+          if (p.user) uniqueUsers[p.user.email] = { email: p.user.email, name: p.user.name };
+        });
+        setUserOptions(Object.values(uniqueUsers));
+      }
     } catch (err: any) {
-      console.error("[BillingPage] Error fetching payments:", err);
+      console.error("[BillingPage] Fetch error:", err);
       setError(err.message || "Internal error");
     } finally {
       setLoading(false);
     }
   };
 
+  // ------------------------------
+  // Re-fetch whenever filters change
+  // ------------------------------
   useEffect(() => {
     fetchPayments();
-  }, []);
-
-  // ------------------------------
-  // Unique users (for Admin dropdown)
-  // ------------------------------
-  const uniqueUsers = useMemo(() => {
-    const users: { email: string; name: string | null }[] = [];
-    const seen = new Set<string>();
-    payments.forEach((p) => {
-      if (p.user?.email && !seen.has(p.user.email)) {
-        users.push({ email: p.user.email, name: p.user.name });
-        seen.add(p.user.email);
-      }
-    });
-    return users;
-  }, [payments]);
-
-  // ------------------------------
-  // Apply filters
-  // ------------------------------
-  const filteredPayments = payments.filter((p) => {
-    if (filter !== "ALL" && p.purpose !== filter) return false;
-    if (userFilter !== "ALL" && p.user?.email !== userFilter) return false;
-    return true;
-  });
+  }, [purposeFilter, userFilter]);
 
   // ------------------------------
   // Render
@@ -206,41 +149,60 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
-      {/* Purpose filter */}
-      <FilterToggle filter={filter} setFilter={setFilterState} />
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-6">
+        {/* Purpose filter */}
+        <div className="flex gap-2">
+          {["ALL", "PACKAGE", "STAFF_SEAT"].map((opt) => (
+            <button
+              key={opt}
+              onClick={() => setPurposeFilter(opt as any)}
+              className={`px-3 py-1 rounded text-sm font-bold ${
+                purposeFilter === opt
+                  ? "bg-white text-blue-600"
+                  : "bg-white/70 text-blue-900"
+              }`}
+            >
+              {opt === "ALL"
+                ? "All"
+                : opt === "PACKAGE"
+                ? "Packages"
+                : "Staff Seats"}
+            </button>
+          ))}
+        </div>
 
-      {/* User dropdown (admins only) */}
-      {uniqueUsers.length > 0 && (
-        <div className="mb-6">
-          <label className="text-white font-semibold mr-2">Filter by User:</label>
+        {/* User filter (admins only) */}
+        {userOptions.length > 0 && (
           <select
             value={userFilter}
-            onChange={(e) => setUserFilterState(e.target.value)}
-            className="px-3 py-1 rounded border border-gray-300 text-sm"
+            onChange={(e) => setUserFilter(e.target.value)}
+            className="px-3 py-1 rounded text-sm font-bold bg-white/70 text-blue-900"
           >
             <option value="ALL">All Users</option>
-            {uniqueUsers.map((u) => (
+            {userOptions.map((u) => (
               <option key={u.email} value={u.email}>
-                {u.name || "Unnamed"} ({u.email})
+                {u.name || u.email} ({u.email})
               </option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+      </div>
 
+      {/* Table */}
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (
         <p className="text-red-300">{error}</p>
-      ) : filteredPayments.length === 0 ? (
-        <p className="text-white">No payments found for this filter.</p>
+      ) : payments.length === 0 ? (
+        <p className="text-white">No payments found.</p>
       ) : (
-        <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl shadow-xl p-6 overflow-x-auto">
+        <div className="w-[90%] sm:w-[600px] md:w-[1000px] bg-white rounded-xl shadow-xl p-6 overflow-x-auto">
           <h2 className="font-bold text-xl mb-4">Payment Records</h2>
           <table className="w-full border-collapse">
             <thead>
               <tr className="text-left border-b border-gray-300">
-                {filteredPayments[0]?.user && <th className="py-2 px-3">User</th>}
+                {payments[0]?.user && <th className="py-2 px-3">User</th>}
                 <th className="py-2 px-3">Description</th>
                 <th className="py-2 px-3">Purpose</th>
                 <th className="py-2 px-3">Amount</th>
@@ -248,7 +210,7 @@ export default function BillingPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredPayments.map((p) => (
+              {payments.map((p) => (
                 <tr key={p.id} className="border-b border-gray-200">
                   {p.user && (
                     <td className="py-2 px-3 text-sm text-gray-700">
