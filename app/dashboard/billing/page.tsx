@@ -1,22 +1,24 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Dashboard billing page with payment history.
-// - Supports filtering by purpose (All, Packages, Staff Seats).
-// - Admins additionally get a dropdown filter to view payments by specific user.
+// - Dashboard billing page with persistent filters in the URL.
+// - Filters supported:
+//   • Purpose (All / Package / Staff Seat)
+//   • User (Admins only → dropdown by email/name)
 //
 // Updates in this version:
-// - Added `userFilter` dropdown (only shown for Admins).
-// - Collects unique users from payments for the dropdown.
-// - Combined purpose + user filters before rendering table.
+// - Uses useSearchParams + useRouter to read/write query params.
+// - Filters (`purpose`, `user`) persist across reloads and can be shared via URL.
+// - Changing a filter updates the query string (without reload).
 //
 // Notes:
-// - Payments come from /api/payments/history, including `purpose` and `user`.
-// - Filters work entirely client-side.
+// - Data still fetched from /api/payments/history
+// - Filtering is client-side, using persisted query params.
 
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 // ------------------------------
 // Shape of API response
@@ -44,13 +46,9 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
       ? "bg-yellow-100 text-yellow-800"
       : "bg-green-100 text-green-800";
 
-  const label = purpose === "STAFF_SEAT" ? "Staff Seat" : "Package";
-
   return (
-    <span
-      className={`${style} text-xs px-2 py-0.5 rounded font-semibold tracking-wide`}
-    >
-      {label}
+    <span className={`${style} text-xs px-2 py-0.5 rounded font-semibold`}>
+      {purpose === "STAFF_SEAT" ? "Staff Seat" : "Package"}
     </span>
   );
 }
@@ -102,8 +100,39 @@ export default function BillingPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
-  const [userFilter, setUserFilter] = useState<string>("ALL"); // user email or "ALL"
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // ✅ Initialize filters from URL
+  const [filter, setFilterState] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">(
+    (searchParams.get("purpose") as "ALL" | "PACKAGE" | "STAFF_SEAT") || "ALL"
+  );
+  const [userFilter, setUserFilterState] = useState<string>(
+    searchParams.get("user") || "ALL"
+  );
+
+  // ✅ Sync filter changes into URL
+  const updateQueryParam = (purpose: string, user: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (purpose === "ALL") params.delete("purpose");
+    else params.set("purpose", purpose);
+
+    if (user === "ALL") params.delete("user");
+    else params.set("user", user);
+
+    router.replace(`?${params.toString()}`, { scroll: false });
+  };
+
+  const setFilter = (val: "ALL" | "PACKAGE" | "STAFF_SEAT") => {
+    setFilterState(val);
+    updateQueryParam(val, userFilter);
+  };
+
+  const setUserFilter = (val: string) => {
+    setUserFilterState(val);
+    updateQueryParam(filter, val);
+  };
 
   // ✅ Fetch payment history
   const fetchPayments = async () => {
@@ -128,7 +157,7 @@ export default function BillingPage() {
     fetchPayments();
   }, []);
 
-  // ✅ Extract unique users (Admins only)
+  // ✅ Extract unique users (for Admins)
   const uniqueUsers = useMemo(() => {
     const users: { email: string; name: string | null }[] = [];
     const seen = new Set<string>();
@@ -143,9 +172,7 @@ export default function BillingPage() {
 
   // ✅ Apply both filters before rendering
   const filteredPayments = payments.filter((p) => {
-    // Purpose filter
     if (filter !== "ALL" && p.purpose !== filter) return false;
-    // User filter (only Admin has `p.user`)
     if (userFilter !== "ALL" && p.user?.email !== userFilter) return false;
     return true;
   });
