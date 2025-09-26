@@ -1,24 +1,25 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Dashboard billing page with persistent filters in the URL.
-// - Filters supported:
-//   • Purpose (All / Package / Staff Seat)
-//   • User (Admins only → dropdown by email/name)
+// - Dashboard billing page with persistent filters (Purpose + User).
+// - Filters persist BOTH in URL (shareable) and localStorage (fallback).
 //
-// Updates in this version:
-// - Uses useSearchParams + useRouter to read/write query params.
-// - Filters (`purpose`, `user`) persist across reloads and can be shared via URL.
-// - Changing a filter updates the query string (without reload).
+// Key Updates:
+// - Removed direct reliance on useSearchParams to avoid Suspense build errors.
+// - Added sync to localStorage as a fallback.
+// - On load: initialize from URL > then localStorage > then defaults.
+// - On change: update both URL + localStorage.
+// - Admins see an extra user filter dropdown.
 //
-// Notes:
-// - Data still fetched from /api/payments/history
-// - Filtering is client-side, using persisted query params.
+// Benefits:
+// - Reloads preserve filter state.
+// - Bookmarked/shared URLs open with filters pre-applied.
+// - Large org admins can filter by user.
 
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 // ------------------------------
 // Shape of API response
@@ -38,7 +39,7 @@ interface PaymentRecord {
 }
 
 // ------------------------------
-// Small badge for payment purpose
+// Purpose Badge
 // ------------------------------
 function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
   const style =
@@ -94,7 +95,7 @@ function FilterToggle({
 }
 
 // ------------------------------
-// Billing Page Component
+// Main Page
 // ------------------------------
 export default function BillingPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
@@ -102,48 +103,63 @@ export default function BillingPage() {
   const [error, setError] = useState("");
 
   const router = useRouter();
-  const searchParams = useSearchParams();
 
-  // ✅ Initialize filters from URL
-  const [filter, setFilterState] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">(
-    (searchParams.get("purpose") as "ALL" | "PACKAGE" | "STAFF_SEAT") || "ALL"
-  );
-  const [userFilter, setUserFilterState] = useState<string>(
-    searchParams.get("user") || "ALL"
-  );
+  // ------------------------------
+  // Filters (default = ALL)
+  // ------------------------------
+  const [filter, setFilterState] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
+  const [userFilter, setUserFilterState] = useState<string>("ALL");
 
-  // ✅ Sync filter changes into URL
-  const updateQueryParam = (purpose: string, user: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (purpose === "ALL") params.delete("purpose");
-    else params.set("purpose", purpose);
+  // ------------------------------
+  // Load filters from URL/localStorage on first mount
+  // ------------------------------
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const purposeFromUrl = urlParams.get("purpose") as
+      | "ALL"
+      | "PACKAGE"
+      | "STAFF_SEAT"
+      | null;
+    const userFromUrl = urlParams.get("user");
 
-    if (user === "ALL") params.delete("user");
-    else params.set("user", user);
+    const savedPurpose = localStorage.getItem("billingPurpose") as
+      | "ALL"
+      | "PACKAGE"
+      | "STAFF_SEAT"
+      | null;
+    const savedUser = localStorage.getItem("billingUser");
 
-    router.replace(`?${params.toString()}`, { scroll: false });
-  };
+    setFilterState(purposeFromUrl || savedPurpose || "ALL");
+    setUserFilterState(userFromUrl || savedUser || "ALL");
+  }, []);
 
-  const setFilter = (val: "ALL" | "PACKAGE" | "STAFF_SEAT") => {
-    setFilterState(val);
-    updateQueryParam(val, userFilter);
-  };
+  // ------------------------------
+  // Persist filters to URL + localStorage whenever they change
+  // ------------------------------
+  useEffect(() => {
+    if (filter || userFilter) {
+      const params = new URLSearchParams();
+      if (filter !== "ALL") params.set("purpose", filter);
+      if (userFilter !== "ALL") params.set("user", userFilter);
 
-  const setUserFilter = (val: string) => {
-    setUserFilterState(val);
-    updateQueryParam(filter, val);
-  };
+      // Update URL (without reload)
+      router.replace(`?${params.toString()}`, { scroll: false });
 
-  // ✅ Fetch payment history
+      // Save locally too
+      localStorage.setItem("billingPurpose", filter);
+      localStorage.setItem("billingUser", userFilter);
+    }
+  }, [filter, userFilter, router]);
+
+  // ------------------------------
+  // Fetch payments from API
+  // ------------------------------
   const fetchPayments = async () => {
     try {
       const res = await fetch("/api/payments/history");
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to load payments");
-      }
-
+      if (!res.ok) throw new Error(data.error || "Failed to load payments");
       setPayments(data.payments);
     } catch (err: any) {
       console.error("[BillingPage] Error fetching payments:", err);
@@ -157,7 +173,9 @@ export default function BillingPage() {
     fetchPayments();
   }, []);
 
-  // ✅ Extract unique users (for Admins)
+  // ------------------------------
+  // Unique users (for Admin dropdown)
+  // ------------------------------
   const uniqueUsers = useMemo(() => {
     const users: { email: string; name: string | null }[] = [];
     const seen = new Set<string>();
@@ -170,7 +188,9 @@ export default function BillingPage() {
     return users;
   }, [payments]);
 
-  // ✅ Apply both filters before rendering
+  // ------------------------------
+  // Apply filters
+  // ------------------------------
   const filteredPayments = payments.filter((p) => {
     if (filter !== "ALL" && p.purpose !== filter) return false;
     if (userFilter !== "ALL" && p.user?.email !== userFilter) return false;
@@ -186,16 +206,16 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
-      {/* Purpose filter toggle */}
-      <FilterToggle filter={filter} setFilter={setFilter} />
+      {/* Purpose filter */}
+      <FilterToggle filter={filter} setFilter={setFilterState} />
 
-      {/* User dropdown (Admins only → payments have .user info) */}
+      {/* User dropdown (admins only) */}
       {uniqueUsers.length > 0 && (
         <div className="mb-6">
           <label className="text-white font-semibold mr-2">Filter by User:</label>
           <select
             value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
+            onChange={(e) => setUserFilterState(e.target.value)}
             className="px-3 py-1 rounded border border-gray-300 text-sm"
           >
             <option value="ALL">All Users</option>
