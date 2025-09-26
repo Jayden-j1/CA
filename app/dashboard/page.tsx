@@ -52,7 +52,7 @@ export default function DashboardPage() {
   return (
     <section className="w-full py-10 flex flex-col items-center text-center gap-6">
       {/* Greeting headline */}
-      <h1 className="text-4xl sm:text-5xl font-bold text-white">{greeting}</h1>
+      <h1 className="text-4xl sm:text-5xl font-bold text-black">{greeting}</h1>
 
       {/* User info */}
       <p className="text-white text-lg">

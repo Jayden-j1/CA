@@ -85,12 +85,11 @@ export default function CourseContentPage() {
       <div className="w-[90%] sm:w-[600px] md:w-[800px] bg-white rounded-xl p-6 shadow-xl">
         <h2 className="font-bold text-xl mb-4">Welcome to the Training!</h2>
         <p className="mb-4">
-          🎥 Video lessons and cultural awareness materials will appear here.
-          Replace this placeholder with your actual course modules.
+          🎥 Video lessons and cultural awareness materials will go here.
         </p>
         <p>
-          ✅ Because you’ve purchased access, you can view this course. Staff
-          added by a business owner will also see this once their seat payment
+          ✅ purchased accounts have access, you can view this course. Staff
+          added by a business owner will also see this once their payment
           is completed.
         </p>
       </div>

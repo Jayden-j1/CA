@@ -3,8 +3,8 @@
 // Purpose:
 // - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
 // - Shows current staff list with "Remove" buttons.
-// - Removal flow now has a confirmation step via toast with Yes/Cancel.
-// - Uses /api/staff/remove (hard delete).
+// - Removal flow includes confirmation step before API call.
+// - Now uses API response email for success toast (safer & source of truth).
 // - Displays toasts for Stripe success/cancel AND staff removals.
 
 "use client";
@@ -93,8 +93,8 @@ function StaffDashboardContent() {
     }
   };
 
-  // ✅ Remove staff via API
-  const removeStaff = async (staffId: string, staffEmail: string) => {
+  // ✅ Remove staff via API (hard delete)
+  const removeStaff = async (staffId: string) => {
     try {
       const res = await fetch("/api/staff/remove", {
         method: "POST",
@@ -108,9 +108,11 @@ function StaffDashboardContent() {
         return;
       }
 
-      toast.success(`✅ Removed staff: ${staffEmail}`, { duration: 4000 });
-      fetchStaff();
-      window.history.replaceState(null, "", window.location.pathname);
+      // ✅ Use email returned by API response
+      toast.success(`✅ Removed staff: ${data.email}`, { duration: 4000 });
+
+      fetchStaff(); // refresh staff list
+      window.history.replaceState(null, "", window.location.pathname); // clean params
     } catch (err) {
       console.error("[StaffDashboard] Remove error:", err);
       toast.error("Internal error removing staff");
@@ -129,7 +131,7 @@ function StaffDashboardContent() {
             <button
               onClick={() => {
                 toast.dismiss(t.id); // close confirmation toast
-                removeStaff(staffId, staffEmail); // proceed with removal
+                removeStaff(staffId); // only pass ID, backend provides email
               }}
               className="bg-red-600 text-white px-4 py-1 rounded hover:bg-red-700"
             >
@@ -144,7 +146,7 @@ function StaffDashboardContent() {
           </div>
         </div>
       ),
-      { duration: 5000 } // auto-dismiss if no action
+      { duration: 5000 }
     );
   };
 
