@@ -1,23 +1,29 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Billing dashboard with payment history.
-// - Now fetches payments with server-side filtering (purpose + user).
-// - Admins can filter by both purpose AND user email.
-// - Filters persist in localStorage for convenience.
+// - Billing dashboard with payments table + filters.
+// - Fetches data from /api/payments/history with server-side filtering.
+// - Admins get both `payments` and a separate `users` array for dropdown.
+// - Filters: Purpose (All / Package / Staff Seat) and User (for Admins only).
+// - Filters are persisted in localStorage for convenience across sessions.
 //
-// Key UX:
-// - Purpose filter toggle (All / Package / Staff Seat).
-// - Admin-only user filter dropdown (all users who appear in data).
-// - Payments re-fetched whenever filters change.
-// - LocalStorage persistence means filters survive refresh/session.
+// Updates in this version:
+// - Uses `users` array returned from API instead of deriving from payments.
+// - Clean separation of payment results vs available user filter options.
+// - Dropdown remains stable regardless of current filter.
+//
+// Data Flow:
+// 1. On mount → fetch(`/api/payments/history?purpose=...&user=...`).
+// 2. Save filters to localStorage so they persist between visits.
+// 3. Render purpose + user filter controls.
+// 4. Render table of payments.
 
 "use client";
 
 import { useEffect, useState } from "react";
 
 // ------------------------------
-// API response shape
+// Shape of API response
 // ------------------------------
 interface PaymentRecord {
   id: string;
@@ -33,10 +39,15 @@ interface PaymentRecord {
   };
 }
 
+interface UserOption {
+  email: string;
+  name: string | null;
+}
+
 // ------------------------------
-// Badge component for purpose
+// Badge component for payment purpose
 // ------------------------------
-function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
+function PurposeBadge({ purpose }: { purpose: string }) {
   const style =
     purpose === "STAFF_SEAT"
       ? "bg-yellow-100 text-yellow-800"
@@ -50,83 +61,47 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
 }
 
 export default function BillingPage() {
+  // State for data
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [users, setUsers] = useState<UserOption[]>([]); // ✅ From API, not derived
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ------------------------------
-  // Filters
-  // ------------------------------
-  const [purposeFilter, setPurposeFilter] = useState<
-    "ALL" | "PACKAGE" | "STAFF_SEAT"
-  >("ALL");
-  const [userFilter, setUserFilter] = useState<string>("ALL");
-  const [userOptions, setUserOptions] = useState<
-    { email: string; name: string | null }[]
-  >([]);
+  // Filter states
+  const [purposeFilter, setPurposeFilter] = useState("ALL");
+  const [userFilter, setUserFilter] = useState("");
 
   // ------------------------------
-  // Load persisted filters from localStorage (once on mount)
+  // Load filters from localStorage (persistency)
   // ------------------------------
   useEffect(() => {
-    const savedPurpose = localStorage.getItem("billingFilterPurpose");
-    const savedUser = localStorage.getItem("billingFilterUser");
-
-    if (savedPurpose === "PACKAGE" || savedPurpose === "STAFF_SEAT") {
-      setPurposeFilter(savedPurpose);
-    }
-    if (savedUser) {
-      setUserFilter(savedUser);
-    }
+    const storedPurpose = localStorage.getItem("billing:purposeFilter");
+    const storedUser = localStorage.getItem("billing:userFilter");
+    if (storedPurpose) setPurposeFilter(storedPurpose);
+    if (storedUser) setUserFilter(storedUser);
   }, []);
 
   // ------------------------------
-  // Persist filters to localStorage whenever they change
-  // ------------------------------
-  useEffect(() => {
-    localStorage.setItem("billingFilterPurpose", purposeFilter);
-    localStorage.setItem("billingFilterUser", userFilter);
-  }, [purposeFilter, userFilter]);
-
-  // ------------------------------
-  // Fetch payments from server API
+  // Fetch payments (server-side filtering)
   // ------------------------------
   const fetchPayments = async () => {
-    setLoading(true);
-    setError("");
     try {
+      setLoading(true);
       const params = new URLSearchParams();
+      if (purposeFilter !== "ALL") params.set("purpose", purposeFilter);
+      if (userFilter) params.set("user", userFilter);
 
-      if (purposeFilter !== "ALL") {
-        params.set("purpose", purposeFilter);
-      }
-      if (userFilter !== "ALL") {
-        params.set("user", userFilter);
-      }
-
-      const url = `/api/payments/history${
-        params.toString() ? `?${params.toString()}` : ""
-      }`;
-
-      const res = await fetch(url);
+      const res = await fetch(`/api/payments/history?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || "Failed to load payments");
       }
 
-      setPayments(data.payments);
-
-      // If admin, build dropdown user options
-      if (data.payments.length > 0 && data.payments[0].user) {
-        const uniqueUsers: Record<string, { email: string; name: string | null }> = {};
-        data.payments.forEach((p: PaymentRecord) => {
-          if (p.user) uniqueUsers[p.user.email] = { email: p.user.email, name: p.user.name };
-        });
-        setUserOptions(Object.values(uniqueUsers));
-      }
+      setPayments(data.payments || []);
+      setUsers(data.users || []); // ✅ Admins get distinct users
     } catch (err: any) {
-      console.error("[BillingPage] Fetch error:", err);
+      console.error("[BillingPage] Error fetching payments:", err);
       setError(err.message || "Internal error");
     } finally {
       setLoading(false);
@@ -134,10 +109,13 @@ export default function BillingPage() {
   };
 
   // ------------------------------
-  // Re-fetch whenever filters change
+  // Sync filters → localStorage + refetch
   // ------------------------------
   useEffect(() => {
+    localStorage.setItem("billing:purposeFilter", purposeFilter);
+    localStorage.setItem("billing:userFilter", userFilter);
     fetchPayments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [purposeFilter, userFilter]);
 
   // ------------------------------
@@ -149,38 +127,28 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Purpose filter */}
-        <div className="flex gap-2">
-          {["ALL", "PACKAGE", "STAFF_SEAT"].map((opt) => (
-            <button
-              key={opt}
-              onClick={() => setPurposeFilter(opt as any)}
-              className={`px-3 py-1 rounded text-sm font-bold ${
-                purposeFilter === opt
-                  ? "bg-white text-blue-600"
-                  : "bg-white/70 text-blue-900"
-              }`}
-            >
-              {opt === "ALL"
-                ? "All"
-                : opt === "PACKAGE"
-                ? "Packages"
-                : "Staff Seats"}
-            </button>
-          ))}
-        </div>
+      {/* Filter Controls */}
+      <div className="flex flex-col sm:flex-row gap-4 mb-6">
+        {/* Purpose Filter */}
+        <select
+          value={purposeFilter}
+          onChange={(e) => setPurposeFilter(e.target.value)}
+          className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow"
+        >
+          <option value="ALL">All Purposes</option>
+          <option value="PACKAGE">Packages</option>
+          <option value="STAFF_SEAT">Staff Seats</option>
+        </select>
 
-        {/* User filter (admins only) */}
-        {userOptions.length > 0 && (
+        {/* User Filter (only render if API provided users → Admin only) */}
+        {users.length > 0 && (
           <select
             value={userFilter}
             onChange={(e) => setUserFilter(e.target.value)}
-            className="px-3 py-1 rounded text-sm font-bold bg-white/70 text-blue-900"
+            className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow"
           >
-            <option value="ALL">All Users</option>
-            {userOptions.map((u) => (
+            <option value="">All Users</option>
+            {users.map((u) => (
               <option key={u.email} value={u.email}>
                 {u.name || u.email} ({u.email})
               </option>
@@ -189,7 +157,6 @@ export default function BillingPage() {
         )}
       </div>
 
-      {/* Table */}
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (
