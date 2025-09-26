@@ -1,37 +1,36 @@
 // app/dashboard/staff/page.tsx
 //
 // Purpose:
-// - Staff management dashboard (BUSINESS_OWNER + ADMIN).
-// - Shows current staff list with roles (USER / ADMIN) + Remove buttons.
-// - Keeps Stripe success/cancel toasts and removal confirmation.
+// - Staff management page (BUSINESS_OWNER + ADMIN).
+// - Shows current staff list with roles, Remove buttons, and Promote/Demote actions.
+// - Adds client-side filters: All / Admins / Users.
+// - Keeps Stripe success/cancel toasts via <SearchParamsWrapper>.
 //
-// Change in this version:
-// - Include `role` in Staff interface.
-// - Render a small role badge next to the staff email.
-// - When removing, prefer the API-returned email (safer than client copy).
+// Notes:
+// - We removed the embedded AddStaffForm here to keep this page focused on list/management.
+//   (Add staff from /dashboard/add-staff.)
+// - Promote/Demote calls /api/staff/update-role and refreshes the list.
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
-import AddStaffForm from "@/components/forms/addStaffForm";
 import RequireRole from "@/components/auth/requiredRole";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-// ------------------------------
-// Staff Type (matches API /api/staff/list)
-// ------------------------------
+type Role = "USER" | "ADMIN";
+
 interface Staff {
   id: string;
   name: string;
   email: string;
-  role: "USER" | "ADMIN"; // ✅ NEW: include role
+  role: Role;
   createdAt: string;
 }
 
-// Simple helper to style a role badge
-function RoleBadge({ role }: { role: Staff["role"] }) {
+// Small role badge
+function RoleBadge({ role }: { role: Role }) {
   const isAdmin = role === "ADMIN";
   const style =
     (isAdmin
@@ -41,14 +40,9 @@ function RoleBadge({ role }: { role: Staff["role"] }) {
   return <span className={style}>{role}</span>;
 }
 
-// ------------------------------
-// StaffToastHandler
-// ------------------------------
-// Handles toasts for Stripe redirect (?success / ?canceled).
-// Cleans query params to prevent repeats on refresh.
+// Stripe success/cancel toast handler (unchanged)
 function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
-
   useEffect(() => {
     const success = searchParams.get("success");
     const canceled = searchParams.get("canceled");
@@ -77,36 +71,36 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   return null;
 }
 
-// ------------------------------
-// StaffDashboardContent
-// ------------------------------
 function StaffDashboardContent() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ✅ Fetch staff list from API
+  // Filter state: ALL | ADMIN | USER
+  const [filter, setFilter] = useState<"ALL" | Role>("ALL");
+
+  // Fetch staff
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
     try {
+      // Client-side filter; we still fetch all so changing filter is instant.
       const res = await fetch("/api/staff/list");
       const data = await res.json();
-
       if (!res.ok) {
         setError(data.error || "Failed to fetch staff");
       } else {
         setStaffList(data.staff);
       }
     } catch (err) {
-      console.error("[StaffDashboard] Fetch error:", err);
+      console.error("[Staff] Fetch error:", err);
       setError("Internal error");
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Remove staff via API (hard delete)
+  // Remove staff (calls existing API with confirmation toast flow elsewhere)
   const removeStaff = async (staffId: string, staffEmailFromUI: string) => {
     try {
       const res = await fetch("/api/staff/remove", {
@@ -114,27 +108,22 @@ function StaffDashboardContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ staffId }),
       });
-
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error || "Error removing staff");
         return;
       }
-
-      // Prefer email returned by API (truth source) over UI copy
       const email = data.removedEmail || staffEmailFromUI;
       toast.success(`✅ Removed staff: ${email}`, { duration: 4000 });
       fetchStaff();
-
-      // Clean up any accidental query flags (consistency with other flows)
       window.history.replaceState(null, "", window.location.pathname);
     } catch (err) {
-      console.error("[StaffDashboard] Remove error:", err);
+      console.error("[Staff] Remove error:", err);
       toast.error("Internal error removing staff");
     }
   };
 
-  // ✅ Show confirmation toast before removal
+  // Confirmation toast before remove
   const confirmRemoveStaff = (staffId: string, staffEmail: string) => {
     toast.custom(
       (t) => (
@@ -165,14 +154,42 @@ function StaffDashboardContent() {
     );
   };
 
-  // Fetch staff on first mount
+  // Promote/Demote API call
+  const updateRole = async (staffId: string, nextRole: Role) => {
+    try {
+      const res = await fetch("/api/staff/update-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId, newRole: nextRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Unable to change role");
+        return;
+      }
+      const email = data.user?.email || "user";
+      toast.success(`✅ ${email} is now ${data.user?.role}`, { duration: 4000 });
+      fetchStaff();
+    } catch (err) {
+      console.error("[Staff] update-role error:", err);
+      toast.error("Internal error updating role");
+    }
+  };
+
+  // Computed list based on filter
+  const visibleStaff = useMemo(() => {
+    if (filter === "ALL") return staffList;
+    return staffList.filter((s) => s.role === filter);
+  }, [staffList, filter]);
+
+  // Initial load
   useEffect(() => {
     fetchStaff();
   }, []);
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
-      {/* ✅ Toast handler for Stripe redirects, Suspense-safe */}
+      {/* Stripe success/cancel toasts */}
       <SearchParamsWrapper>
         <StaffToastHandler onSuccess={fetchStaff} />
       </SearchParamsWrapper>
@@ -182,52 +199,91 @@ function StaffDashboardContent() {
         Staff Management
       </h1>
 
+      {/* Filter controls */}
+      <div className="flex gap-2">
+        <button
+          className={`px-3 py-1 rounded text-sm font-bold ${
+            filter === "ALL" ? "bg-white text-blue-600" : "bg-white/70 text-blue-900"
+          }`}
+          onClick={() => setFilter("ALL")}
+        >
+          All
+        </button>
+        <button
+          className={`px-3 py-1 rounded text-sm font-bold ${
+            filter === "ADMIN" ? "bg-white text-blue-600" : "bg-white/70 text-blue-900"
+          }`}
+          onClick={() => setFilter("ADMIN")}
+        >
+          Admins
+        </button>
+        <button
+          className={`px-3 py-1 rounded text-sm font-bold ${
+            filter === "USER" ? "bg-white text-blue-600" : "bg-white/70 text-blue-900"
+          }`}
+          onClick={() => setFilter("USER")}
+        >
+          Users
+        </button>
+      </div>
+
       {/* Staff List */}
-      <div className="w-[90%] sm:w-[600px] md:w-[800px] bg-white rounded-xl p-6 shadow-xl">
+      <div className="w-[90%] sm:w-[600px] md:w-[900px] bg-white rounded-xl p-6 shadow-xl">
         <h2 className="font-bold text-xl mb-4">Current Staff</h2>
+
         {loading ? (
           <p>Loading...</p>
         ) : error ? (
           <p className="text-red-500">{error}</p>
-        ) : staffList.length === 0 ? (
-          <p>No staff added yet.</p>
+        ) : visibleStaff.length === 0 ? (
+          <p>No staff found for this filter.</p>
         ) : (
           <ul className="divide-y divide-gray-200">
-            {staffList.map((staff) => (
-              <li
-                key={staff.id}
-                className="py-2 flex justify-between items-center"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
-                  <span className="font-medium">{staff.name}</span>
-                  <span className="text-gray-500">{staff.email}</span>
-                  {/* ✅ Role badge */}
-                  <RoleBadge role={staff.role} />
-                </div>
+            {visibleStaff.map((staff) => {
+              const isAdmin = staff.role === "ADMIN";
+              const nextRole: Role = isAdmin ? "USER" : "ADMIN";
+              return (
+                <li key={staff.id} className="py-3 flex justify-between items-center">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
+                    <span className="font-medium">{staff.name}</span>
+                    <span className="text-gray-500">{staff.email}</span>
+                    <RoleBadge role={staff.role} />
+                  </div>
 
-                <button
-                  onClick={() => confirmRemoveStaff(staff.id, staff.email)}
-                  className="text-red-600 hover:text-red-800 font-bold text-sm"
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
+                  <div className="flex items-center gap-3">
+                    {/* Promote/Demote */}
+                    <button
+                      onClick={() => updateRole(staff.id, nextRole)}
+                      className={`px-3 py-1 rounded text-xs font-bold ${
+                        isAdmin
+                          ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200" // demote to USER
+                          : "bg-green-100 text-green-800 hover:bg-green-200" // promote to ADMIN
+                      }`}
+                      title={isAdmin ? "Demote to USER" : "Promote to ADMIN"}
+                    >
+                      {isAdmin ? "Demote to USER" : "Promote to ADMIN"}
+                    </button>
+
+                    {/* Remove (with confirm) */}
+                    <button
+                      onClick={() => confirmRemoveStaff(staff.id, staff.email)}
+                      className="text-red-600 hover:text-red-800 font-bold text-sm"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
 
-      {/* Add Staff Form (unchanged) */}
-      <div className="w-[90%] sm:w-[600px] md:w-[800px]">
-        <AddStaffForm onSuccess={fetchStaff} />
-      </div>
+      {/* NOTE: No add form here; add staff from /dashboard/add-staff */}
     </section>
   );
 }
 
-// ------------------------------
-// StaffDashboardPage (wrapper)
-// ------------------------------
 export default function StaffDashboardPage() {
   return (
     <RequireRole allowed={["BUSINESS_OWNER", "ADMIN"]}>
