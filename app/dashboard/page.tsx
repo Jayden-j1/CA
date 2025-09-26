@@ -55,7 +55,7 @@ export default function DashboardPage() {
       <h1 className="text-4xl sm:text-5xl font-bold text-black">{greeting}</h1>
 
       {/* User info */}
-      <p className="text-white text-lg">
+      <p className="text-black text-lg">
         Logged in as <span className="font-bold">{session.user.email}</span>
       </p>
       <p className="text-white">Role: {role}</p>
