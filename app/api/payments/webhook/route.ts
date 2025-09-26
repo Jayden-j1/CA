@@ -2,13 +2,15 @@
 //
 // Purpose:
 // - Handle Stripe webhook events (secure via signature).
-// - Log payments into Prisma with clear purpose-based descriptions.
-// - Specifically handle STAFF_SEAT payments differently.
+// - Save payments into Prisma with a clear purpose field (enum).
+// - Differentiate between PACKAGE purchases vs STAFF_SEAT purchases.
 //
-// Key updates:
-// - Removed duplicate `new Stripe(...)` declaration.
-// - Use shared `stripe` instance from lib/stripe.ts.
-// - Save STAFF_SEAT payments as "Staff Seat Payment" with metadata role info.
+// Updates in this version:
+// - Removed duplicate local Stripe instance, now always use lib/stripe.ts.
+// - Persist `purpose` enum into DB.
+// - If metadata.purpose === "STAFF_SEAT" → purpose = STAFF_SEAT.
+// - Else → default to PACKAGE (subscriptions, general purchases).
+// - Adds description fallback for clarity in billing history.
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -16,13 +18,13 @@ import { stripe } from "@/lib/stripe"; // ✅ central Stripe instance
 import Stripe from "stripe";
 
 export async function POST(req: NextRequest) {
-  // 1. Extract signature + raw body
+  // 1. Extract signature + raw body (required for Stripe verification)
   const sig = req.headers.get("stripe-signature")!;
   const rawBody = await req.text();
 
   let event: Stripe.Event;
   try {
-    // 2. Verify webhook signature
+    // 2. Verify webhook authenticity with Stripe secret
     event = stripe.webhooks.constructEvent(
       rawBody,
       sig,
@@ -33,21 +35,25 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 3. Handle checkout completion
+    // 3. Only handle successful checkout sessions
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
       if (session.amount_total && session.metadata?.userId) {
         let description = "Generic Payment";
+        let purpose: "PACKAGE" | "STAFF_SEAT" = "PACKAGE";
 
-        // 🎯 Differentiate STAFF_SEAT payments
+        // 🎯 If this was a staff seat purchase
         if (session.metadata?.purpose === "STAFF_SEAT") {
-          description = `Staff Seat Payment (${session.metadata.role})`;
+          purpose = "STAFF_SEAT";
+          description = `Staff Seat Payment for ${session.metadata.staffEmail || "unknown staff"}`;
         } else if (session.metadata?.description) {
+          // Fallback for packages (individual / business subscriptions)
           description = session.metadata.description;
+          purpose = "PACKAGE";
         }
 
-        // 4. Persist to DB
+        // 4. Persist the payment into DB with purpose
         await prisma.payment.create({
           data: {
             userId: session.metadata.userId,
@@ -55,12 +61,13 @@ export async function POST(req: NextRequest) {
             currency: (session.currency || "AUD").toUpperCase(),
             stripeId: session.id,
             description,
+            purpose, // ✅ NEW
           },
         });
       }
     }
 
-    // 5. Always ack Stripe
+    // 5. Always acknowledge Stripe so retries don’t occur
     return NextResponse.json({ received: true });
   } catch (e) {
     console.error("[Webhook] handler error:", e);

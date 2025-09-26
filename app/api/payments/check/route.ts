@@ -1,8 +1,9 @@
 // app/api/payments/check/route.ts
 //
 // Purpose:
-// - Tell the frontend whether the logged-in user has at least 1 valid payment.
-// - Returns richer data for dashboards, including latest payment details.
+// - Tell the frontend whether the logged-in user has access based on PACKAGE purchases.
+// - Ignores STAFF_SEAT payments (those don’t unlock course access).
+// - Returns latest PACKAGE payment with type inference.
 //
 // Response Shape:
 // {
@@ -28,12 +29,16 @@ export async function GET() {
   }
 
   try {
-    // 2. Look for the most recent payment for this user
+    // 2. Find the most recent *PACKAGE* payment for this user
     const payment = await prisma.payment.findFirst({
-      where: { userId: session.user.id },
+      where: {
+        userId: session.user.id,
+        purpose: "PACKAGE", // ✅ Only consider package payments
+      },
       orderBy: { createdAt: "desc" },
     });
 
+    // 3. If no package payment → no access
     if (!payment) {
       return NextResponse.json({
         hasAccess: false,
@@ -42,7 +47,7 @@ export async function GET() {
       });
     }
 
-    // 3. Infer package type from description
+    // 4. Infer package type from description
     let packageType: "individual" | "business" | null = null;
     if (payment.description.toLowerCase().includes("individual")) {
       packageType = "individual";
@@ -50,7 +55,7 @@ export async function GET() {
       packageType = "business";
     }
 
-    // 4. Return structured response with latest payment info
+    // 5. Return structured response
     return NextResponse.json({
       hasAccess: true,
       packageType,

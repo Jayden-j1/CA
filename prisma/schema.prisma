@@ -74,6 +74,7 @@ model Payment {
   currency    String
   stripeId    String
   description String
+  purpose     String   @default("PACKAGE")
 
   // ✅ NEW: payment purpose enum
   purpose     PaymentPurpose  @default(PACKAGE)
