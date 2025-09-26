@@ -1,10 +1,9 @@
 // app/api/staff/update-role/route.ts
 //
 // Purpose:
-// - Promote/demote a staff user between USER and ADMIN.
-// - Enforces BUSINESS_OWNER/ADMIN permissions.
-// - BUSINESS_OWNER can only change users inside their own business.
-// - ADMIN can change any staff (except BUSINESS_OWNERs).
+// - Allows BUSINESS_OWNER or ADMIN to promote/demote staff between USER and ADMIN.
+// - BUSINESS_OWNER: can only update roles of staff in their own business.
+// - ADMIN: can update any staff (but not BUSINESS_OWNERs).
 //
 // Request (POST JSON):
 //   { staffId: string, newRole: "USER" | "ADMIN" }
@@ -19,20 +18,35 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
   try {
+    // ------------------------------
+    // 1. Ensure user is logged in
+    // ------------------------------
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "BUSINESS_OWNER" && session.user.role !== "ADMIN") {
+    // ------------------------------
+    // 2. Permission check
+    // ------------------------------
+    if (
+      session.user.role !== "BUSINESS_OWNER" &&
+      session.user.role !== "ADMIN"
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    // ------------------------------
+    // 3. Validate input
+    // ------------------------------
     const { staffId, newRole } = await req.json();
     if (!staffId || (newRole !== "USER" && newRole !== "ADMIN")) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
 
+    // ------------------------------
+    // 4. Lookup target user
+    // ------------------------------
     const target = await prisma.user.findUnique({
       where: { id: staffId },
       select: { id: true, email: true, role: true, businessId: true },
@@ -42,12 +56,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Disallow touching owners through this endpoint
+    // Prevent modifying BUSINESS_OWNER accounts
     if (target.role === "BUSINESS_OWNER") {
-      return NextResponse.json({ error: "Cannot change owner role via this endpoint" }, { status: 403 });
+      return NextResponse.json(
+        { error: "Cannot change BUSINESS_OWNER role via this endpoint" },
+        { status: 403 }
+      );
     }
 
-    // Owners can only change roles within their business
+    // ------------------------------
+    // 5. Owner-specific restriction
+    // ------------------------------
     if (
       session.user.role === "BUSINESS_OWNER" &&
       target.businessId !== session.user.businessId
@@ -58,7 +77,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Avoid unnecessary writes
+    // ------------------------------
+    // 6. Skip if no change
+    // ------------------------------
     if (target.role === newRole) {
       return NextResponse.json({
         message: `No change: user already has role ${newRole}`,
@@ -66,6 +87,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ------------------------------
+    // 7. Update role
+    // ------------------------------
     const updated = await prisma.user.update({
       where: { id: target.id },
       data: { role: newRole },
@@ -78,6 +102,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[API] update-role error:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }

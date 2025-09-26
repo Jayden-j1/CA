@@ -1,18 +1,28 @@
-import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
-import { prisma } from "@/lib/prisma";
+// app/api/payments/webhook/route.ts
+//
+// Purpose:
+// - Handle Stripe webhook events (secure via signature).
+// - Log payments into Prisma with clear purpose-based descriptions.
+// - Specifically handle STAFF_SEAT payments differently.
+//
+// Key updates:
+// - Removed duplicate `new Stripe(...)` declaration.
+// - Use shared `stripe` instance from lib/stripe.ts.
+// - Save STAFF_SEAT payments as "Staff Seat Payment" with metadata role info.
 
-//  Stripe client
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { stripe } from "@/lib/stripe"; // ✅ central Stripe instance
+import Stripe from "stripe";
 
 export async function POST(req: NextRequest) {
-  // 1️ Stripe sends raw body + signature → must read raw text
+  // 1. Extract signature + raw body
   const sig = req.headers.get("stripe-signature")!;
   const rawBody = await req.text();
 
-  let event;
+  let event: Stripe.Event;
   try {
-    // 2️ Verify webhook signature
+    // 2. Verify webhook signature
     event = stripe.webhooks.constructEvent(
       rawBody,
       sig,
@@ -23,28 +33,37 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 3️ Handle successful checkout sessions
+    // 3. Handle checkout completion
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
       if (session.amount_total && session.metadata?.userId) {
+        let description = "Generic Payment";
+
+        // 🎯 Differentiate STAFF_SEAT payments
+        if (session.metadata?.purpose === "STAFF_SEAT") {
+          description = `Staff Seat Payment (${session.metadata.role})`;
+        } else if (session.metadata?.description) {
+          description = session.metadata.description;
+        }
+
+        // 4. Persist to DB
         await prisma.payment.create({
           data: {
-            userId: session.metadata.userId, // Link payment to user
-            amount: session.amount_total / 100, // Convert cents → dollars
-            currency: (session.currency || "aud").toUpperCase(),
+            userId: session.metadata.userId,
+            amount: session.amount_total / 100, // cents → dollars
+            currency: (session.currency || "AUD").toUpperCase(),
             stripeId: session.id,
-            description:
-              session.metadata?.description || "Generic Payment",
+            description,
           },
         });
       }
     }
 
-    // 4️ Always send 200 so Stripe doesn’t retry endlessly
+    // 5. Always ack Stripe
     return NextResponse.json({ received: true });
   } catch (e) {
-    console.error("Webhook handler error:", e);
+    console.error("[Webhook] handler error:", e);
     return new NextResponse("Server error", { status: 500 });
   }
 }

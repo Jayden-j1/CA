@@ -1,27 +1,31 @@
 // app/api/staff/add/route.ts
 //
-// Updated to:
-// - Accept `isAdmin` from request body.
-// - If true, create staff with role = "ADMIN".
-// - Otherwise default to "USER".
-// - Rest of logic (payment, Stripe session, auth) unchanged.
+// Purpose:
+// - Adds a staff member (USER or ADMIN) to a business.
+// - Immediately creates a Stripe Checkout session for billing the staff seat.
+// - Prevents duplicate users and ensures only authorized roles can add staff.
+//
+// Key updates:
+// - Uses centralized Stripe client from lib/stripe.ts
+// - Removes duplicate local declaration of `stripe`
+// - Staff role defaults to USER unless `isAdmin` is true.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+import { stripe } from "@/lib/stripe"; // ✅ use shared stripe instance
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Validate session
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // 2. Role restriction
     if (
       session.user.role !== "BUSINESS_OWNER" &&
       session.user.role !== "ADMIN"
@@ -29,7 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // ✅ Parse request body
+    // 3. Parse request
     const { name, email, password, businessId, isAdmin } = await req.json();
     if (!name || !email || !password || !businessId) {
       return NextResponse.json(
@@ -38,6 +42,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Business owner can only add to their own business
     if (
       session.user.role === "BUSINESS_OWNER" &&
       session.user.businessId !== businessId
@@ -48,6 +53,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 4. Prevent duplicate email
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json(
@@ -56,22 +62,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 5. Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ✅ Role assignment: based on isAdmin flag
+    // 6. Assign role
     const role = isAdmin ? "ADMIN" : "USER";
 
+    // 7. Create staff record
     const staff = await prisma.user.create({
-      data: {
-        name,
-        email,
-        hashedPassword,
-        role,
-        businessId,
-      },
-      select: { id: true, email: true, businessId: true },
+      data: { name, email, hashedPassword, role, businessId },
+      select: { id: true, email: true, businessId: true, role: true },
     });
 
+    // 8. Create Stripe Checkout session
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -80,7 +83,7 @@ export async function POST(req: NextRequest) {
           price_data: {
             currency: "aud",
             product_data: { name: `Staff seat for ${email}` },
-            unit_amount: 9900,
+            unit_amount: 9900, // $99 AUD
           },
           quantity: 1,
         },
@@ -95,10 +98,12 @@ export async function POST(req: NextRequest) {
         userId: staff.id,
         payerId: session.user.id,
         businessId: staff.businessId || "",
-        purpose: "STAFF_SEAT",
+        purpose: "STAFF_SEAT", // ✅ used in webhook
+        role: staff.role,
       },
     });
 
+    // 9. Return response
     return NextResponse.json(
       {
         message: "Staff created, redirect to Stripe Checkout",
