@@ -4,20 +4,24 @@
 // Purpose:
 // - Single source of truth for both development (SQLite) and production (Postgres).
 // - Uses one schema, switching DB via DATABASE_URL in .env.
-//
-// Changes in this version:
-//  Renamed `password` field → `hashedPassword` for clarity.
-//    (No chance of confusing it with plaintext passwords.)
-//  Added @map("password") to keep DB column name backwards-compatible.
 // -------------------------------------------------------------------
 
 datasource db {
-  provider = "postgresql"             // postgresql  DB (Neon)
-  url      = env("DATABASE_URL")  // From .env / Vercel environment
+  provider = "postgresql"             // PostgreSQL DB (Neon in prod)
+  url      = env("DATABASE_URL")
 }
 
 generator client {
-  provider = "prisma-client-js"   // Generates Prisma Client
+  provider = "prisma-client-js"
+}
+
+// -----------------------------
+// ENUMS
+// -----------------------------
+// ✅ Enum for payment purpose, ensures consistent values across app.
+enum PaymentPurpose {
+  PACKAGE     // e.g., an individual or business subscription
+  STAFF_SEAT  // e.g., adding an extra staff member
 }
 
 // -----------------------------
@@ -29,13 +33,8 @@ model User {
   email         String     @unique
   emailVerified DateTime?
   image         String?
-
-  //   Store bcrypt-hashed password (NOT plaintext)
-  //   - Field is `hashedPassword` in Prisma Client
-  //   - Column in DB is still `password` (for compatibility)
   hashedPassword String? @map("password")
 
-  // Roles: "USER" | "BUSINESS_OWNER" | "ADMIN"
   role          String     @default("USER")
 
   businessId    String?
@@ -68,18 +67,22 @@ model Business {
 // Payment model
 // -----------------------------
 model Payment {
-  id          String   @id @default(cuid())
+  id          String          @id @default(cuid())
   userId      String
-  user        User     @relation(fields: [userId], references: [id])
+  user        User            @relation(fields: [userId], references: [id])
   amount      Float
   currency    String
   stripeId    String
   description String
-  createdAt   DateTime @default(now())
+
+  // ✅ NEW: payment purpose enum
+  purpose     PaymentPurpose  @default(PACKAGE)
+
+  createdAt   DateTime        @default(now())
 }
 
 // -----------------------------
-// NextAuth tables
+// NextAuth tables (unchanged)
 // -----------------------------
 model Account {
   id                 String  @id @default(cuid())

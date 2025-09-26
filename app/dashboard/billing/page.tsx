@@ -6,9 +6,9 @@
 //   - USER / BUSINESS_OWNER → only their own payments
 //   - ADMIN → all payments across the platform
 //
-// Notes:
-// - Uses /api/payments/history to fetch data
-// - Renders differently if ADMIN (adds extra user info)
+// Updates:
+// - Added "purpose" column (PACKAGE vs STAFF_SEAT).
+// - Renders a badge next to description.
 
 "use client";
 
@@ -22,6 +22,7 @@ interface PaymentRecord {
   amount: number;
   currency: string;
   description: string;
+  purpose: "PACKAGE" | "STAFF_SEAT"; // ✅ New
   createdAt: string;
   // Present only if ADMIN fetched all payments
   user?: {
@@ -29,6 +30,20 @@ interface PaymentRecord {
     name: string | null;
     role: string;
   };
+}
+
+// Small badge for payment purpose
+function PurposeBadge({ purpose }: { purpose: string }) {
+  const style =
+    purpose === "STAFF_SEAT"
+      ? "bg-yellow-100 text-yellow-800"
+      : "bg-green-100 text-green-800";
+
+  return (
+    <span className={`${style} text-xs px-2 py-0.5 rounded font-semibold`}>
+      {purpose === "STAFF_SEAT" ? "Staff Seat" : "Package"}
+    </span>
+  );
 }
 
 export default function BillingPage() {
@@ -80,9 +95,9 @@ export default function BillingPage() {
           <table className="w-full border-collapse">
             <thead>
               <tr className="text-left border-b border-gray-300">
-                {/* If admin → show user column */}
                 {payments[0]?.user && <th className="py-2 px-3">User</th>}
                 <th className="py-2 px-3">Description</th>
+                <th className="py-2 px-3">Purpose</th>
                 <th className="py-2 px-3">Amount</th>
                 <th className="py-2 px-3">Date</th>
               </tr>
@@ -99,6 +114,9 @@ export default function BillingPage() {
                     </td>
                   )}
                   <td className="py-2 px-3">{p.description}</td>
+                  <td className="py-2 px-3">
+                    <PurposeBadge purpose={p.purpose} />
+                  </td>
                   <td className="py-2 px-3 font-bold">
                     ${p.amount} {p.currency.toUpperCase()}
                   </td>
