@@ -1,21 +1,16 @@
 // app/dashboard/map/page.tsx
 //
 // Purpose:
-// - Interactive Map page inside the dashboard.
-// - Uses /api/payments/check to gate access (only paid users can view).
-// - Displays package type + latest payment details.
-// - Renders GoogleMapComponent inside a responsive centered container.
-//
-// Layout fix summary:
-// - We now wrap the map in a responsive <div> with a fixed height (70vh).
-// - The child map is forced to fill that wrapper with w-full h-full.
-// - This ensures no cropping, smooth resizing, and proper centering.
+// - Dashboard page that checks subscription/payment before rendering the map.
+// - Displays package/payment info above the map.
+// - Renders GoogleMapComponent directly, without extra wrappers that conflict
+//   with its internal layout.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent"; // ✅ confirm this path matches your file
+import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent";
 
 // ------------------------------
 // API Response Type
@@ -67,7 +62,7 @@ export default function MapPage() {
   }, []);
 
   // ------------------------------
-  // Loading state
+  // Loading + access guard
   // ------------------------------
   if (loading) {
     return (
@@ -77,9 +72,6 @@ export default function MapPage() {
     );
   }
 
-  // ------------------------------
-  // Block unpaid users
-  // ------------------------------
   if (!hasAccess) return null;
 
   // ------------------------------
@@ -105,12 +97,8 @@ export default function MapPage() {
         </p>
       )}
 
-      {/* ✅ Map container: centered, responsive, no cropping */}
-      <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl flex items-center justify-center">
-        {/* <div className="w-full h-full flex items-center justify-center"> */}
-          <GoogleMapComponent />
-        {/* </div> */}
-      </div>
+      {/* ✅ Direct map render (component handles its own sizing) */}
+      <GoogleMapComponent />
     </section>
   );
 }
