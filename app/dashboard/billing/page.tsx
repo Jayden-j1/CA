@@ -2,22 +2,21 @@
 //
 // Purpose:
 // - Dashboard billing page with payment history.
-// - Supports filtering by purpose: Show All, Packages, Staff Seats.
-// - Makes it easier to distinguish subscription payments from staff seat purchases.
+// - Supports filtering by purpose (All, Packages, Staff Seats).
+// - Admins additionally get a dropdown filter to view payments by specific user.
 //
 // Updates in this version:
-// - Added <FilterToggle> component.
-// - Added state for current filter (ALL | PACKAGE | STAFF_SEAT).
-// - Payment table respects selected filter.
-// - UI highlights active filter option.
+// - Added `userFilter` dropdown (only shown for Admins).
+// - Collects unique users from payments for the dropdown.
+// - Combined purpose + user filters before rendering table.
 //
 // Notes:
-// - Payments are fetched from /api/payments/history with a `purpose` field.
-// - Admins still see a "User" column with who paid.
+// - Payments come from /api/payments/history, including `purpose` and `user`.
+// - Filters work entirely client-side.
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 
 // ------------------------------
 // Shape of API response
@@ -57,7 +56,7 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
 }
 
 // ------------------------------
-// Filter Toggle component
+// Filter Toggle (Purpose)
 // ------------------------------
 function FilterToggle({
   filter,
@@ -73,7 +72,7 @@ function FilterToggle({
   ];
 
   return (
-    <div className="flex gap-2 mb-6">
+    <div className="flex gap-2 mb-4">
       {options.map((opt) => {
         const label =
           opt === "ALL" ? "Show All" : opt === "PACKAGE" ? "Packages" : "Staff Seats";
@@ -104,6 +103,7 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
+  const [userFilter, setUserFilter] = useState<string>("ALL"); // user email or "ALL"
 
   // ✅ Fetch payment history
   const fetchPayments = async () => {
@@ -128,11 +128,27 @@ export default function BillingPage() {
     fetchPayments();
   }, []);
 
-  // ✅ Apply filter before rendering
-  const filteredPayments =
-    filter === "ALL"
-      ? payments
-      : payments.filter((p) => p.purpose === filter);
+  // ✅ Extract unique users (Admins only)
+  const uniqueUsers = useMemo(() => {
+    const users: { email: string; name: string | null }[] = [];
+    const seen = new Set<string>();
+    payments.forEach((p) => {
+      if (p.user?.email && !seen.has(p.user.email)) {
+        users.push({ email: p.user.email, name: p.user.name });
+        seen.add(p.user.email);
+      }
+    });
+    return users;
+  }, [payments]);
+
+  // ✅ Apply both filters before rendering
+  const filteredPayments = payments.filter((p) => {
+    // Purpose filter
+    if (filter !== "ALL" && p.purpose !== filter) return false;
+    // User filter (only Admin has `p.user`)
+    if (userFilter !== "ALL" && p.user?.email !== userFilter) return false;
+    return true;
+  });
 
   // ------------------------------
   // Render
@@ -143,8 +159,27 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
-      {/* Filter toggle */}
+      {/* Purpose filter toggle */}
       <FilterToggle filter={filter} setFilter={setFilter} />
+
+      {/* User dropdown (Admins only → payments have .user info) */}
+      {uniqueUsers.length > 0 && (
+        <div className="mb-6">
+          <label className="text-white font-semibold mr-2">Filter by User:</label>
+          <select
+            value={userFilter}
+            onChange={(e) => setUserFilter(e.target.value)}
+            className="px-3 py-1 rounded border border-gray-300 text-sm"
+          >
+            <option value="ALL">All Users</option>
+            {uniqueUsers.map((u) => (
+              <option key={u.email} value={u.email}>
+                {u.name || "Unnamed"} ({u.email})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {loading ? (
         <p className="text-white">Loading payments...</p>
