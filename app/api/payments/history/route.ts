@@ -2,19 +2,24 @@
 //
 // Purpose:
 // - Return filtered payment history for the billing dashboard.
-// - ADMIN → can view ALL users' payments (with optional filters).
-// - USER / BUSINESS_OWNER → only their own payments (filters still apply but restricted to their data).
+// - Admins: can view ALL users' payments and also receive a separate list of distinct users.
+// - Non-admins: restricted to their own payments.
+// - Accepts query params for server-side filtering.
 //
-// New Features:
-// - Accept query params `purpose` and `user` for server-side filtering.
-// - `purpose` must be "PACKAGE" or "STAFF_SEAT".
-// - `user` is an email string (only valid for ADMIN role).
-// - Prisma now does filtering at DB level → better scalability & efficiency.
+// Features:
+// - Query params:
+//   - ?purpose=PACKAGE | STAFF_SEAT
+//   - ?user=<userEmail> (admins only)
+// - Returns: { payments, users? } where `users` is only included for admins.
 //
-// Example Requests:
+// Example:
 //   /api/payments/history
 //   /api/payments/history?purpose=STAFF_SEAT
 //   /api/payments/history?purpose=PACKAGE&user=alice@company.com
+//
+// Notes:
+// - Filtering is done in Prisma (server-side) for efficiency.
+// - Distinct user list is built separately to power dropdowns in UI.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -22,33 +27,35 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(req: Request) {
-  // 1. Ensure user session is valid
+  // 1. Ensure the user is authenticated
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    // 2. Parse query params from URL
+    // 2. Parse query parameters
     const { searchParams } = new URL(req.url);
     const purposeParam = searchParams.get("purpose"); // "PACKAGE" | "STAFF_SEAT"
-    const userEmailParam = searchParams.get("user"); // email string
+    const userEmailParam = searchParams.get("user"); // specific user email
 
-    // 3. Build base filter
+    // 3. Start building the Prisma `where` clause
     const whereClause: any = {};
 
-    // ✅ Purpose filter (only allow known enum values)
+    // ✅ Filter by purpose (if valid)
     if (purposeParam === "PACKAGE" || purposeParam === "STAFF_SEAT") {
       whereClause.purpose = purposeParam;
     }
 
-    // 4. Role-based access
     let payments;
+    let users; // optional extra array for admins
 
+    // 4. Role-based logic
     if (session.user.role === "ADMIN") {
-      // ✅ Admin → see all payments, optionally filtered by user email
+      // ✅ Admin → can view all users’ payments
+
       if (userEmailParam) {
-        // If a specific user email is requested
+        // If filtering by specific user email
         whereClause.user = { email: userEmailParam };
       }
 
@@ -59,6 +66,20 @@ export async function GET(req: Request) {
         },
         orderBy: { createdAt: "desc" },
       });
+
+      // ✅ Distinct list of users (for dropdown in UI)
+      const distinctUsers = await prisma.user.findMany({
+        where: {
+          payments: { some: {} }, // only users who have payments
+        },
+        select: {
+          email: true,
+          name: true,
+        },
+        orderBy: { email: "asc" },
+      });
+
+      users = distinctUsers;
     } else {
       // ✅ USER / BUSINESS_OWNER → only their own payments
       whereClause.userId = session.user.id;
@@ -69,8 +90,8 @@ export async function GET(req: Request) {
       });
     }
 
-    // 5. Return payments
-    return NextResponse.json({ payments });
+    // 5. Return response
+    return NextResponse.json({ payments, users });
   } catch (err) {
     console.error("[API] Payment history error:", err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
