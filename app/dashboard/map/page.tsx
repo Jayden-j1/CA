@@ -107,9 +107,9 @@ export default function MapPage() {
 
       {/* ✅ Map container: centered, responsive, no cropping */}
       <div className="w-[90%] sm:w-[600px] md:w-[900px] h-[70vh] bg-white rounded-xl shadow-xl flex items-center justify-center">
-        <div className="w-full h-full  flex items-center justify-center">
+        {/* <div className="w-full h-full flex items-center justify-center"> */}
           <GoogleMapComponent />
-        </div>
+        {/* </div> */}
       </div>
     </section>
   );

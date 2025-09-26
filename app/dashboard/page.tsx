@@ -58,7 +58,7 @@ export default function DashboardPage() {
       <p className="text-black text-lg">
         Logged in as <span className="font-bold">{session.user.email}</span>
       </p>
-      <p className="text-white">Role: {role}</p>
+      <p className="text-black">Role: {role}</p>
 
       {/* Example dashboard-specific content */}
       <p className="mt-4 text-black">
