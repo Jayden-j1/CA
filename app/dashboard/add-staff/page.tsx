@@ -1,11 +1,8 @@
 // app/dashboard/add-staff/page.tsx
 //
-// Add Staff page
-// - Only BUSINESS_OWNER users can view this page.
-// - Logged-out users → redirected to /login
-// - Logged-in but non-business users → redirected to /dashboard
-//
-// Dependencies: next-auth (for session), next/navigation (for router)
+// Purpose:
+// - Restricts access to BUSINESS_OWNER.
+// - Renders the updated AddStaffForm with "Make Admin" option.
 
 'use client';
 
@@ -18,16 +15,14 @@ export default function AddStaffPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Redirect rules
   useEffect(() => {
     if (status === "unauthenticated") {
-      router.push("/login"); // 🚀 logged-out → login
+      router.push("/login");
     } else if (status === "authenticated" && session?.user.role !== "BUSINESS_OWNER") {
-      router.push("/dashboard"); // 🚀 non-business users → dashboard
+      router.push("/dashboard");
     }
   }, [status, session, router]);
 
-  // While checking session, show loading
   if (status === "loading") {
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
@@ -36,7 +31,6 @@ export default function AddStaffPage() {
     );
   }
 
-  // If redirected, don't render
   if (!session?.user || session.user.role !== "BUSINESS_OWNER") {
     return null;
   }
@@ -50,8 +44,3 @@ export default function AddStaffPage() {
     </section>
   );
 }
-
-
-
-
-
