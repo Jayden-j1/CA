@@ -22,7 +22,6 @@ export const publicNavigation: NavItem[] = [
   { name: "Home", href: "/", align: "left" },
   { name: "About", href: "/about", align: "left" },
   { name: "Services", href: "/services", align: "left" },
-  { name: "Map", href: "/map", align: "left" },
   { name: "Contact", href: "/contact", align: "left" },
   { name: "Login/Signup", href: "/login", align: "right" },
 ];

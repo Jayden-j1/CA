@@ -4,13 +4,27 @@
 // - Interactive Map page inside the dashboard.
 // - Uses the shared /api/payments/check API for gating.
 // - Displays package type + latest payment details.
-// - Imports and renders the GoogleMapComponent.
-// - Fixes layout: ensures map fills its container and is centered.
+// - Imports and renders the GoogleMapComponent WITHOUT any extra wrappers
+//   so the map controls its own size/centering (prevents cropping).
+//
+// Why your map looked cut off:
+// - Previously the map component (which already contains its own centered,
+//   fixed-height container) was nested inside another div with sizing rules
+//   (aspect ratio / overflow). That outer wrapper conflicted with the map’s
+//   own layout and clipped the bottom.
+// - Fix: render the map component directly, and correct the import path to
+//   match your file structure (GoogleMap.tsx exports default GoogleMapComponent).
+//
+// Bonus checks if you still don't see the map:
+// - Ensure NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is set at build/runtime.
+// - Ensure NEXT_PUBLIC_MAP_ID (if used) exists in your Google Cloud console.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+// ✅ Correct import path: your file is components/GoogleMap/GoogleMap.tsx
+//    with default export `GoogleMapComponent`
 import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent";
 
 interface PaymentCheckResponse {
@@ -32,6 +46,7 @@ export default function MapPage() {
   const [latestPayment, setLatestPayment] =
     useState<PaymentCheckResponse["latestPayment"]>(null);
 
+  // Check access using unified API
   const checkAccess = async () => {
     try {
       const res = await fetch("/api/payments/check");
@@ -67,13 +82,15 @@ export default function MapPage() {
   if (!hasAccess) return null;
 
   return (
-    <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
-      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-4">
+    <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
+      {/* Heading */}
+      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-3">
         Interactive Map
       </h1>
 
+      {/* Package / Payment info */}
       {packageType && (
-        <p className="text-white mb-2 text-lg">
+        <p className="text-white mb-1 text-lg">
           You are on the <strong>{packageType}</strong> package.
         </p>
       )}
@@ -84,15 +101,9 @@ export default function MapPage() {
         </p>
       )}
 
-      {/* ✅ Wrapper ensures map fills and centers */}
-      <div className="w-full flex justify-center items-center">
-        <div className="w-[90%] sm:w-[600px] md:w-[900px] aspect-video bg-white rounded-xl shadow-xl flex items-center justify-center overflow-hidden">
-          {/* Child map now stretches to 100% */}
-          <div className="w-full h-full">
-            <GoogleMapComponent />
-          </div>
-        </div>
-      </div>
+      {/* ✅ Render the map component directly. It already centers itself and sets its own height.
+          Removing extra wrappers avoids conflicting styles that previously clipped the bottom. */}
+      <GoogleMapComponent />
     </section>
   );
 }

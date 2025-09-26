@@ -2,23 +2,24 @@
 //
 // Purpose:
 // - Staff management dashboard (restricted to BUSINESS_OWNER + ADMIN).
-// - Shows current staff list with "Remove" buttons.
-// - Removal flow includes confirmation step before API call.
-// - Now uses API response email for success toast (safer & source of truth).
-// - Displays toasts for Stripe success/cancel AND staff removals.
+// - Shows current staff list with "Remove" buttons (no add form here).
+// - Removal flow includes a confirmation toast before the API call.
+// - Uses /api/staff/remove (hard delete) and shows success toast with email
+//   using the email returned by the API (source of truth).
+// - Displays toasts for Stripe success/cancel when returning from checkout.
+//
+// Why changed:
+// - You asked to keep Add Staff form ONLY on /dashboard/add-staff.
+//   This page now strictly lists/removes users.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
-import AddStaffForm from "@/components/forms/addStaffForm";
 import RequireRole from "@/components/auth/requiredRole";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-// ------------------------------
-// Staff Type (matches API /api/staff/list)
-// ------------------------------
 interface Staff {
   id: string;
   name: string;
@@ -26,11 +27,7 @@ interface Staff {
   createdAt: string;
 }
 
-// ------------------------------
-// StaffToastHandler
-// ------------------------------
-// - Handles toasts for Stripe redirect (?success / ?canceled).
-// - Cleans query params to prevent repeats on refresh.
+// Handles Stripe success/cancel return toasts and cleans params.
 function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
 
@@ -64,15 +61,12 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   return null;
 }
 
-// ------------------------------
-// StaffDashboardContent
-// ------------------------------
 function StaffDashboardContent() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ✅ Fetch staff list from API
+  // Fetch current staff list for the business owner
   const fetchStaff = async () => {
     setLoading(true);
     setError("");
@@ -93,7 +87,9 @@ function StaffDashboardContent() {
     }
   };
 
-  // ✅ Remove staff via API (hard delete)
+  // Call backend to remove staff (hard delete).
+  // We only pass staffId; we rely on the API's response to return the email
+  // we display in the success toast.
   const removeStaff = async (staffId: string) => {
     try {
       const res = await fetch("/api/staff/remove", {
@@ -108,18 +104,19 @@ function StaffDashboardContent() {
         return;
       }
 
-      // ✅ Use email returned by API response
+      // ✅ Use API-provided email to avoid relying on possibly stale client copy
       toast.success(`✅ Removed staff: ${data.email}`, { duration: 4000 });
 
-      fetchStaff(); // refresh staff list
-      window.history.replaceState(null, "", window.location.pathname); // clean params
+      // Refresh the list and clean any stray query params
+      fetchStaff();
+      window.history.replaceState(null, "", window.location.pathname);
     } catch (err) {
       console.error("[StaffDashboard] Remove error:", err);
       toast.error("Internal error removing staff");
     }
   };
 
-  // ✅ Show confirmation toast
+  // Confirmation UI before removal (prevents accidental clicks)
   const confirmRemoveStaff = (staffId: string, staffEmail: string) => {
     toast.custom(
       (t) => (
@@ -130,15 +127,15 @@ function StaffDashboardContent() {
           <div className="flex justify-center gap-4">
             <button
               onClick={() => {
-                toast.dismiss(t.id); // close confirmation toast
-                removeStaff(staffId); // only pass ID, backend provides email
+                toast.dismiss(t.id);
+                removeStaff(staffId);
               }}
               className="bg-red-600 text-white px-4 py-1 rounded hover:bg-red-700"
             >
               Yes
             </button>
             <button
-              onClick={() => toast.dismiss(t.id)} // cancel
+              onClick={() => toast.dismiss(t.id)}
               className="bg-gray-300 text-gray-800 px-4 py-1 rounded hover:bg-gray-400"
             >
               Cancel
@@ -150,24 +147,22 @@ function StaffDashboardContent() {
     );
   };
 
-  // Fetch staff on first mount
   useEffect(() => {
     fetchStaff();
   }, []);
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center gap-12">
-      {/* ✅ Toast handler for Stripe redirects */}
+      {/* Stripe success/cancel toast handler */}
       <SearchParamsWrapper>
         <StaffToastHandler onSuccess={fetchStaff} />
       </SearchParamsWrapper>
 
-      {/* Heading */}
       <h1 className="text-white font-bold text-4xl sm:text-5xl text-center">
         Staff Management
       </h1>
 
-      {/* Staff List */}
+      {/* Staff table only — no Add Staff form here */}
       <div className="w-[90%] sm:w-[600px] md:w-[800px] bg-white rounded-xl p-6 shadow-xl">
         <h2 className="font-bold text-xl mb-4">Current Staff</h2>
         {loading ? (
@@ -199,17 +194,21 @@ function StaffDashboardContent() {
         )}
       </div>
 
-      {/* Add Staff Form */}
-      <div className="w-[90%] sm:w-[600px] md:w-[800px]">
-        <AddStaffForm onSuccess={fetchStaff} />
-      </div>
+      {/* 🔗 Point users to the dedicated Add Staff page */}
+      <p className="text-white/90">
+        Want to add someone? Go to{" "}
+        <a
+          href="/dashboard/add-staff"
+          className="underline font-semibold hover:text-white"
+        >
+          Add Staff
+        </a>
+        .
+      </p>
     </section>
   );
 }
 
-// ------------------------------
-// StaffDashboardPage (wrapper)
-// ------------------------------
 export default function StaffDashboardPage() {
   return (
     <RequireRole allowed={["BUSINESS_OWNER", "ADMIN"]}>

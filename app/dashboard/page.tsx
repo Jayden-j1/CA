@@ -61,8 +61,8 @@ export default function DashboardPage() {
       <p className="text-white">Role: {role}</p>
 
       {/* Example dashboard-specific content */}
-      <p className="mt-4 text-white">
-        This is your personalized dashboard. Use the sidebar to navigate.
+      <p className="mt-4 text-black">
+        This is your personalised dashboard. Use the top navigation bar to navigate.
       </p>
     </section>
   );
