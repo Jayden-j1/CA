@@ -2,13 +2,13 @@
 //
 // Purpose:
 // - Return payment history for the billing dashboard.
-// - ADMIN → return ALL payments across all users.
+// - ADMIN → return ALL payments across the platform.
 // - USER / BUSINESS_OWNER → only their own payments.
-// - Always include `purpose` field so frontend can show PACKAGE vs STAFF_SEAT.
+// - Always include `purpose` so frontend can filter PACKAGE vs STAFF_SEAT.
 //
 // Updates in this version:
-// - Select + return purpose field.
-// - Include user details for ADMIN queries.
+// - Explicitly select `purpose` from Payment model.
+// - For ADMIN: include user info too.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -16,7 +16,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  // 1. Ensure logged-in user
+  // 1. Ensure user is logged in
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -26,7 +26,7 @@ export async function GET() {
     let payments;
 
     if (session.user.role === "ADMIN") {
-      // ✅ Admin → all payments across platform
+      // ✅ Admin → all payments, include user details
       payments = await prisma.payment.findMany({
         include: {
           user: { select: { email: true, name: true, role: true } },
@@ -41,7 +41,7 @@ export async function GET() {
       });
     }
 
-    // 2. Return as JSON — frontend now gets purpose as well
+    // 2. Return list — now includes `purpose` field
     return NextResponse.json({ payments });
   } catch (err) {
     console.error("[API] Payment history error:", err);
