@@ -2,13 +2,20 @@
 //
 // Purpose:
 // - Dashboard billing page.
-// - Shows payment history depending on role:
+// - Displays payment history differently based on role:
 //   - USER / BUSINESS_OWNER → only their own payments
 //   - ADMIN → all payments across the platform
 //
-// Updates:
-// - Added "purpose" column (PACKAGE vs STAFF_SEAT).
-// - Renders a badge next to description.
+// Updates in this version:
+// - Added a "Purpose" column (PACKAGE vs STAFF_SEAT).
+// - Uses a <PurposeBadge> component for clear visual distinction.
+// - Badges are color-coded:
+//     - Green = PACKAGE (subscriptions / plans)
+//     - Yellow = STAFF_SEAT (extra staff members)
+//
+// Notes:
+// - Payments are fetched from /api/payments/history which now returns
+//   { purpose: "PACKAGE" | "STAFF_SEAT" } alongside other fields.
 
 "use client";
 
@@ -22,9 +29,9 @@ interface PaymentRecord {
   amount: number;
   currency: string;
   description: string;
-  purpose: "PACKAGE" | "STAFF_SEAT"; // ✅ New
+  purpose: "PACKAGE" | "STAFF_SEAT"; // ✅ enum, comes from Prisma
   createdAt: string;
-  // Present only if ADMIN fetched all payments
+  // Only present for ADMIN queries
   user?: {
     email: string;
     name: string | null;
@@ -32,26 +39,36 @@ interface PaymentRecord {
   };
 }
 
+// ------------------------------
 // Small badge for payment purpose
-function PurposeBadge({ purpose }: { purpose: string }) {
+// ------------------------------
+function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
+  // Style differs by purpose
   const style =
     purpose === "STAFF_SEAT"
       ? "bg-yellow-100 text-yellow-800"
       : "bg-green-100 text-green-800";
 
+  const label = purpose === "STAFF_SEAT" ? "Staff Seat" : "Package";
+
   return (
-    <span className={`${style} text-xs px-2 py-0.5 rounded font-semibold`}>
-      {purpose === "STAFF_SEAT" ? "Staff Seat" : "Package"}
+    <span
+      className={`${style} text-xs px-2 py-0.5 rounded font-semibold tracking-wide`}
+    >
+      {label}
     </span>
   );
 }
 
+// ------------------------------
+// Billing Page Component
+// ------------------------------
 export default function BillingPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ✅ Fetch payment history
+  // ✅ Fetch payment history from API
   const fetchPayments = async () => {
     try {
       const res = await fetch("/api/payments/history");
@@ -75,7 +92,7 @@ export default function BillingPage() {
   }, []);
 
   // ------------------------------
-  // Render
+  // Render UI
   // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
@@ -95,6 +112,7 @@ export default function BillingPage() {
           <table className="w-full border-collapse">
             <thead>
               <tr className="text-left border-b border-gray-300">
+                {/* If ADMIN, show which user made the payment */}
                 {payments[0]?.user && <th className="py-2 px-3">User</th>}
                 <th className="py-2 px-3">Description</th>
                 <th className="py-2 px-3">Purpose</th>
@@ -105,6 +123,7 @@ export default function BillingPage() {
             <tbody>
               {payments.map((p) => (
                 <tr key={p.id} className="border-b border-gray-200">
+                  {/* Show user details if ADMIN */}
                   {p.user && (
                     <td className="py-2 px-3 text-sm text-gray-700">
                       {p.user.name || "Unnamed"} <br />
@@ -113,13 +132,21 @@ export default function BillingPage() {
                       <span className="text-xs text-gray-400">({p.user.role})</span>
                     </td>
                   )}
+
+                  {/* Description */}
                   <td className="py-2 px-3">{p.description}</td>
+
+                  {/* Purpose Badge */}
                   <td className="py-2 px-3">
                     <PurposeBadge purpose={p.purpose} />
                   </td>
+
+                  {/* Amount */}
                   <td className="py-2 px-3 font-bold">
                     ${p.amount} {p.currency.toUpperCase()}
                   </td>
+
+                  {/* Date */}
                   <td className="py-2 px-3">
                     {new Date(p.createdAt).toLocaleDateString()}
                   </td>
