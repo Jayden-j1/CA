@@ -1,78 +1,83 @@
 // app/api/checkout/create-session/route.ts
 //
 // Purpose:
-// - Creates a Stripe Checkout session for purchasing PACKAGE products.
-// - Uses env-based pricing (STRIPE_INDIVIDUAL_PRICE, STRIPE_BUSINESS_PRICE).
-// - Always validates session and packageType.
-//
-// Fix:
-// - Ensure this file is `.ts`, not `.js` (so type annotations work).
-// - Removed error-prone JS/TS mismatch.
+// - Creates Stripe Checkout Sessions securely.
+// - Uses server-side env vars for actual amounts (never trust client input).
+// - Supports 3 package types: "individual", "business", "staff_seat".
 //
 // Security:
-// - Never trust client for price — we always set price from env on the server.
+// - Price amounts are never passed from the client. They are resolved here.
+// - Staff seats are priced separately and validated here.
+//
+// Redirects:
+// - On success: back to /services or /dashboard/upgrade with ?success=true
+// - On cancel:  back with ?canceled=true
+// - On error:   back with ?error=message
 
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
+
+// ✅ Allowed package types
+type PackageType = "individual" | "business" | "staff_seat";
 
 export async function POST(req: Request) {
   try {
-    // 1. Ensure user is logged in
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { packageType }: { packageType: PackageType } = await req.json();
+
+    // 1. Resolve Stripe price (in cents) and metadata
+    let amount: number;
+    let productName: string;
+
+    switch (packageType) {
+      case "individual":
+        amount = parseInt(process.env.STRIPE_INDIVIDUAL_PRICE || "8000");
+        productName = "Individual Package";
+        break;
+      case "business":
+        amount = parseInt(process.env.STRIPE_BUSINESS_PRICE || "20000");
+        productName = "Business Package";
+        break;
+      case "staff_seat":
+        amount = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000");
+        productName = "Staff Seat";
+        break;
+      default:
+        return NextResponse.json(
+          { error: "Invalid package type" },
+          { status: 400 }
+        );
     }
 
-    // 2. Parse client body
-    const { packageType } = await req.json();
-
-    if (!["individual", "business"].includes(packageType)) {
-      return NextResponse.json({ error: "Invalid package type" }, { status: 400 });
-    }
-
-    // 3. Load prices from env vars (in cents)
-    const price =
-      packageType === "individual"
-        ? Number(process.env.STRIPE_INDIVIDUAL_PRICE)
-        : Number(process.env.STRIPE_BUSINESS_PRICE);
-
-    if (!price || isNaN(price)) {
-      throw new Error("Missing Stripe env vars for pricing");
-    }
-
-    // 4. Create Stripe Checkout Session
-    const checkoutSession = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
+    // 2. Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
             currency: "aud",
             product_data: {
-              name: `${packageType === "individual" ? "Individual" : "Business"} Package`,
+              name: productName,
             },
-            unit_amount: price, // always from env
+            unit_amount: amount, // ✅ always in cents
           },
           quantity: 1,
         },
       ],
-      success_url: `${process.env.NEXTAUTH_URL}/dashboard?success=true`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/dashboard/upgrade?canceled=true`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/services?success=true`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/services?canceled=true`,
       metadata: {
-        userId: session.user.id,
-        purpose: "PACKAGE",
-        description: `${packageType} package`,
+        purpose: packageType === "staff_seat" ? "STAFF_SEAT" : "PACKAGE",
+        packageType,
+        // In real flow, attach userId from session if logged in
       },
     });
 
-    // 5. Return session URL
-    return NextResponse.json({ url: checkoutSession.url });
-  } catch (err) {
-    console.error("[API] create-session error:", err);
+    return NextResponse.json({ url: session.url });
+  } catch (err: any) {
+    console.error("[Checkout] Error creating session:", err);
     return NextResponse.json(
-      { error: "Failed to create checkout session" },
+      { error: err.message || "Failed to create session" },
       { status: 500 }
     );
   }

@@ -2,7 +2,7 @@
 //
 // Purpose:
 // - Client button that POSTs to /api/checkout/create-session and redirects to Stripe Checkout.
-// - Prices are read from env vars (NEXT_PUBLIC_INDIVIDUAL_PRICE / NEXT_PUBLIC_BUSINESS_PRICE).
+// - Prices are read from env vars (NEXT_PUBLIC_*).
 //
 // UX:
 // - Disabled state while redirecting
@@ -10,6 +10,7 @@
 //
 // Security:
 // - No price sent from client, only packageType. Server enforces real amount.
+// - Now supports "staff_seat" packageType for business staff billing.
 
 "use client";
 
@@ -17,8 +18,8 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 
 interface CheckoutButtonProps {
-  packageType: "individual" | "business";
-  label?: string; // optional, auto-generated if not provided
+  packageType: "individual" | "business" | "staff_seat"; // ✅ extended
+  label?: string;
   className?: string;
 }
 
@@ -29,10 +30,13 @@ export default function CheckoutButton({
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
 
-  // ✅ Fallback: auto-generate label if not provided
-  const defaultLabel = packageType === "individual"
-    ? `Buy Individual Package ($${process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE})`
-    : `Buy Business Package ($${process.env.NEXT_PUBLIC_BUSINESS_PRICE})`;
+  // ✅ Fallback auto-labels based on type
+  const defaultLabel =
+    packageType === "individual"
+      ? `Buy Individual Package ($${process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE})`
+      : packageType === "business"
+      ? `Buy Business Package ($${process.env.NEXT_PUBLIC_BUSINESS_PRICE})`
+      : `Add Staff Seat ($${process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE})`;
 
   const handleCheckout = async () => {
     try {

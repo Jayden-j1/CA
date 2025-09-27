@@ -9,7 +9,7 @@
 // - Uses reusable <CheckoutButton /> for Stripe checkout.
 // - Displays success/error toasts based on Stripe redirect.
 // - Handles ?success, ?canceled, and ?error query params via <SearchParamsWrapper>.
-// - Automatically updates if you change values in your .env.
+// - Supports staff seat purchases too, future-proof for business owners.
 //
 // Security:
 // - Prices shown here are for display only.
@@ -26,8 +26,6 @@ import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 // ------------------------------
 // Query Param → Toast handler
 // ------------------------------
-// Listens for `?success`, `?canceled`, or `?error` after Stripe checkout redirect.
-// Wrapped in <SearchParamsWrapper> to safely use useSearchParams().
 function UpgradeToastHandler() {
   const searchParams = useSearchParams();
 
@@ -40,7 +38,6 @@ function UpgradeToastHandler() {
       toast.success("🎉 Payment successful! You now have full access.", {
         duration: 6000,
       });
-      // ✅ Clean query params to avoid repeated toasts on refresh
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -57,7 +54,7 @@ function UpgradeToastHandler() {
     }
   }, [searchParams]);
 
-  return null; // UI-less component, only handles side effects
+  return null;
 }
 
 // ------------------------------
@@ -65,22 +62,19 @@ function UpgradeToastHandler() {
 // ------------------------------
 export default function UpgradePage() {
   // ✅ Read display prices from env
-  const individualPrice = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "50";
-  const businessPrice = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "150";
+  const individualPrice = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "80";
+  const businessPrice = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "200";
+  const staffSeatPrice = process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE || "50";
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
-      {/* Toast handler wrapped in suspense-safe boundary */}
       <SearchParamsWrapper>
         <UpgradeToastHandler />
       </SearchParamsWrapper>
 
-      {/* Heading */}
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
         Upgrade Required
       </h1>
-
-      {/* Subtext */}
       <p className="text-white text-lg sm:text-xl mb-6 text-center max-w-xl">
         🚀 Unlock the Interactive Map and Course Content by purchasing a package.
       </p>
@@ -96,6 +90,11 @@ export default function UpgradePage() {
           packageType="business"
           label={`Buy Business Package ($${businessPrice})`}
           className="bg-blue-600 hover:bg-blue-500 text-white"
+        />
+        <CheckoutButton
+          packageType="staff_seat"
+          label={`Add Staff Seat ($${staffSeatPrice})`}
+          className="bg-yellow-600 hover:bg-yellow-500 text-white"
         />
       </div>
     </section>
