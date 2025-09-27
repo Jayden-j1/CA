@@ -5,44 +5,47 @@
 // - Immediately creates a Stripe Checkout session for billing the staff seat.
 // - Prevents duplicate users and ensures only authorized roles can add staff.
 //
-// Key updates:
-// - Uses centralized Stripe client from lib/stripe.ts
-// - Removes duplicate local declaration of `stripe`
-// - Staff role defaults to USER unless `isAdmin` is true.
+// Fixes:
+// - All code lives inside `POST(req: NextRequest)` (no stray declarations).
+// - Secure fallback: if client forgets to send businessId, server uses session.user.businessId.
+// - Prices come from STRIPE_STAFF_SEAT_PRICE env (no hardcoded $99).
+// - Uses proper Next.js `NextRequest` + `NextResponse` imports.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
-import { stripe } from "@/lib/stripe"; // ✅ use shared stripe instance
+import { stripe } from "@/lib/stripe";
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Validate session
+    // 1. Ensure session exists
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // 2. Role restriction
-    if (
-      session.user.role !== "BUSINESS_OWNER" &&
-      session.user.role !== "ADMIN"
-    ) {
+    // 2. Restrict roles → only BUSINESS_OWNER or ADMIN may add staff
+    if (session.user.role !== "BUSINESS_OWNER" && session.user.role !== "ADMIN") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 3. Parse request
-    const { name, email, password, businessId, isAdmin } = await req.json();
-    if (!name || !email || !password || !businessId) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+    // 3. Parse body
+    const body = await req.json();
+    const { name, email, password, isAdmin } = body;
+    let { businessId } = body;
+
+    // ✅ Fallback: if client didn’t send businessId, use session
+    if (!businessId && session.user.businessId) {
+      businessId = session.user.businessId;
     }
 
-    // Business owner can only add to their own business
+    if (!name || !email || !password || !businessId) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // ✅ Business owner can only add staff to their own business
     if (
       session.user.role === "BUSINESS_OWNER" &&
       session.user.businessId !== businessId
@@ -53,7 +56,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Prevent duplicate email
+    // 4. Prevent duplicate user
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json(
@@ -68,13 +71,14 @@ export async function POST(req: NextRequest) {
     // 6. Assign role
     const role = isAdmin ? "ADMIN" : "USER";
 
-    // 7. Create staff record
+    // 7. Create staff user in DB
     const staff = await prisma.user.create({
       data: { name, email, hashedPassword, role, businessId },
       select: { id: true, email: true, businessId: true, role: true },
     });
 
-    // 8. Create Stripe Checkout session
+    // 8. Stripe checkout session (staff seat pricing from env)
+    const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000"); // cents
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -83,27 +87,27 @@ export async function POST(req: NextRequest) {
           price_data: {
             currency: "aud",
             product_data: { name: `Staff seat for ${email}` },
-            unit_amount: 9900, // $99 AUD
+            unit_amount: staffPrice,
           },
           quantity: 1,
         },
       ],
-      success_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(
         staff.email
       )}`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?canceled=true&staff=${encodeURIComponent(
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?canceled=true&staff=${encodeURIComponent(
         staff.email
       )}`,
       metadata: {
         userId: staff.id,
         payerId: session.user.id,
         businessId: staff.businessId || "",
-        purpose: "STAFF_SEAT", // ✅ used in webhook
+        purpose: "STAFF_SEAT",
         role: staff.role,
       },
     });
 
-    // 9. Return response
+    // 9. Return checkout URL
     return NextResponse.json(
       {
         message: "Staff created, redirect to Stripe Checkout",

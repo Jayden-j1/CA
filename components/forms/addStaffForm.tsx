@@ -2,15 +2,17 @@
 //
 // Purpose:
 // - Handles UI for adding staff members.
-// - Includes option to mark staff as ADMIN via a checkbox.
-// - Provides an info tooltip explaining what "Admin" means.
-// - Calls /api/staff/add → creates staff + Stripe Checkout session.
-// - Redirects browser to Stripe checkoutUrl.
+// - Sends staff details to /api/staff/add.
+// - Now includes businessId from session so API doesn’t reject request.
+// - Redirects to Stripe Checkout if required.
+//
+// Security: businessId still validated server-side (never trust client blindly).
 
 "use client";
 
 import ButtonWithSpinner from "../ui/buttonWithSpinner";
 import { useState, FormEvent } from "react";
+import { useSession } from "next-auth/react"; // ✅ NEW: pull session info
 import toast from "react-hot-toast";
 
 interface AddStaffFormProps {
@@ -18,13 +20,14 @@ interface AddStaffFormProps {
 }
 
 export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
+  const { data: session } = useSession(); // ✅ session has businessId
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false); // ✅ New: track admin checkbox
-  const [showInfo, setShowInfo] = useState(false); // ✅ New: toggle tooltip
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
 
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
 
@@ -33,11 +36,18 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
     setLoading(true);
 
     try {
-      // ✅ Call API with new `isAdmin` flag
+      const businessId = session?.user?.businessId; // ✅ pull from session
+      if (!businessId) {
+        toast.error("You must belong to a business to add staff.");
+        setLoading(false);
+        return;
+      }
+
+      // ✅ Include businessId in request body
       const res = await fetch("/api/staff/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password, isAdmin }),
+        body: JSON.stringify({ name, email, password, isAdmin, businessId }),
       });
 
       const data = await res.json();
@@ -46,16 +56,13 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         return;
       }
 
-      // ✅ Redirect to Stripe checkout
       if (data.checkoutUrl) {
         window.location.href = data.checkoutUrl;
-        return; // stop further execution (redirecting away)
+        return;
       }
 
-      // Fallback: success but no checkoutUrl
       toast.success("🎉 Staff created successfully (no payment link).");
 
-      // Reset form
       setName("");
       setEmail("");
       setPassword("");
@@ -126,7 +133,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         </button>
       </div>
 
-      {/* ✅ Make Admin Option */}
+      {/* Make Admin Option */}
       <div className="flex items-center gap-2 mt-2 relative">
         <input
           id="isAdmin"
@@ -139,7 +146,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
           Make this staff member an Admin
         </label>
 
-        {/* ℹ️ Info Icon */}
         <button
           type="button"
           onClick={() => setShowInfo((prev) => !prev)}
@@ -148,7 +154,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
           ℹ️
         </button>
 
-        {/* Info Tooltip */}
         {showInfo && (
           <div className="absolute top-8 left-0 bg-white text-black text-sm rounded-lg shadow-md p-3 w-64 z-10">
             <p>
@@ -159,7 +164,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         )}
       </div>
 
-      {/* Submit */}
       <ButtonWithSpinner type="submit" loading={loading}>
         {loading ? "Adding Staff..." : "Add Staff"}
       </ButtonWithSpinner>
