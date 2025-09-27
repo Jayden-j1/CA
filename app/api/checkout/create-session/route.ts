@@ -1,18 +1,20 @@
 // app/api/checkout/create-session/route.ts
 //
 // Purpose:
-// - Creates Stripe Checkout Sessions securely.
-// - Uses server-side env vars for actual amounts (never trust client input).
-// - Supports 3 package types: "individual", "business", "staff_seat".
+// - Securely creates Stripe Checkout Sessions from the server.
+// - Supports multiple package types: "individual", "business", "staff_seat".
+// - Prices are pulled from server-side env vars (cents).
 //
 // Security:
-// - Price amounts are never passed from the client. They are resolved here.
-// - Staff seats are priced separately and validated here.
+// - Never trust client-sent price values.
+// - Always resolve amounts on the server using STRIPE_* env vars.
 //
-// Redirects:
-// - On success: back to /services or /dashboard/upgrade with ?success=true
-// - On cancel:  back with ?canceled=true
-// - On error:   back with ?error=message
+// Flow:
+// 1. Client sends { packageType }.
+// 2. Server resolves correct price + description.
+// 3. Stripe Checkout Session created.
+// 4. Returns Checkout URL to client.
+// 5. Client redirects user to Stripe-hosted payment page.
 
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -22,23 +24,24 @@ type PackageType = "individual" | "business" | "staff_seat";
 
 export async function POST(req: Request) {
   try {
+    // 1. Parse packageType from client request
     const { packageType }: { packageType: PackageType } = await req.json();
 
-    // 1. Resolve Stripe price (in cents) and metadata
+    // 2. Resolve price + product info from env vars (always in cents)
     let amount: number;
     let productName: string;
 
     switch (packageType) {
       case "individual":
-        amount = parseInt(process.env.STRIPE_INDIVIDUAL_PRICE || "8000");
+        amount = parseInt(process.env.STRIPE_INDIVIDUAL_PRICE || "8000", 10);
         productName = "Individual Package";
         break;
       case "business":
-        amount = parseInt(process.env.STRIPE_BUSINESS_PRICE || "20000");
+        amount = parseInt(process.env.STRIPE_BUSINESS_PRICE || "20000", 10);
         productName = "Business Package";
         break;
       case "staff_seat":
-        amount = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000");
+        amount = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10);
         productName = "Staff Seat";
         break;
       default:
@@ -48,18 +51,16 @@ export async function POST(req: Request) {
         );
     }
 
-    // 2. Create Stripe Checkout Session
+    // 3. Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      payment_method_types: ["card"],
+      payment_method_types: ["card"], // ✅ supports test card 4242...
       line_items: [
         {
           price_data: {
             currency: "aud",
-            product_data: {
-              name: productName,
-            },
-            unit_amount: amount, // ✅ always in cents
+            product_data: { name: productName },
+            unit_amount: amount, // cents
           },
           quantity: 1,
         },
@@ -69,10 +70,10 @@ export async function POST(req: Request) {
       metadata: {
         purpose: packageType === "staff_seat" ? "STAFF_SEAT" : "PACKAGE",
         packageType,
-        // In real flow, attach userId from session if logged in
       },
     });
 
+    // 4. Respond with Checkout URL
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
     console.error("[Checkout] Error creating session:", err);

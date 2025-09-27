@@ -5,10 +5,10 @@
 // - Immediately creates a Stripe Checkout session for billing the staff seat.
 // - Prevents duplicate users and ensures only authorized roles can add staff.
 //
-// Fixes:
+// Improvements:
 // - All code lives inside `POST(req: NextRequest)` (no stray declarations).
 // - Secure fallback: if client forgets to send businessId, server uses session.user.businessId.
-// - Prices come from STRIPE_STAFF_SEAT_PRICE env (no hardcoded $99).
+// - Staff seat price comes from STRIPE_STAFF_SEAT_PRICE env (same pattern as other package routes).
 // - Uses proper Next.js `NextRequest` + `NextResponse` imports.
 
 import { NextRequest, NextResponse } from "next/server";
@@ -77,8 +77,8 @@ export async function POST(req: NextRequest) {
       select: { id: true, email: true, businessId: true, role: true },
     });
 
-    // 8. Stripe checkout session (staff seat pricing from env)
-    const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000"); // cents
+    // 8. Stripe checkout session (price pulled from env, consistent with other APIs)
+    const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10); // cents
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
