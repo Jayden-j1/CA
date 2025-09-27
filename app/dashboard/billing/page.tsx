@@ -1,21 +1,24 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Billing dashboard with payments table + filters.
-// - Now includes CSV export for reconciliation/testing.
-// - Admins can filter by purpose or user, then export that exact view.
+// - Billing dashboard with payments table + filters + CSV export.
+// - Exports staff-seat vs package payments clearly for reconciliation/testing.
+//
+// New in this version:
+// - Added CSV export button.
+// - CSV includes Purpose column ("Package" or "Staff Seat").
+// - Useful for financial audits and reconciliation.
+//
+// Flow:
+// 1. User filters payments (optional).
+// 2. Click "Export CSV" → downloads all currently visible payments.
+// 3. Finance team can open CSV in Excel/Sheets for analysis.
 //
 // - Clearly distinguishes PACKAGE vs STAFF_SEAT using a badge.
 // - Uses server-side filtering (purpose + user) for scalability.
 // - Admins get a searchable user dropdown (autocomplete).
 // - Filters persist in localStorage.
 // - Includes a built-in QA Debug Panel to quickly inspect rows.
-//
-// Flow:
-// 1) On mount: restore filters from localStorage → fetch /api/payments/history?purpose=&user=
-// 2) Admin types user(s) → autocomplete suggestions come from API "users" array (distinct list).
-// 3) Filters re-fetch from server and are persisted to localStorage.
-// 4) QA Debug Panel (toggle) shows first N payments JSON + Copy button.
 //
 // Notes:
 // - This page assumes /api/payments/history returns:
@@ -85,7 +88,7 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Filter states
+  // Filters
   const [purposeFilter, setPurposeFilter] = useState("ALL");
   const [userFilter, setUserFilter] = useState("");
 
@@ -119,9 +122,7 @@ export default function BillingPage() {
       const res = await fetch(`/api/payments/history?${params.toString()}`);
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to load payments");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to load payments");
 
       setPayments(data.payments || []);
       setUsers(data.users || []);
@@ -134,7 +135,7 @@ export default function BillingPage() {
   };
 
   // ------------------------------
-  // Sync filters → localStorage + refetch
+  // Persist filters + refetch
   // ------------------------------
   useEffect(() => {
     localStorage.setItem("billing:purposeFilter", purposeFilter);
@@ -144,7 +145,7 @@ export default function BillingPage() {
   }, [purposeFilter, userFilter]);
 
   // ------------------------------
-  // Filter suggestion list based on search
+  // Filter suggestions
   // ------------------------------
   const filteredSuggestions = users.filter(
     (u) =>
@@ -153,40 +154,29 @@ export default function BillingPage() {
   );
 
   // ------------------------------
-  // CSV Export Helper
+  // CSV Export
   // ------------------------------
-  const exportToCSV = () => {
-    if (payments.length === 0) {
-      alert("No payments to export");
-      return;
-    }
-
-    // 1. Build CSV header
-    const headers = ["ID", "User", "Email", "Role", "Description", "Purpose", "Amount", "Currency", "Date"];
-
-    // 2. Map payments to rows
+  const exportCSV = () => {
+    const headers = ["User", "Email", "Role", "Description", "Purpose", "Amount", "Currency", "Date"];
     const rows = payments.map((p) => [
-      p.id,
       p.user?.name || "Unnamed",
       p.user?.email || "",
       p.user?.role || "",
       p.description,
-      p.purpose,
+      p.purpose === "STAFF_SEAT" ? "Staff Seat" : "Package",
       p.amount,
       p.currency.toUpperCase(),
-      new Date(p.createdAt).toLocaleDateString(),
+      new Date(p.createdAt).toLocaleString(),
     ]);
 
-    // 3. Join everything into CSV string
-    const csvContent = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const csvContent =
+      [headers, ...rows].map((row) => row.map(String).join(",")).join("\n");
 
-    // 4. Create a downloadable file
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-
     const link = document.createElement("a");
     link.href = url;
-    link.download = "payments_export.csv";
+    link.download = `payments_${new Date().toISOString().split("T")[0]}.csv`;
     link.click();
   };
 
@@ -199,7 +189,7 @@ export default function BillingPage() {
         Billing & Payment History
       </h1>
 
-      {/* Filter Controls */}
+      {/* Filters + Export */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6 relative">
         {/* Purpose Filter */}
         <select
@@ -212,7 +202,7 @@ export default function BillingPage() {
           <option value="STAFF_SEAT">Staff Seats</option>
         </select>
 
-        {/* User Filter (Admin only) */}
+        {/* User Search */}
         {users.length > 0 && (
           <div className="relative">
             <input
@@ -226,6 +216,7 @@ export default function BillingPage() {
               onFocus={() => setShowSuggestions(true)}
               className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow w-64"
             />
+
             {showSuggestions && filteredSuggestions.length > 0 && (
               <ul className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto w-full">
                 <li
@@ -256,15 +247,16 @@ export default function BillingPage() {
           </div>
         )}
 
-        {/* Export CSV Button */}
+        {/* CSV Export Button */}
         <button
-          onClick={exportToCSV}
-          className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white font-semibold rounded shadow text-sm"
+          onClick={exportCSV}
+          className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white text-sm font-bold rounded shadow"
         >
           Export CSV
         </button>
       </div>
 
+      {/* Table */}
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (
