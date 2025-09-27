@@ -2,13 +2,19 @@
 //
 // Purpose:
 // - Show pricing packages (Individual / Business).
+// - Pulls prices dynamically from NEXT_PUBLIC_* env vars so there’s a single
+//   source of truth for client-side display.
 // - If user is logged in → show <CheckoutButton /> for direct checkout.
-// - If user is not logged in → show "Sign Up First" button.
+// - If not logged in → prompt them to sign up.
 //
-// Notes:
-// - Checkout goes to /api/checkout/create-session which sets metadata purpose=PACKAGE
-//   and redirects to Stripe-hosted checkout.
-// - On return, /services shows success/canceled toasts.
+// Benefits:
+// - No more hardcoding prices in multiple places.
+// - If you update .env pricing values → all pages update automatically.
+//
+// Security:
+// - Prices in env here are *only for display*.
+// - Actual charged amounts come from server-side /api/checkout/create-session
+//   which uses STRIPE_*_PRICE in cents (so client cannot override).
 
 "use client";
 
@@ -20,9 +26,9 @@ import CheckoutButton from "@/components/payments/CheckoutButton";
 // Types
 // ------------------------------
 interface PricingCardProps {
-  name: string;       // Package name (e.g., "Individual Package")
-  price: string;      // Display price (e.g., "$50.00")
-  services: string[]; // List of included features
+  name: string;       // Package name
+  price: string;      // Display price (comes from env now)
+  services: string[]; // Included features
 }
 
 // ------------------------------
@@ -31,11 +37,15 @@ interface PricingCardProps {
 const PricingCardSection: React.FC = () => {
   const { data: session } = useSession();
 
-  // Static packages (textual)
+  // ✅ Read display values from env
+  const individualPrice = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "50";
+  const businessPrice = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "150";
+
+  // ✅ Static package descriptions, prices injected from env
   const pricingCards: PricingCardProps[] = [
     {
       name: "Individual Package",
-      price: "$50.00",
+      price: `$${individualPrice}.00`,
       services: [
         "Overview of Nyanbul culture",
         "Basic terminology",
@@ -45,7 +55,7 @@ const PricingCardSection: React.FC = () => {
     },
     {
       name: "Business Package",
-      price: "$150.00",
+      price: `$${businessPrice}.00`,
       services: [
         "Deep dive into language",
         "Elder interviews",
@@ -76,7 +86,7 @@ const PricingCardSection: React.FC = () => {
                   {name}
                 </h3>
 
-                {/* Package Price */}
+                {/* Package Price (from env) */}
                 <h4 className="text-xl font-bold tracking-wider">{price}</h4>
 
                 {/* ✅ If logged in → show checkout, else → signup */}
