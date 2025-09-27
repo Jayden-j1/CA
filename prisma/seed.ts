@@ -3,7 +3,8 @@
 // Purpose:
 // - Seed your DB with multiple test users + payments.
 // - Ensures business owners are correctly linked to Business via businessId.
-// - Includes test users for unpaid, paid (individual + business), and admin.
+// - Includes test users for unpaid, paid (individual + business), admin, and NEW: staff seat.
+// - Makes CSV export/reconciliation easier by pre-seeding both PACKAGE and STAFF_SEAT payments.
 //
 // Usage:
 //   1. Run `npx prisma migrate reset` (resets DB & applies schema).
@@ -12,7 +13,8 @@
 //
 // Notes:
 // - `upsert` ensures idempotent creation (avoids duplicates).
-// - `businessId` must be set on owner user, otherwise staff-adding checks will fail.
+// - Payments use explicit `purpose` ("PACKAGE" | "STAFF_SEAT") so you can test filters/exports.
+// - Console logs confirm each seeded entity.
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -92,13 +94,13 @@ async function main() {
     },
   });
 
-  // ✅ NEW: Link businessId back to owner user
+  // ✅ Link businessId back to owner user
   businessOwner = await prisma.user.update({
     where: { id: businessOwner.id },
     data: { businessId: business.id },
   });
 
-  // Add business payments
+  // Add business package payments
   await prisma.payment.create({
     data: {
       userId: businessOwner.id,
@@ -120,7 +122,31 @@ async function main() {
     },
   });
 
-  // --- 4. Admin (no payments) ---
+  // --- 4. Staff member with STAFF_SEAT payment ---
+  const staffUser = await prisma.user.upsert({
+    where: { email: "staff-seed@example.com" },
+    update: {},
+    create: {
+      name: "Staff Seed",
+      email: "staff-seed@example.com",
+      hashedPassword,
+      role: "USER",
+      businessId: business.id, // ✅ linked to Example Corp
+    },
+  });
+
+  await prisma.payment.create({
+    data: {
+      userId: staffUser.id,
+      amount: 99,
+      currency: "aud",
+      stripeId: "test_stripe_staff_seat_1",
+      description: "Staff Seat Payment (seeded)",
+      purpose: "STAFF_SEAT",
+    },
+  });
+
+  // --- 5. Admin (no payments) ---
   await prisma.user.upsert({
     where: { email: "admin@example.com" },
     update: {},
@@ -137,6 +163,7 @@ async function main() {
   console.log("➡️  USER (no pay): user-no-pay@example.com /", plainPassword);
   console.log("➡️  USER (paid): user-paid@example.com /", plainPassword);
   console.log("➡️  BUSINESS_OWNER: owner@example.com /", plainPassword);
+  console.log("➡️  STAFF (seeded staff seat): staff-seed@example.com /", plainPassword);
   console.log("➡️  ADMIN: admin@example.com /", plainPassword);
   console.log("Business linked:", business.name, "Domain:", business.domain);
   console.log("BusinessOwner businessId:", businessOwner.businessId);
