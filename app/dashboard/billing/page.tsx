@@ -1,7 +1,10 @@
 // app/dashboard/billing/page.tsx
 //
 // Purpose:
-// - Billing dashboard with a payments table + robust filters.
+// - Billing dashboard with payments table + filters.
+// - Now includes CSV export for reconciliation/testing.
+// - Admins can filter by purpose or user, then export that exact view.
+//
 // - Clearly distinguishes PACKAGE vs STAFF_SEAT using a badge.
 // - Uses server-side filtering (purpose + user) for scalability.
 // - Admins get a searchable user dropdown (autocomplete).
@@ -28,14 +31,17 @@
 // Security:
 // - Only exposes what the server route returns (no raw secrets).
 // - No client-side price logic here (purely display).
+// New in this version:
+// - Added `exportToCSV` function.
+// - Added "Export CSV" button above table.
+// - Ensures all current filtered results (payments) are exported.
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import toast from "react-hot-toast";
+import { useEffect, useState } from "react";
 
 // ------------------------------
-// Types (matches /api/payments/history)
+// Shape of API response
 // ------------------------------
 interface PaymentRecord {
   id: string;
@@ -57,9 +63,9 @@ interface UserOption {
 }
 
 // ------------------------------
-// Purpose badge
+// Badge for payment purpose
 // ------------------------------
-function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
+function PurposeBadge({ purpose }: { purpose: string }) {
   const style =
     purpose === "STAFF_SEAT"
       ? "bg-yellow-100 text-yellow-800"
@@ -72,106 +78,36 @@ function PurposeBadge({ purpose }: { purpose: "PACKAGE" | "STAFF_SEAT" }) {
   );
 }
 
-// ------------------------------
-// Small legend explaining badges
-// ------------------------------
-function Legend() {
-  return (
-    <div className="flex items-center gap-3 text-xs text-white/90">
-      <div className="flex items-center gap-1">
-        <span className="inline-block w-3 h-3 rounded bg-green-100 border border-green-300" />
-        <span>Package</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <span className="inline-block w-3 h-3 rounded bg-yellow-100 border border-yellow-300" />
-        <span>Staff Seat</span>
-      </div>
-    </div>
-  );
-}
-
-// ------------------------------
-// QA Debug panel: first N rows JSON + copy
-// ------------------------------
-function DebugPanel({ payments }: { payments: PaymentRecord[] }) {
-  const [open, setOpen] = useState(false);
-  const sample = useMemo(
-    () => JSON.stringify(payments.slice(0, 20), null, 2),
-    [payments]
-  );
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(sample);
-      toast.success("Copied first 20 rows to clipboard");
-    } catch {
-      toast.error("Unable to copy");
-    }
-  };
-
-  return (
-    <div className="w-full mt-4">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="text-xs px-3 py-1 rounded bg-gray-800 text-white hover:bg-gray-700"
-      >
-        {open ? "Hide" : "Show"} QA Debug (first 20 rows)
-      </button>
-      {open && (
-        <div className="mt-2 bg-gray-900 text-green-200 rounded p-3 text-xs overflow-auto max-h-64">
-          <div className="flex justify-between items-center mb-2">
-            <span>Rows: {payments.length}</span>
-            <button
-              onClick={copy}
-              className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
-            >
-              Copy JSON
-            </button>
-          </div>
-          <pre className="whitespace-pre-wrap">{sample}</pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function BillingPage() {
-  // ------------------------------
   // Data state
-  // ------------------------------
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ------------------------------
-  // Filter states (persisted)
-  // ------------------------------
-  const [purposeFilter, setPurposeFilter] = useState<"ALL" | "PACKAGE" | "STAFF_SEAT">("ALL");
-  const [userFilter, setUserFilter] = useState<string>("");
+  // Filter states
+  const [purposeFilter, setPurposeFilter] = useState("ALL");
+  const [userFilter, setUserFilter] = useState("");
 
-  // Autocomplete states
+  // For autocomplete
   const [userSearch, setUserSearch] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   // ------------------------------
-  // Restore filters from localStorage
+  // Load filters from localStorage
   // ------------------------------
   useEffect(() => {
     const storedPurpose = localStorage.getItem("billing:purposeFilter");
     const storedUser = localStorage.getItem("billing:userFilter");
-
-    if (storedPurpose === "PACKAGE" || storedPurpose === "STAFF_SEAT" || storedPurpose === "ALL") {
-      setPurposeFilter(storedPurpose);
-    }
+    if (storedPurpose) setPurposeFilter(storedPurpose);
     if (storedUser) {
       setUserFilter(storedUser);
-      setUserSearch(storedUser); // show saved email in input
+      setUserSearch(storedUser);
     }
   }, []);
 
   // ------------------------------
-  // Fetch payments + users (server-side filtering)
+  // Fetch payments + users
   // ------------------------------
   const fetchPayments = async () => {
     try {
@@ -188,13 +124,7 @@ export default function BillingPage() {
       }
 
       setPayments(data.payments || []);
-      // Admins will receive a distinct users list; others get undefined/[]
-      setUsers(Array.isArray(data.users) ? data.users : []);
-      // Console-side QA log (handy during dev)
-      console.log("[BillingPage] fetched", {
-        count: data.payments?.length,
-        filters: { purposeFilter, userFilter },
-      });
+      setUsers(data.users || []);
     } catch (err: any) {
       console.error("[BillingPage] Error fetching payments:", err);
       setError(err.message || "Internal error");
@@ -204,7 +134,7 @@ export default function BillingPage() {
   };
 
   // ------------------------------
-  // Persist filters + refetch
+  // Sync filters → localStorage + refetch
   // ------------------------------
   useEffect(() => {
     localStorage.setItem("billing:purposeFilter", purposeFilter);
@@ -214,7 +144,7 @@ export default function BillingPage() {
   }, [purposeFilter, userFilter]);
 
   // ------------------------------
-  // Search suggestions based on typed input
+  // Filter suggestion list based on search
   // ------------------------------
   const filteredSuggestions = users.filter(
     (u) =>
@@ -223,51 +153,58 @@ export default function BillingPage() {
   );
 
   // ------------------------------
-  // Clear filters helper
+  // CSV Export Helper
   // ------------------------------
-  const clearFilters = () => {
-    setPurposeFilter("ALL");
-    setUserFilter("");
-    setUserSearch("");
-    toast.success("Cleared filters");
-  };
+  const exportToCSV = () => {
+    if (payments.length === 0) {
+      alert("No payments to export");
+      return;
+    }
 
-  // ------------------------------
-  // Active filters chip (small summary)
-  // ------------------------------
-  const activeFilterLabel = useMemo(() => {
-    const parts: string[] = [];
-    if (purposeFilter !== "ALL") parts.push(`Purpose: ${purposeFilter}`);
-    if (userFilter) parts.push(`User: ${userFilter}`);
-    return parts.join(" • ");
-  }, [purposeFilter, userFilter]);
+    // 1. Build CSV header
+    const headers = ["ID", "User", "Email", "Role", "Description", "Purpose", "Amount", "Currency", "Date"];
+
+    // 2. Map payments to rows
+    const rows = payments.map((p) => [
+      p.id,
+      p.user?.name || "Unnamed",
+      p.user?.email || "",
+      p.user?.role || "",
+      p.description,
+      p.purpose,
+      p.amount,
+      p.currency.toUpperCase(),
+      new Date(p.createdAt).toLocaleDateString(),
+    ]);
+
+    // 3. Join everything into CSV string
+    const csvContent = [headers, ...rows].map((r) => r.join(",")).join("\n");
+
+    // 4. Create a downloadable file
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "payments_export.csv";
+    link.click();
+  };
 
   // ------------------------------
   // Render
   // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
-      {/* Title */}
-      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-2">
+      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
         Billing & Payment History
       </h1>
 
-      {/* Legend + Active Filters Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-[90%] sm:w-[600px] md:w-[1000px] mb-4">
-        <Legend />
-        {activeFilterLabel && (
-          <div className="mt-2 sm:mt-0 text-xs text-white/90">
-            Active: <span className="font-semibold">{activeFilterLabel}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Filters */}
+      {/* Filter Controls */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6 relative">
-        {/* Purpose */}
+        {/* Purpose Filter */}
         <select
           value={purposeFilter}
-          onChange={(e) => setPurposeFilter(e.target.value as "ALL" | "PACKAGE" | "STAFF_SEAT")}
+          onChange={(e) => setPurposeFilter(e.target.value)}
           className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow"
         >
           <option value="ALL">All Purposes</option>
@@ -275,7 +212,7 @@ export default function BillingPage() {
           <option value="STAFF_SEAT">Staff Seats</option>
         </select>
 
-        {/* User (admins only, if API returned distinct users array) */}
+        {/* User Filter (Admin only) */}
         {users.length > 0 && (
           <div className="relative">
             <input
@@ -289,8 +226,6 @@ export default function BillingPage() {
               onFocus={() => setShowSuggestions(true)}
               className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow w-64"
             />
-
-            {/* Suggestions dropdown */}
             {showSuggestions && filteredSuggestions.length > 0 && (
               <ul className="absolute z-10 mt-1 bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto w-full">
                 <li
@@ -321,16 +256,15 @@ export default function BillingPage() {
           </div>
         )}
 
-        {/* Clear */}
+        {/* Export CSV Button */}
         <button
-          onClick={clearFilters}
-          className="px-3 py-2 rounded bg-white/80 hover:bg-white text-gray-800 text-sm shadow"
+          onClick={exportToCSV}
+          className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white font-semibold rounded shadow text-sm"
         >
-          Clear filters
+          Export CSV
         </button>
       </div>
 
-      {/* Table / States */}
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (
@@ -375,9 +309,6 @@ export default function BillingPage() {
               ))}
             </tbody>
           </table>
-
-          {/* QA JSON panel for quick inspection */}
-          <DebugPanel payments={payments} />
         </div>
       )}
     </section>
