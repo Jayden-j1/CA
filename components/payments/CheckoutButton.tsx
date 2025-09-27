@@ -1,79 +1,76 @@
 // components/payments/CheckoutButton.tsx
 //
 // Purpose:
-// - A reusable button that starts a Stripe Checkout session.
-// - Can be dropped into any page (public /services OR internal /dashboard/upgrade).
-// - Accepts props for package type, label, and styling.
-// - Handles API call → /api/payments → redirect to Stripe.
+// - Client button that POSTs to /api/checkout/create-session and redirects to Stripe Checkout.
+// - Prices are read from env vars (NEXT_PUBLIC_INDIVIDUAL_PRICE / NEXT_PUBLIC_BUSINESS_PRICE).
 //
-// Notes:
-// - "packageType" determines amount + description.
-// - Displays loading state while waiting for Stripe URL.
-// - Reports API errors inline (toast or text).
+// UX:
+// - Disabled state while redirecting
+// - Clear toasts for errors
+//
+// Security:
+// - No price sent from client, only packageType. Server enforces real amount.
 
 "use client";
 
 import { useState } from "react";
+import toast from "react-hot-toast";
 
 interface CheckoutButtonProps {
-  packageType: "individual" | "business"; // Determines price + description
-  label: string;                          // Button text (e.g. "Buy Individual Package")
-  className?: string;                     // Tailwind styling classes
+  packageType: "individual" | "business";
+  label?: string; // optional, auto-generated if not provided
+  className?: string;
 }
 
 export default function CheckoutButton({
   packageType,
   label,
-  className,
+  className = "",
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
 
-  // ------------------------------
-  // Handle checkout
-  // ------------------------------
-  const handleCheckout = async () => {
-    setLoading(true);
+  // ✅ Fallback: auto-generate label if not provided
+  const defaultLabel = packageType === "individual"
+    ? `Buy Individual Package ($${process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE})`
+    : `Buy Business Package ($${process.env.NEXT_PUBLIC_BUSINESS_PRICE})`;
 
+  const handleCheckout = async () => {
     try {
-      // 1) Call backend API
-      const res = await fetch("/api/payments", {
+      setLoading(true);
+
+      // 1) Call server API to create session
+      const res = await fetch("/api/checkout/create-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: packageType === "individual" ? 5000 : 15000, // AUD $50 or $150
-          currency: "aud",
-          description:
-            packageType === "individual"
-              ? "Individual Package"
-              : "Business Package",
-        }),
+        body: JSON.stringify({ packageType }),
       });
 
       const data = await res.json();
 
-      // 2) Handle API errors
-      if (!res.ok || !data.url) {
-        alert(data.error || "Failed to start checkout");
+      if (!res.ok || !data?.url) {
+        toast.error(data.error || "Unable to start checkout");
         setLoading(false);
         return;
       }
 
-      // 3) Redirect to Stripe Checkout
+      // 2) Redirect to Stripe Checkout
       window.location.href = data.url;
     } catch (err) {
-      console.error("[CheckoutButton] Error:", err);
-      alert("Something went wrong. Please try again.");
+      console.error("[CheckoutButton] error:", err);
+      toast.error("Unexpected error starting checkout");
       setLoading(false);
     }
   };
 
   return (
     <button
-      disabled={loading}
       onClick={handleCheckout}
-      className={`px-6 py-4 font-bold rounded-2xl shadow-lg border-2 border-white disabled:opacity-50 ${className}`}
+      disabled={loading}
+      className={`px-6 py-3 rounded-full transition-colors duration-300 font-semibold ${className} ${
+        loading ? "opacity-70 cursor-not-allowed" : ""
+      }`}
     >
-      {loading ? "Loading..." : label}
+      {loading ? "Redirecting..." : (label || defaultLabel)}
     </button>
   );
 }

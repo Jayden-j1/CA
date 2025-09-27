@@ -1,7 +1,9 @@
 // app/services/page.tsx
 //
-// Updated: wrapped useSearchParams logic in <Suspense> boundary
-// to fix Vercel build error.
+// Updated: 
+// - Added explicit error toast handling for Stripe failures (from query params).
+// - Moved amounts to env in CheckoutButton (not here, but passed automatically).
+// - Wrapped in <SearchParamsWrapper> so useSearchParams works with Suspense.
 
 "use client";
 
@@ -15,10 +17,11 @@ import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 function ServicesContent() {
   const searchParams = useSearchParams();
 
-  // ✅ Stripe success/cancel handling
+  // ✅ Handle success, cancel, and error query params
   if (typeof window !== "undefined") {
     const success = searchParams.get("success");
     const canceled = searchParams.get("canceled");
+    const error = searchParams.get("error"); // NEW: explicit error support
 
     if (success) {
       toast.success("🎉 Payment successful! You now have access.", {
@@ -31,6 +34,11 @@ function ServicesContent() {
       toast.error("❌ Payment canceled. No changes made.", {
         duration: 6000,
       });
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+
+    if (error) {
+      toast.error(`⚠️ Payment failed: ${error}`, { duration: 8000 });
       window.history.replaceState(null, "", window.location.pathname);
     }
   }
@@ -50,8 +58,6 @@ function ServicesContent() {
         href="#pricing"
         onClick={handleScrollToPricing}
       />
-
-      {/* ✅ Smart Pricing Cards */}
       <PricingCardSection />
     </main>
   );
