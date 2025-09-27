@@ -3,41 +3,17 @@
 // Purpose:
 // - Billing dashboard with payments table + filters + CSV export.
 // - Exports staff-seat vs package payments clearly for reconciliation/testing.
+// - Includes user role in CSV for finance clarity.
 //
 // New in this version:
-// - Added CSV export button.
-// - CSV includes Purpose column ("Package" or "Staff Seat").
-// - Useful for financial audits and reconciliation.
+// - CSV export now has a dedicated "Purpose" column (PACKAGE vs STAFF_SEAT).
+// - CSV export now has a "Role" column (USER, ADMIN, BUSINESS_OWNER).
+// - Makes reconciliation easier for finance teams.
 //
 // Flow:
 // 1. User filters payments (optional).
 // 2. Click "Export CSV" → downloads all currently visible payments.
 // 3. Finance team can open CSV in Excel/Sheets for analysis.
-//
-// - Clearly distinguishes PACKAGE vs STAFF_SEAT using a badge.
-// - Uses server-side filtering (purpose + user) for scalability.
-// - Admins get a searchable user dropdown (autocomplete).
-// - Filters persist in localStorage.
-// - Includes a built-in QA Debug Panel to quickly inspect rows.
-//
-// Notes:
-// - This page assumes /api/payments/history returns:
-//   { payments: Payment[], users?: { email, name }[] } for Admin.
-// - Purpose filter values are "ALL" | "PACKAGE" | "STAFF_SEAT".
-// - User filter is an email (admins only).
-//
-// UX niceties:
-// - Active filter chips
-// - Legend explaining the purpose badges
-// - "Clear filters" button
-//
-// Security:
-// - Only exposes what the server route returns (no raw secrets).
-// - No client-side price logic here (purely display).
-// New in this version:
-// - Added `exportToCSV` function.
-// - Added "Export CSV" button above table.
-// - Ensures all current filtered results (payments) are exported.
 
 "use client";
 
@@ -56,7 +32,7 @@ interface PaymentRecord {
   user?: {
     email: string;
     name: string | null;
-    role: string;
+    role: string; // USER | ADMIN | BUSINESS_OWNER
   };
 }
 
@@ -157,21 +133,35 @@ export default function BillingPage() {
   // CSV Export
   // ------------------------------
   const exportCSV = () => {
-    const headers = ["User", "Email", "Role", "Description", "Purpose", "Amount", "Currency", "Date"];
+    // Add "Role" + "Purpose" to headers
+    const headers = [
+      "User",
+      "Email",
+      "Role",
+      "Description",
+      "Purpose",
+      "Amount",
+      "Currency",
+      "Date",
+    ];
+
+    // Rows reflect the headers order
     const rows = payments.map((p) => [
       p.user?.name || "Unnamed",
       p.user?.email || "",
-      p.user?.role || "",
+      p.user?.role || "N/A",
       p.description,
-      p.purpose === "STAFF_SEAT" ? "Staff Seat" : "Package",
+      p.purpose, // Will output exactly "PACKAGE" or "STAFF_SEAT"
       p.amount,
       p.currency.toUpperCase(),
       new Date(p.createdAt).toLocaleString(),
     ]);
 
+    // Build CSV
     const csvContent =
       [headers, ...rows].map((row) => row.map(String).join(",")).join("\n");
 
+    // Trigger download
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
