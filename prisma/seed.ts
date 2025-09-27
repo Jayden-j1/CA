@@ -2,23 +2,17 @@
 //
 // Purpose:
 // - Seed your DB with multiple test users + payments.
-// - Includes both unpaid and paid users for testing access gating + billing history.
-//
-// Accounts created:
-// - user-no-pay@example.com → USER (unpaid)
-// - user-paid@example.com → USER (paid, Individual Package, 2 payments)
-// - owner@example.com → BUSINESS_OWNER (paid, Business Package, 2 payments)
-// - admin@example.com → ADMIN
+// - Ensures business owners are correctly linked to Business via businessId.
+// - Includes test users for unpaid, paid (individual + business), and admin.
 //
 // Usage:
-//   1. Run `npx prisma migrate reset` (recommended → clears DB & applies schema)
-//   2. Run `npm run seed`
-//   3. Log in with printed credentials
+//   1. Run `npx prisma migrate reset` (resets DB & applies schema).
+//   2. Run `npm run seed`.
+//   3. Log in with the printed credentials.
 //
 // Notes:
-// - `upsert` ensures users/business aren’t duplicated
-// - Payments use `create` only → duplicates possible if not reset first
-// - Console logs confirm each payment (amount + description)
+// - `upsert` ensures idempotent creation (avoids duplicates).
+// - `businessId` must be set on owner user, otherwise staff-adding checks will fail.
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -30,7 +24,7 @@ async function main() {
   const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
   // --- 1. USER with no payment ---
-  const userNoPay = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: "user-no-pay@example.com" },
     update: {},
     create: {
@@ -53,35 +47,30 @@ async function main() {
     },
   });
 
-  // Multiple payments for history testing
-  const userPayment1 = await prisma.payment.create({
+  // Add payments for testing history
+  await prisma.payment.create({
     data: {
       userId: userPaid.id,
       amount: 50,
       currency: "aud",
       stripeId: "test_stripe_individual_1",
       description: "Individual Package - Initial Purchase",
+      purpose: "PACKAGE",
     },
   });
-  console.log(
-    `💳 Created payment for ${userPaid.email}: $${userPayment1.amount} ${userPayment1.currency.toUpperCase()} — ${userPayment1.description}`
-  );
-
-  const userPayment2 = await prisma.payment.create({
+  await prisma.payment.create({
     data: {
       userId: userPaid.id,
       amount: 50,
       currency: "aud",
       stripeId: "test_stripe_individual_2",
       description: "Individual Package - Renewal",
+      purpose: "PACKAGE",
     },
   });
-  console.log(
-    `💳 Created payment for ${userPaid.email}: $${userPayment2.amount} ${userPayment2.currency.toUpperCase()} — ${userPayment2.description}`
-  );
 
   // --- 3. Business Owner with Business Package payments ---
-  const businessOwner = await prisma.user.upsert({
+  let businessOwner = await prisma.user.upsert({
     where: { email: "owner@example.com" },
     update: {},
     create: {
@@ -103,31 +92,33 @@ async function main() {
     },
   });
 
-  const businessPayment1 = await prisma.payment.create({
+  // ✅ NEW: Link businessId back to owner user
+  businessOwner = await prisma.user.update({
+    where: { id: businessOwner.id },
+    data: { businessId: business.id },
+  });
+
+  // Add business payments
+  await prisma.payment.create({
     data: {
       userId: businessOwner.id,
       amount: 150,
       currency: "aud",
       stripeId: "test_stripe_business_1",
       description: "Business Package - Initial Purchase",
+      purpose: "PACKAGE",
     },
   });
-  console.log(
-    `💳 Created payment for ${businessOwner.email}: $${businessPayment1.amount} ${businessPayment1.currency.toUpperCase()} — ${businessPayment1.description}`
-  );
-
-  const businessPayment2 = await prisma.payment.create({
+  await prisma.payment.create({
     data: {
       userId: businessOwner.id,
       amount: 150,
       currency: "aud",
       stripeId: "test_stripe_business_2",
       description: "Business Package - Renewal",
+      purpose: "PACKAGE",
     },
   });
-  console.log(
-    `💳 Created payment for ${businessOwner.email}: $${businessPayment2.amount} ${businessPayment2.currency.toUpperCase()} — ${businessPayment2.description}`
-  );
 
   // --- 4. Admin (no payments) ---
   await prisma.user.upsert({
@@ -148,6 +139,7 @@ async function main() {
   console.log("➡️  BUSINESS_OWNER: owner@example.com /", plainPassword);
   console.log("➡️  ADMIN: admin@example.com /", plainPassword);
   console.log("Business linked:", business.name, "Domain:", business.domain);
+  console.log("BusinessOwner businessId:", businessOwner.businessId);
 }
 
 // Run safely
