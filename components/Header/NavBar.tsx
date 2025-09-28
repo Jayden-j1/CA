@@ -6,8 +6,20 @@
 // - Intercepts Logout → calls NextAuth.signOut with callbackUrl for toast.
 //
 // Notes:
-// - Upgrade hiding logic is client-side via session.user.hasPaid.
+// - Upgrade hiding logic uses `session.user.hasPaid` which must be set
+//   correctly in `lib/auth.ts` (NextAuth callbacks). If STAFF_SEAT should also
+//   grant access, ensure `hasPaid` includes that in the JWT callback.
 // - Role-based checks are respected via config/navigation.ts.
+// - Keeps UI logic thin (logic belongs in backend/JWT).
+//
+// What changed in this update?
+// - Heavy inline documentation to make behavior clear.
+// - Small safety tweaks (e.g., early returns, consistent handlers).
+//
+// Why keep Navbar thin?
+// - Navbar shouldn't guess who has access. It should trust `session.user.hasPaid`
+//   computed centrally (NextAuth callback) to avoid duplicated business rules.
+//
 
 'use client';
 
@@ -21,33 +33,46 @@ import {
   NavItem,
 } from "@/config/navigation";
 
-// -------------------------
-// BaseNavbar: presentational
-// -------------------------
+// ---------------------------------------------------------
+// BaseNavbar: Presentational component
+// - Receives a *filtered* list of navItems (public or dashboard).
+// - Renders desktop + mobile menus, with a logout link interception.
+// - Does NOT perform role logic itself; that's done by the caller.
+// ---------------------------------------------------------
 const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
+  // Toggles mobile menu
   const [isOpen, setIsOpen] = useState(false);
+  // Current route (for "active" state styles)
   const pathname = usePathname();
 
+  // Split items into left vs right-aligned for desktop layout
   const leftItems = navItems.filter((item) => item.align !== "right");
   const rightItems = navItems.filter((item) => item.align === "right");
 
-  // Intercept logout clicks
+  // Intercept logout clicks so we can trigger NextAuth.signOut() with a friendly callbackUrl.
+  // This allows showing a toast on the landing page (e.g., `/?logout=success`).
   const handleMaybeLogout = async (
     e: React.MouseEvent<HTMLAnchorElement>,
     href: string
   ) => {
+    // If link is not logout → do nothing (let Link handle navigation).
     if (href !== "/logout") return;
+
+    // Prevent normal navigation
     e.preventDefault();
 
+    // Build a callback URL back to the homepage with a query to trigger a toast
     const base = window.location.origin;
     const callbackUrl = `${base}/?logout=success`;
+
+    // Call NextAuth's signOut which clears the session and redirects.
     await signOut({ callbackUrl });
   };
 
   return (
     <header>
       <nav className="relative bg-white border-gray-200 shadow-sm px-4 py-3 flex items-center justify-between">
-        {/* Desktop left */}
+        {/* Desktop left-aligned items */}
         <div className="hidden lg:flex space-x-6 items-center">
           {leftItems.map((item) => (
             <Link
@@ -65,7 +90,7 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
           ))}
         </div>
 
-        {/* Desktop right */}
+        {/* Desktop right-aligned items */}
         <div className="hidden lg:flex space-x-6 items-center ml-auto">
           {rightItems.map((item) => (
             <Link
@@ -83,21 +108,25 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
           ))}
         </div>
 
-        {/* Mobile hamburger */}
+        {/* Mobile hamburger toggle */}
         <div>
           <button
-            onClick={() => setIsOpen(!isOpen)}
+            onClick={() => setIsOpen((open) => !open)}
             className="lg:hidden px-3 py-2 text-gray-700 border border-gray-300 rounded"
+            aria-label="Toggle menu"
           >
             ☰
           </button>
         </div>
 
-        {/* Mobile menu */}
+        {/* Mobile menu (full width below the nav bar) */}
         {isOpen && (
           <div className="absolute top-full left-0 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow z-50">
             {navItems.map((item) => (
-              <div key={item.name} onClick={() => setIsOpen(false)}>
+              <div
+                key={item.name}
+                onClick={() => setIsOpen(false)} // Close after clicking an item
+              >
                 <Link
                   href={item.href}
                   onClick={(e) => handleMaybeLogout(e, item.href)}
@@ -118,34 +147,47 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
   );
 };
 
-// -------------------------
+// ---------------------------------------------------------
 // Public Navbar
-// -------------------------
+// - Uses navigation defined in config/navigation.ts for public pages.
+// ---------------------------------------------------------
 export const PublicNavbar: React.FC = () => (
   <BaseNavbar navItems={publicNavigation} />
 );
 
-// -------------------------
+// ---------------------------------------------------------
 // Dashboard Navbar
-// -------------------------
-// Filters by role & hides Upgrade if user.hasPaid
-// -------------------------
+// - Role-aware filtering + hide "Upgrade" if user.hasPaid is true.
+// - Important: `hasPaid` must be computed in NextAuth JWT callback and
+//   should include staff-seat access if your business rules allow it.
+// ---------------------------------------------------------
 export const DashboardNavbar: React.FC = () => {
   const { data: session } = useSession();
 
+  // Extract role + hasPaid from session
   const role = session?.user?.role;
   const hasPaid = session?.user?.hasPaid;
 
+  // Filter dashboard links by role and payment status.
   const filtered = dashboardNavigation.filter((item) => {
+    // ✅ Hide Upgrade if the user has access (hasPaid === true)
+    //    IMPORTANT: Ensure `hasPaid` is calculated correctly in `lib/auth.ts`.
     if (item.name === "Upgrade" && hasPaid) return false;
 
+    // ✅ If a link doesn't specify role requirements, allow it.
     if (!item.requiresRole) return true;
+
+    // ✅ If a link requires a single role (string)
     if (typeof item.requiresRole === "string") {
       return item.requiresRole === role;
     }
+
+    // ✅ If a link allows multiple roles (array)
     if (Array.isArray(item.requiresRole)) {
       return item.requiresRole.includes(role as any);
     }
+
+    // Default deny if unknown spec
     return false;
   });
 
