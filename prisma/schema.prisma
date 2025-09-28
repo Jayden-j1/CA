@@ -1,110 +1,66 @@
-// -------------------------------------------------------------------
-// Prisma schema for your app
-//
-// Purpose:
-// - Single source of truth for DB models.
-// - Includes PaymentPurpose enum for clear PACKAGE vs STAFF_SEAT tracking.
-// -------------------------------------------------------------------
-
-datasource db {
-  provider = "postgresql"            // PostgreSQL DB (Neon in prod)
-  url      = env("DATABASE_URL")
-}
-
 generator client {
   provider = "prisma-client-js"
 }
 
-// -----------------------------
-// ENUMS
-// -----------------------------
-// ✅ Enum ensures consistent values
-enum PaymentPurpose {
-  PACKAGE     // Individual or business subscription
-  STAFF_SEAT  // Adding a staff member
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// -----------------------------
-// User model
-// -----------------------------
 model User {
-  id             String     @id @default(cuid())
+  id             String    @id @default(cuid())
   name           String?
-  email          String     @unique
+  email          String    @unique
   emailVerified  DateTime?
   image          String?
-
-  // Bcrypt-hashed password (NOT plaintext)
-  hashedPassword String?    @map("password")
-
-  // Role: USER | BUSINESS_OWNER | ADMIN
-  role           String     @default("USER")
-
+  hashedPassword String?   @map("password")
+  role           String    @default("USER")
   businessId     String?
-  business       Business?  @relation(fields: [businessId], references: [id])
-  ownedBusiness  Business?  @relation("BusinessOwner")
-
-  payments       Payment[]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   accounts       Account[]
+  ownedBusiness  Business? @relation("BusinessOwner")
+  payments       Payment[]
   sessions       Session[]
-
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  business       Business? @relation(fields: [businessId], references: [id])
 }
 
-// -----------------------------
-// Business model
-// -----------------------------
 model Business {
   id        String   @id @default(cuid())
   name      String
   domain    String   @unique
-
   ownerId   String   @unique
-  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
-
-  users     User[]
-
   createdAt DateTime @default(now())
+  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+  users     User[]
 }
 
-// -----------------------------
-// Payment model
-// -----------------------------
 model Payment {
-  id          String          @id @default(cuid())
+  id          String         @id @default(cuid())
   userId      String
-  user        User            @relation(fields: [userId], references: [id])
-
   amount      Float
   currency    String
   stripeId    String
   description String
-
-  // ✅ Strongly typed purpose field
-  purpose     PaymentPurpose  @default(PACKAGE)
-
-  createdAt   DateTime        @default(now())
+  createdAt   DateTime       @default(now())
+  purpose     PaymentPurpose @default(PACKAGE)
+  user        User           @relation(fields: [userId], references: [id])
 }
 
-// -----------------------------
-// NextAuth Models
-// -----------------------------
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
-
-  user User @relation(fields: [userId], references: [id])
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id])
 
   @@unique([provider, providerAccountId])
 }
@@ -123,4 +79,9 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+enum PaymentPurpose {
+  PACKAGE
+  STAFF_SEAT
 }

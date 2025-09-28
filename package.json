@@ -11,7 +11,8 @@
     "build": "prisma generate --schema=prisma/schema.prisma && next build --turbopack",
     "start": "next start",
     "postinstall": "prisma generate --schema=prisma/schema.prisma",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "env-check": "tsx scripts/env-check.ts"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",
@@ -46,6 +47,7 @@
     "tailwindcss": "^4.1.13",
     "ts-jest": "^29.4.4",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

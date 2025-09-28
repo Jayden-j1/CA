@@ -2,8 +2,8 @@
 //
 // Purpose:
 // - Configure NextAuth with Prisma + CredentialsProvider.
-// - Attach role, businessId, hasPaid flags to session.
-// - Dynamically check payment status on every request.
+// - Attach role, businessId, hasPaid flags to the session.
+// - Dynamically check payment status on every request to keep access up to date.
 
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "./prisma";
@@ -12,8 +12,10 @@ import type { NextAuthOptions } from "next-auth";
 import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
+  // 🔗 Connects NextAuth to Prisma database
   adapter: PrismaAdapter(prisma),
 
+  // 🛂 Authentication method: Credentials (email + password)
   providers: [
     CredentialsProvider({
       name: "Credentials",
@@ -22,44 +24,49 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
+        // 1. Reject if missing input
         if (!credentials?.email || !credentials.password) {
           throw new Error("Invalid credentials");
         }
 
-        // Lookup user
+        // 2. Find user by email
         const user = await prisma.user.findUnique({
           where: { email: credentials.email },
         });
         if (!user || !user.hashedPassword) throw new Error("Invalid credentials");
 
-        // Verify password
+        // 3. Validate password with bcrypt
         const valid = await bcrypt.compare(credentials.password, user.hashedPassword);
         if (!valid) throw new Error("Invalid credentials");
 
+        // 4. Return safe user data (attached to token/session)
         return {
           id: user.id,
           name: user.name,
           email: user.email,
           role: user.role as "USER" | "BUSINESS_OWNER" | "ADMIN",
           businessId: user.businessId ?? null,
-          hasPaid: false, // updated below
+          hasPaid: false, // 🚩 Updated dynamically in JWT callback
         };
       },
     }),
   ],
 
+  // ⚙️ Use JWT-based sessions (lighter, works across serverless)
   session: { strategy: "jwt" },
 
   callbacks: {
+    // 🔑 Runs whenever a JWT is issued/updated
     async jwt({ token, user }) {
-      // Copy user props on login
+      // 1. First login: copy values from user
       if (user) {
         token.id = user.id;
         token.role = user.role;
         token.businessId = user.businessId ?? null;
       }
 
-      // Always re-check payments (only PACKAGE unlocks access)
+      // 2. Re-check "hasPaid" every request
+      // Only PACKAGE purchases unlock content
       const payment = await prisma.payment.findFirst({
         where: { userId: token.id as string, purpose: "PACKAGE" },
       });
@@ -68,6 +75,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
 
+    // 🎟️ Runs whenever session is accessed on client/server
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;
@@ -79,6 +87,7 @@ export const authOptions: NextAuthOptions = {
     },
   },
 
+  // 🔄 Use custom login page
   pages: {
     signIn: "/login",
   },
