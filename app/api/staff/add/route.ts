@@ -5,11 +5,12 @@
 // - Immediately creates a Stripe Checkout session for billing the staff seat.
 // - Prevents duplicate users and ensures only authorized roles can add staff.
 //
-// Improvements:
-// - All code lives inside `POST(req: NextRequest)` (no stray declarations).
-// - Secure fallback: if client forgets to send businessId, server uses session.user.businessId.
-// - Staff seat price comes from STRIPE_STAFF_SEAT_PRICE env (same pattern as other package routes).
-// - Uses proper Next.js `NextRequest` + `NextResponse` imports.
+// Improvements in this version:
+// - Added **debug logging** of the Stripe API key prefix/length to diagnose "Invalid API Key" errors.
+// - Logs are sanitized (never print the full key, only first/last 4 chars).
+// - Stripe price logic reuses STRIPE_STAFF_SEAT_PRICE env (no hardcoding).
+//
+// ⚠️ Remember: remove debug logs once you’ve confirmed your env setup.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -77,7 +78,21 @@ export async function POST(req: NextRequest) {
       select: { id: true, email: true, businessId: true, role: true },
     });
 
-    // 8. Stripe checkout session (price pulled from env, consistent with other APIs)
+    // ------------------------------
+    // 🔎 DEBUG LOGGING STRIPE KEY
+    // ------------------------------
+    const rawKey = process.env.STRIPE_SECRET_KEY || "";
+    console.log("[DEBUG] STRIPE_SECRET_KEY length:", rawKey.length);
+    if (rawKey) {
+      console.log(
+        "[DEBUG] STRIPE_SECRET_KEY preview:",
+        rawKey.substring(0, 4) + "..." + rawKey.slice(-4)
+      );
+    } else {
+      console.error("[DEBUG] STRIPE_SECRET_KEY is EMPTY or UNDEFINED");
+    }
+
+    // 8. Stripe checkout session (staff seat pricing from env)
     const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10); // cents
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
