@@ -14,19 +14,19 @@ export function showRoleToast(role: string) {
     case "ADMIN":
       toast.success("👑 Welcome back, Admin!", {
         style: { background: "#7e22ce", color: "#fff" }, // purple
-        duration: 6000,
+        duration: 3000,
       });
       break;
     case "BUSINESS_OWNER":
       toast.success("🏢 Welcome Business Owner! Dashboard is ready.", {
         style: { background: "#0d9488", color: "#fff" }, // teal
-        duration: 6000,
+        duration: 3000,
       });
       break;
     default:
       toast.success("🎉 Welcome aboard! Glad to have you here.", {
         style: { background: "#16a34a", color: "#fff" }, // green
-        duration: 6000,
+        duration: 3000,
       });
       break;
   }
@@ -40,19 +40,19 @@ export function showRoleErrorToast(role: string) {
     case "ADMIN":
       toast.error("❌ Admin login failed. Please try again.", {
         style: { background: "#7e22ce", color: "#fff" }, // purple
-        duration: 6000,
+        duration: 3000,
       });
       break;
     case "BUSINESS_OWNER":
       toast.error("❌ Business Owner login failed. Please try again.", {
         style: { background: "#0d9488", color: "#fff" }, // teal
-        duration: 6000,
+        duration: 3000,
       });
       break;
     default:
       toast.error("❌ Login failed. Please check your details.", {
         style: { background: "#16a34a", color: "#fff" }, // green
-        duration: 6000,
+        duration: 3000,
       });
       break;
   }
@@ -65,7 +65,7 @@ export function showRoleErrorToast(role: string) {
 export function showSystemErrorToast() {
   toast.error("⚠️ A system error occurred. Please try again later.", {
     style: { background: "#6b21a8", color: "#fff" }, // deep purple
-    duration: 6000,
+    duration: 3000,
   });
 }
 
