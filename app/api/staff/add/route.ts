@@ -21,23 +21,22 @@ import { stripe } from "@/lib/stripe";
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Ensure session exists
+    // 1. Check authentication
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // 2. Restrict roles → only BUSINESS_OWNER or ADMIN may add staff
+    // 2. Only Business Owners or Admins can add staff
     if (session.user.role !== "BUSINESS_OWNER" && session.user.role !== "ADMIN") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 3. Parse body
+    // 3. Parse request body
     const body = await req.json();
     const { name, email, password, isAdmin } = body;
     let { businessId } = body;
 
-    // ✅ Fallback: if client didn’t send businessId, use session
     if (!businessId && session.user.businessId) {
       businessId = session.user.businessId;
     }
@@ -46,7 +45,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // ✅ Business owner can only add staff to their own business
+    // 4. Prevent owners adding staff to other businesses
     if (
       session.user.role === "BUSINESS_OWNER" &&
       session.user.businessId !== businessId
@@ -57,42 +56,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Prevent duplicate user
+    // 5. Prevent duplicate emails
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      return NextResponse.json(
-        { error: "A user with that email already exists" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "A user with that email already exists" }, { status: 400 });
     }
 
-    // 5. Hash password
+    // 6. Hash password & assign role
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // 6. Assign role
     const role = isAdmin ? "ADMIN" : "USER";
 
-    // 7. Create staff user in DB
+    // 7. Create the staff record
     const staff = await prisma.user.create({
       data: { name, email, hashedPassword, role, businessId },
       select: { id: true, email: true, businessId: true, role: true },
     });
 
-    // ------------------------------
-    // 🔎 DEBUG LOGGING STRIPE KEY
-    // ------------------------------
-    const rawKey = process.env.STRIPE_SECRET_KEY || "";
-    console.log("[DEBUG] STRIPE_SECRET_KEY length:", rawKey.length);
-    if (rawKey) {
-      console.log(
-        "[DEBUG] STRIPE_SECRET_KEY preview:",
-        rawKey.substring(0, 4) + "..." + rawKey.slice(-4)
-      );
-    } else {
-      console.error("[DEBUG] STRIPE_SECRET_KEY is EMPTY or UNDEFINED");
-    }
-
-    // 8. Stripe checkout session (staff seat pricing from env)
+    // 8. Create Stripe Checkout session
     const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10); // cents
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -107,12 +87,8 @@ export async function POST(req: NextRequest) {
           quantity: 1,
         },
       ],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(
-        staff.email
-      )}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?canceled=true&staff=${encodeURIComponent(
-        staff.email
-      )}`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(staff.email)}`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?canceled=true&staff=${encodeURIComponent(staff.email)}`,
       metadata: {
         userId: staff.id,
         payerId: session.user.id,
@@ -122,20 +98,24 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // 9. Return checkout URL
+    // ✅ Safe log (no secrets)
+    console.log("[Stripe] Checkout Session Created", {
+      staffId: staff.id,
+      businessId: staff.businessId,
+      purpose: "STAFF_SEAT",
+      amount: staffPrice,
+    });
+
     return NextResponse.json(
-      {
-        message: "Staff created, redirect to Stripe Checkout",
-        staffId: staff.id,
-        checkoutUrl: stripeSession.url,
-      },
+      { message: "Staff created, redirect to Stripe Checkout", staffId: staff.id, checkoutUrl: stripeSession.url },
       { status: 201 }
     );
   } catch (error) {
-    console.error("[API] Staff add error:", error);
-    return NextResponse.json(
-      { error: "Internal Server Error", systemError: true },
-      { status: 500 }
-    );
+    console.error("[API] Staff add error:", {
+      errorType: (error as any)?.type,
+      message: (error as any)?.message,
+      timestamp: new Date().toISOString(),
+    });
+    return NextResponse.json({ error: "Internal Server Error", systemError: true }, { status: 500 });
   }
 }

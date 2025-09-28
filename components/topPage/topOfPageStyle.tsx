@@ -8,8 +8,8 @@ interface TopOfPageContentProps {
   HeadingOneTitle: string;
   paragraphContent: string;
   linkOne: string;
-  href?: string; // optional, in case you want internal navigation
-  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void; // Accept event
+  href?: string; // optional link
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void; // optional handler
 }
 
 export default function TopofPageContent({
@@ -26,6 +26,7 @@ export default function TopofPageContent({
 
     const cycleColors = async () => {
       while (isMounted) {
+        // Loop through gradients smoothly
         await controls.start({
           background: 'linear-gradient(to bottom, #1e3a8a, #60a5fa)',
           transition: { duration: 1.8 },
@@ -41,24 +42,22 @@ export default function TopofPageContent({
       }
     };
 
-    const timeout = setTimeout(() => {
-      cycleColors();
-    }, 0);
+    // Delay start until after mount (fixes Framer Motion warning)
+    const raf = requestAnimationFrame(() => cycleColors());
 
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
+      cancelAnimationFrame(raf);
     };
   }, [controls]);
 
   return (
     <section className="relative w-full py-16 md:py-24 overflow-hidden">
-      {/* Blue background */}
+      {/* Static background */}
       <div className="absolute inset-0 bg-blue-500 shadow-xl shadow-blue-800/30 -skew-y-6 z-10 rounded-b-[60px]" />
 
       {/* Main content */}
       <div className="relative z-30 flex flex-col md:flex-row items-center justify-between gap-8 px-6 md:px-12 text-white max-w-7xl mx-auto">
-        {/* Left Text Block */}
         <div className="w-full md:w-3/5">
           <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-bold mb-6 md:mb-12 text-left">
             {HeadingOneTitle}
@@ -67,43 +66,30 @@ export default function TopofPageContent({
             {paragraphContent}
           </p>
 
-          {/* Link */}
+          {/* Call to Action */}
           <a
             href={href}
             onClick={onClick}
-            className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300 cursor-pointer inline-block"
+            className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300 inline-block"
           >
             {linkOne}
           </a>
         </div>
 
-        {/* Right Content Block */}
+        {/* Right-side image with animated gradient overlay */}
         <div className="hidden md:block md:w-2/5 p-4 rounded-lg shadow-md relative h-52 overflow-hidden">
           <Image
             src="/images/country.jpeg"
-            alt="Image of an Aboriginal Australian dot painting, primary colour used is blue."
+            alt="Aboriginal dot painting with blue colors"
             fill
             className="absolute object-cover rounded-lg"
           />
-
-          {/* Animated Gradient Overlay */}
-          <motion.div className="absolute inset-0 z-10 rounded-lg opacity-60" animate={controls} />
+          <motion.div
+            className="absolute inset-0 z-10 rounded-lg opacity-60"
+            animate={controls}
+          />
         </div>
       </div>
     </section>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

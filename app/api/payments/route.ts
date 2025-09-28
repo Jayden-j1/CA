@@ -11,74 +11,77 @@
 // - Stripe session metadata links the payment back to the user for record-keeping.
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { stripe } from "@/lib/stripe";
 import Stripe from "stripe";
 
-// ✅ Stripe client initialization with your secret key
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
 export async function POST(req: NextRequest) {
+  const sig = req.headers.get("stripe-signature")!;
+  const rawBody = await req.text();
+
+  let event: Stripe.Event;
   try {
-    // ------------------------------
-    // 1. Ensure the user is logged in
-    // ------------------------------
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // ------------------------------
-    // 2. Parse the request body
-    // ------------------------------
-    const { amount, currency, description } = await req.json();
-
-    if (!amount || !currency || !description) {
-      return NextResponse.json(
-        { error: "Missing payment details" },
-        { status: 400 }
-      );
-    }
-
-    // ------------------------------
-    // 3. Create a Stripe Checkout session
-    // ------------------------------
-    const stripeSession = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      mode: "payment", // one-time payment (not subscription)
-      line_items: [
-        {
-          price_data: {
-            currency, // e.g., "aud"
-            product_data: { name: description }, // what the user is buying
-            unit_amount: Math.round(amount * 100), // Stripe expects amounts in cents
-          },
-          quantity: 1,
-        },
-      ],
-      // ✅ Updated redirect URLs:
-      // - Always send users back to /dashboard/upgrade (not /staff)
-      // - Query params let the frontend show toasts
-      success_url: `${process.env.NEXTAUTH_URL}/dashboard/upgrade?success=true`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/dashboard/upgrade?canceled=true`,
-
-      // Metadata helps identify payment in webhook
-      metadata: {
-        userId: session.user.id, // which user made the purchase
-        description,
-      },
-    });
-
-    // ------------------------------
-    // 4. Return the Stripe session URL
-    // ------------------------------
-    return NextResponse.json({ url: stripeSession.url });
-  } catch (error) {
-    console.error("Stripe payment error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+    event = stripe.webhooks.constructEvent(
+      rawBody,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET!
     );
+  } catch (err: any) {
+    console.error("[Webhook] Signature verification failed:", err.message);
+    return new NextResponse(`Webhook Error: ${err.message}`, { status: 400 });
+  }
+
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+
+      // ✅ Safe contextual log
+      console.log("[Webhook] Checkout completed", {
+        purpose: session.metadata?.purpose,
+        userId: session.metadata?.userId,
+        businessId: session.metadata?.businessId,
+        payerId: session.metadata?.payerId,
+        amount: session.amount_total,
+      });
+
+      if (session.amount_total && session.metadata?.userId) {
+        let description = "Generic Payment";
+        let purpose: "PACKAGE" | "STAFF_SEAT" = "PACKAGE";
+
+        if (session.metadata?.purpose === "STAFF_SEAT") {
+          purpose = "STAFF_SEAT";
+          description = `Staff Seat Payment for ${session.metadata.staffEmail || "staff member"}`;
+        } else if (session.metadata?.description) {
+          description = session.metadata.description;
+          purpose = "PACKAGE";
+        }
+
+        await prisma.payment.create({
+          data: {
+            userId: session.metadata.userId,
+            amount: session.amount_total / 100,
+            currency: (session.currency || "AUD").toUpperCase(),
+            stripeId: session.id,
+            description,
+            purpose,
+          },
+        });
+
+        console.log(`[Webhook] Saved payment record`, {
+          userId: session.metadata.userId,
+          purpose,
+          amount: session.amount_total / 100,
+        });
+      }
+    }
+
+    return NextResponse.json({ received: true });
+  } catch (e: any) {
+    console.error("[Webhook] Handler error:", {
+      message: e.message,
+      stack: e.stack,
+      timestamp: new Date().toISOString(),
+    });
+    return new NextResponse("Server error", { status: 500 });
   }
 }
