@@ -4,8 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { dashboardNavigation, NavItem } from "@/config/navigation"; // centralized config
+import { dashboardNavigation, NavItem } from "@/config/navigation";
 
+// NavbarProps allows optionally passing a custom nav array
 interface NavbarProps {
   navigation?: NavItem[];
 }
@@ -14,20 +15,36 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const pathname = usePathname();
   const { data: session } = useSession();
-  const role = session?.user?.role; // e.g. "USER", "BUSINESS_OWNER", "ADMIN"
 
-  //  Use config and filter by role
+  // Role + businessId from session
+  const role = session?.user?.role;
+  const businessId = session?.user?.businessId || null;
+
+  // Role-based + extra runtime filtering
   const navItems = (navigation || dashboardNavigation).filter((item) => {
-    if (item.requiresRole && item.requiresRole !== role) {
+    // Step 1: Hide if requiresRole doesn’t match
+    if (item.requiresRole) {
+      if (typeof item.requiresRole === "string") {
+        if (item.requiresRole !== role) return false;
+      } else if (Array.isArray(item.requiresRole)) {
+        if (!item.requiresRole.includes(role as any)) return false;
+      }
+    }
+
+    // Step 2: Special case for Billing
+    // - If role is USER and user belongs to a business (businessId != null)
+    //   → hide Billing (staff shouldn’t see it).
+    if (item.name === "Billing" && role === "USER" && businessId) {
       return false;
     }
+
     return true;
   });
 
   return (
     <header>
       <nav className="relative bg-white border-gray-200 shadow-sm">
-        {/* ... existing markup unchanged ... */}
+        {/* Desktop nav */}
         <div className="hidden lg:flex space-x-6 items-center">
           {navItems.map((item) => (
             <Link
@@ -44,7 +61,15 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
           ))}
         </div>
 
-        {/* Mobile menu also uses navItems */}
+        {/* Mobile toggle */}
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="lg:hidden px-3 py-2 text-gray-700 border border-gray-300 rounded"
+        >
+          ☰
+        </button>
+
+        {/* Mobile menu */}
         {isOpen && (
           <div className="absolute z-50 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow">
             {navItems.map((item) => (
