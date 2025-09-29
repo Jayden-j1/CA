@@ -2,12 +2,14 @@
 //
 // Purpose:
 // - Configure NextAuth with Prisma + CredentialsProvider.
-// - Attach role, businessId, hasPaid flags to the session.
-// - Dynamically check payment status (PACKAGE or STAFF_SEAT) so UI + API trust one flag.
+// - Attach role, businessId, hasPaid, and isActive flags to the session.
+// - Enforce soft deletion: inactive users cannot log in or access resources.
+// - Dynamically check payment status (PACKAGE or STAFF_SEAT).
 //
 // Improvements in this version:
+// - Added `isActive` checks: inactive users cannot log in.
 // - `hasPaid` covers PACKAGE purchases AND staff-seat payments.
-// - Centralized logic so Navbar, pages, and middleware can all trust session.user.hasPaid.
+// - Centralized logic so Navbar, pages, and API trust session.user.hasPaid.
 
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "./prisma";
@@ -37,7 +39,11 @@ export const authOptions: NextAuthOptions = {
         const user = await prisma.user.findUnique({
           where: { email: credentials.email },
         });
-        if (!user || !user.hashedPassword) throw new Error("Invalid credentials");
+
+        // 🚩 Reject if no user, no password, or user is inactive
+        if (!user || !user.hashedPassword || user.isActive === false) {
+          throw new Error("Invalid credentials or inactive account");
+        }
 
         // 3) Verify password
         const valid = await bcrypt.compare(credentials.password, user.hashedPassword);
@@ -50,6 +56,7 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           role: user.role as "USER" | "BUSINESS_OWNER" | "ADMIN",
           businessId: user.businessId ?? null,
+          isActive: user.isActive,
           hasPaid: false, // updated in jwt callback
         };
       },
@@ -67,6 +74,13 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.role = user.role;
         token.businessId = user.businessId ?? null;
+        token.isActive = user.isActive;
+      }
+
+      // 🚩 Inactive users never get hasPaid = true
+      if (token.isActive === false) {
+        token.hasPaid = false;
+        return token;
       }
 
       // Recompute hasPaid every request
@@ -106,6 +120,7 @@ export const authOptions: NextAuthOptions = {
         session.user.role = token.role as "USER" | "BUSINESS_OWNER" | "ADMIN";
         session.user.businessId = (token.businessId as string) ?? null;
         session.user.hasPaid = Boolean(token.hasPaid);
+        session.user.isActive = token.isActive as boolean;
       }
       return session;
     },

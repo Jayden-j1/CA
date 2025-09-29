@@ -1,15 +1,17 @@
 // app/api/staff/remove/route.ts
 //
 // Purpose:
-// - Allow BUSINESS_OWNER/ADMIN to permanently delete staff from their business.
-// - Returns the removed staff’s email so the frontend can show a success toast.
-// - Enforces strict role checks: only BUSINESS_OWNER (own business) or ADMIN can delete staff.
+// - Soft delete staff by setting `isActive = false` instead of hard deleting rows.
+// - Preserves Payment history and avoids FK errors (best practice for billing).
+// - Only BUSINESS_OWNER (own business) or ADMIN can deactivate staff.
 //
-// Notes:
-// - Hard delete (prisma.user.delete) is used here.
-// - This is irreversible, so ensure your frontend asks for confirmation before calling.
-// - Safer for production if combined with a "soft delete" pattern (e.g., archived flag).
-//   But since you requested hard delete, we implement it here.
+// How the frontend should behave:
+// - After this call returns 200, remove the staff row from the UI immediately.
+// - If you list staff anywhere, fetch only `isActive = true` users.
+//
+// Important:
+// - Ensure your Prisma schema has `User.isActive Boolean @default(true)`
+// - Then run: npx prisma migrate dev --name add_user_isActive && npx prisma generate
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -18,17 +20,13 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
   try {
-    // ---------------------------
-    // 1) Verify authentication
-    // ---------------------------
+    // 1) Auth required
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // ---------------------------
-    // 2) Enforce roles
-    // ---------------------------
+    // 2) Role check
     if (
       session.user.role !== "BUSINESS_OWNER" &&
       session.user.role !== "ADMIN"
@@ -36,9 +34,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // ---------------------------
-    // 3) Parse request body
-    // ---------------------------
+    // 3) Parse body
     const { staffId } = await req.json();
     if (!staffId) {
       return NextResponse.json(
@@ -47,9 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---------------------------
-    // 4) Fetch staff user
-    // ---------------------------
+    // 4) Locate staff user
     const staff = await prisma.user.findUnique({
       where: { id: staffId },
     });
@@ -58,9 +52,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
-    // ---------------------------
-    // 5) Business owner restriction
-    // ---------------------------
+    // 5) Enforce owner’s scope
     if (
       session.user.role === "BUSINESS_OWNER" &&
       staff.businessId !== session.user.businessId
@@ -71,20 +63,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---------------------------
-    // 6) Hard delete staff
-    // ---------------------------
-    const deletedStaff = await prisma.user.delete({
+    // 6) Soft delete: mark inactive (keeps Payments intact)
+    //    This will compile only after running prisma migrate/generate.
+    const updatedStaff = await prisma.user.update({
       where: { id: staffId },
-      select: { email: true }, // only return email for toast feedback
+      data: { isActive: false }, // ✅ Soft delete flag
+      select: { email: true },
     });
 
-    // ---------------------------
-    // 7) Return success
-    // ---------------------------
+    // 7) Success payload (used for toast messaging)
     return NextResponse.json({
-      message: `Staff removed`,
-      email: deletedStaff.email,
+      message: "Staff deactivated",
+      email: updatedStaff.email,
     });
   } catch (error) {
     console.error("[API] Staff remove error:", error);

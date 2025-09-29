@@ -1,3 +1,14 @@
+// prisma/schema.prisma
+//
+// Purpose:
+// - Single source of truth for DB models.
+// - Soft delete support via `User.isActive` (Boolean).
+// - Keeps Payment history intact while letting you hide deactivated staff in UI.
+//
+// After editing this file, run:
+//   npx prisma migrate dev --name add_user_isActive
+//   npx prisma generate
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,11 +24,23 @@ model User {
   email          String    @unique
   emailVerified  DateTime?
   image          String?
+
+  // Bcrypt-hashed password (NOT plaintext)
   hashedPassword String?   @map("password")
+
+  // Role: USER | BUSINESS_OWNER | ADMIN
   role           String    @default("USER")
+
   businessId     String?
+
+  // ✅ NEW: Soft-delete flag. Active users show in UI. Inactive users remain for audit.
+  isActive       Boolean   @default(true)
+
+  // Timestamps
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+
+  // Relations
   accounts       Account[]
   ownedBusiness  Business? @relation("BusinessOwner")
   payments       Payment[]
@@ -43,7 +66,10 @@ model Payment {
   stripeId    String
   description String
   createdAt   DateTime       @default(now())
+
+  // Strongly typed purpose field: PACKAGE vs STAFF_SEAT
   purpose     PaymentPurpose @default(PACKAGE)
+
   user        User           @relation(fields: [userId], references: [id])
 }
 
@@ -60,6 +86,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
+
   user              User    @relation(fields: [userId], references: [id])
 
   @@unique([provider, providerAccountId])
