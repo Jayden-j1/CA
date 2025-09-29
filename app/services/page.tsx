@@ -5,15 +5,15 @@
 // - Shows pricing packages + handles Stripe checkout redirects.
 // - Uses NEXT_PUBLIC_* env vars (via CheckoutButton / PricingCardSection).
 //
-// Updates:
-// - Added explicit error toast handling (⚠️ Payment failed).
-// - Ensures consistent UX between Services and Upgrade pages.
-// - Wrapped in <SearchParamsWrapper> to safely use useSearchParams().
+// Updates (minor):
+// - No functional change needed for the "signup → pay → dashboard" flow,
+//   because CheckoutButton only renders for logged-in users.
+// - The backend success_url now goes to /dashboard instead of /services.
+// - Defensive guards: none needed; keeping existing toast handling.
 //
 // Security:
-// - Prices displayed are from NEXT_PUBLIC_* env vars.
-// - Real billing amounts enforced server-side in /api/checkout/create-session
-//   using STRIPE_*_PRICE env vars (cents).
+// - Displayed prices from NEXT_PUBLIC_* env vars.
+// - Real charges enforced server-side with STRIPE_*_PRICE in /api/checkout/create-session.
 
 "use client";
 
@@ -24,33 +24,24 @@ import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-// ------------------------------
-// Query Param Toast Handler
-// ------------------------------
-// Handles ?success, ?canceled, ?error query params from Stripe redirect
 function ServicesToastHandler() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const success = searchParams.get("success");
     const canceled = searchParams.get("canceled");
-    const error = searchParams.get("error"); // ✅ NEW
+    const error = searchParams.get("error");
 
     if (success) {
       toast.success("🎉 Payment successful! You now have access.", {
-        duration: 6000,
+        duration: 3000,
       });
-      // Clean URL to prevent repeated toast on refresh
       window.history.replaceState(null, "", window.location.pathname);
     }
-
     if (canceled) {
-      toast.error("❌ Payment canceled. No changes made.", {
-        duration: 6000,
-      });
+      toast.error("❌ Payment canceled. No changes made.", { duration: 3000 });
       window.history.replaceState(null, "", window.location.pathname);
     }
-
     if (error) {
       toast.error(`⚠️ Payment failed: ${error}`, { duration: 8000 });
       window.history.replaceState(null, "", window.location.pathname);
@@ -60,11 +51,7 @@ function ServicesToastHandler() {
   return null;
 }
 
-// ------------------------------
-// Main Services Content
-// ------------------------------
 function ServicesContent() {
-  // Scrolls to pricing section when clicking "Prices Below"
   const handleScrollToPricing = (e: MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     const pricingSection = document.querySelector<HTMLDivElement>("#pricing");
@@ -81,19 +68,16 @@ function ServicesContent() {
         onClick={handleScrollToPricing}
       />
 
-      {/* Pricing section with env-driven prices */}
+      {/* Pricing section with env-driven prices (only logged-in users see Checkout button) */}
       <PricingCardSection />
     </main>
   );
 }
 
-// ------------------------------
-// Export Page Component
-// ------------------------------
 export default function ServicesPage() {
   return (
     <SearchParamsWrapper>
-      {/* ✅ Toast handler runs globally on this page */}
+      {/* Toast handler for Stripe redirects */}
       <ServicesToastHandler />
       <ServicesContent />
     </SearchParamsWrapper>
