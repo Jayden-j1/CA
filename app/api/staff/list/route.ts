@@ -1,16 +1,14 @@
 // app/api/staff/list/route.ts
 //
 // Purpose:
-// - Return a list of staff users for a business, INCLUDING each staff member's role.
-// - Allows BOTH BUSINESS_OWNER and ADMIN to read the list.
-// - BUSINESS_OWNER: restricted to their own business.
-// - ADMIN: may pass ?businessId= to view a specific business, or list all staff if super admin.
+// - Return a list of ACTIVE staff (USER/ADMIN only).
+// - BUSINESS_OWNER can only see their own staff.
+// - ADMIN can see their business staff or all staff if “super admin”.
+// - Includes role filter via ?role=USER|ADMIN.
+// - Excludes BUSINESS_OWNER (staff = USER or ADMIN).
 //
-// New in this version:
-// - Optional role filter via ?role=USER or ?role=ADMIN (falls back to both if not provided).
-// - Always excludes BUSINESS_OWNER from results (staff = USER or ADMIN).
-// - ✅ Patch: explicitly select "role" field so staff chips always match DB.
-//
+// 🚩 Updated:
+// - Now only returns staff where isActive = true (soft-deletion respected).
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -48,7 +46,7 @@ export async function GET(req: NextRequest) {
     let whereClause: any;
 
     // ------------------------------
-    // BUSINESS_OWNER → only their staff
+    // BUSINESS_OWNER → only their active staff
     // ------------------------------
     if (role === "BUSINESS_OWNER") {
       const ownerBusinessId = session.user.businessId;
@@ -58,26 +56,39 @@ export async function GET(req: NextRequest) {
           { status: 400 }
         );
       }
-      whereClause = { businessId: ownerBusinessId, role: roleFilter };
+      whereClause = {
+        businessId: ownerBusinessId,
+        role: roleFilter,
+        isActive: true, // ✅ only active staff
+      };
     } else {
       // ------------------------------
       // ADMIN
       // ------------------------------
       if (requestedBusinessId) {
-        // If ?businessId provided → staff of that business
-        whereClause = { businessId: requestedBusinessId, role: roleFilter };
+        whereClause = {
+          businessId: requestedBusinessId,
+          role: roleFilter,
+          isActive: true,
+        };
       } else if (session.user.businessId) {
-        // If ADMIN tied to a business → default to that
-        whereClause = { businessId: session.user.businessId, role: roleFilter };
+        whereClause = {
+          businessId: session.user.businessId,
+          role: roleFilter,
+          isActive: true,
+        };
       } else {
-        // Super-admin (no businessId tied) → list across all businesses
-        whereClause = { businessId: { not: null }, role: roleFilter };
+        // Super-admin (no businessId tied)
+        whereClause = {
+          businessId: { not: null },
+          role: roleFilter,
+          isActive: true,
+        };
       }
     }
 
     // ------------------------------
-    // Fetch staff
-    // ✅ Explicitly select "role" so UI always gets role from DB
+    // Fetch only ACTIVE staff
     // ------------------------------
     const staffList = await prisma.user.findMany({
       where: whereClause,
@@ -85,7 +96,7 @@ export async function GET(req: NextRequest) {
         id: true,
         name: true,
         email: true,
-        role: true, // 👈 ensure role always included
+        role: true,
         createdAt: true,
       },
       orderBy: { createdAt: "asc" },
