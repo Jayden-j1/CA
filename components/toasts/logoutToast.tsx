@@ -19,7 +19,7 @@ export default function LogoutToast() {
     const logoutFlag = params.get("logout");
     if (logoutFlag === "success") {
       toast.success("You’ve been logged out successfully.", {
-        duration: 6000,
+        duration: 2000,
       });
 
       // Optional: clean the query string so users can refresh without retriggering

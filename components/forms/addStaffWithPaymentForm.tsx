@@ -37,7 +37,7 @@ export default function AddStaffWithPaymentForm() {
         <>
           <button
             onClick={checkPayment}
-            className="px-6 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-500 transition-colors"
+            className="px-6 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-500 transition-colors cursor-pointer"
           >
             {loading ? "Checking..." : "Add Staff"}
           </button>

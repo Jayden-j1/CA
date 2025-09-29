@@ -126,7 +126,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         <button
           type="button"
           onClick={togglePasswordVisibility}
-          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline"
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline cursor-pointer"
           tabIndex={-1}
         >
           {showPassword ? "Hide" : "Show"}
@@ -140,9 +140,9 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
           type="checkbox"
           checked={isAdmin}
           onChange={(e) => setIsAdmin(e.target.checked)}
-          className="w-5 h-5"
+          className="w-5 h-5 cursor-pointer"
         />
-        <label htmlFor="isAdmin" className="text-white text-sm md:text-base">
+        <label htmlFor="isAdmin" className="text-white text-sm md:text-base cursor-pointer">
           Make this staff member an Admin
         </label>
 

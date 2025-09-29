@@ -113,7 +113,7 @@ export default function AboutPage() {
                 key={i}
                 className="bg-blue-500 shadow-2xl rounded-md hover:bg-blue-400 hover:shadow transition-all duration-200"
               >
-                <button onClick={() => toggleSection(i)} className="w-full flex justify-between items-center p-4 text-left">
+                <button onClick={() => toggleSection(i)} className="w-full flex justify-between items-center p-4 text-left cursor-pointer">
                   <span className="font-medium text-lg text-white tracking-wide">{section.title}</span>
                   <ChevronDownIcon
                     className={`w-5 h-5 text-white transform transition-transform duration-300 ${

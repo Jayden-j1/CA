@@ -49,7 +49,7 @@ export default function PaymentForm({ description, amount, currency }: PaymentFo
       <button
         type="submit"
         disabled={loading}
-        className="px-6 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-500 transition-colors"
+        className="px-6 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-500 transition-colors cursor-pointer"
       >
         {loading ? "Processing..." : "Pay Now"}
       </button>

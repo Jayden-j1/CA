@@ -36,14 +36,14 @@ function UpgradeToastHandler() {
 
     if (success) {
       toast.success("🎉 Payment successful! You now have full access.", {
-        duration: 6000,
+        duration: 2000,
       });
       window.history.replaceState(null, "", window.location.pathname);
     }
 
     if (canceled) {
       toast.error("❌ Payment canceled. No changes were made.", {
-        duration: 6000,
+        duration: 2000,
       });
       window.history.replaceState(null, "", window.location.pathname);
     }
@@ -84,17 +84,17 @@ export default function UpgradePage() {
         <CheckoutButton
           packageType="individual"
           label={`Buy Individual Package ($${individualPrice})`}
-          className="bg-green-600 hover:bg-green-500 text-white"
+          className="bg-green-600 hover:bg-green-500 text-white cursor-pointer"
         />
         <CheckoutButton
           packageType="business"
           label={`Buy Business Package ($${businessPrice})`}
-          className="bg-blue-600 hover:bg-blue-500 text-white"
+          className="bg-blue-600 hover:bg-blue-500 text-white cursor-pointer"
         />
         <CheckoutButton
           packageType="staff_seat"
           label={`Add Staff Seat ($${staffSeatPrice})`}
-          className="bg-yellow-600 hover:bg-yellow-500 text-white"
+          className="bg-yellow-600 hover:bg-yellow-500 text-white cursor-pointer"
         />
       </div>
     </section>

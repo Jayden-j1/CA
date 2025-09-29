@@ -105,7 +105,7 @@ export default function GoogleMapComponent() {
                 setShowBoundary((p) => !p);
                 setMenuOpen(false);
               }}
-              className="w-full bg-green-700 text-white px-3 py-1.5 rounded hover:bg-green-800 transition text-sm text-center"
+              className="w-full bg-green-700 text-white px-3 py-1.5 rounded hover:bg-green-800 transition text-sm text-center cursor-pointer"
             >
               {showBoundary ? "Hide Clan Boundary" : "Show Clan Boundary"}
             </button>
@@ -115,7 +115,7 @@ export default function GoogleMapComponent() {
                 setInfoOpen(true);
                 setMenuOpen(false);
               }}
-              className="w-full bg-blue-700 text-white px-3 py-1.5 rounded hover:bg-blue-800 transition text-sm text-center"
+              className="w-full bg-blue-700 text-white px-3 py-1.5 rounded hover:bg-blue-800 transition text-sm text-center cursor-pointer"
             >
               {useTraditionalName ? "Show Current Name" : "Show Traditional Name"}
             </button>
@@ -125,7 +125,7 @@ export default function GoogleMapComponent() {
           <div className="hidden md:flex flex-col gap-3 w-auto min-w-[180px] bg-white bg-opacity-90 p-4 rounded-lg shadow-md">
             <button
               onClick={() => setShowBoundary((p) => !p)}
-              className="bg-green-700 text-white px-5 py-2 rounded hover:bg-green-800 transition text-center"
+              className="bg-green-700 text-white px-5 py-2 rounded hover:bg-green-800 transition text-center cursor-pointer"
             >
               {showBoundary ? "Hide Clan Boundary" : "Show Clan Boundary"}
             </button>
@@ -134,7 +134,7 @@ export default function GoogleMapComponent() {
                 setUseTraditionalName((p) => !p);
                 setInfoOpen(true);
               }}
-              className="bg-blue-700 text-white px-5 py-2 rounded hover:bg-blue-800 transition text-center"
+              className="bg-blue-700 text-white px-5 py-2 rounded hover:bg-blue-800 transition text-center cursor-pointer"
             >
               {useTraditionalName ? "Show Current Name" : "Show Traditional Name"}
             </button>
@@ -144,7 +144,7 @@ export default function GoogleMapComponent() {
           <button
             onClick={() => setMenuOpen((prev) => !prev)}
             aria-label={menuOpen ? "Close Menu" : "Open Menu"}
-            className="md:hidden w-12 h-12 rounded-full bg-green-700 hover:bg-green-800 text-white shadow-lg flex items-center justify-center transition"
+            className="md:hidden w-12 h-12 rounded-full bg-green-700 hover:bg-green-800 text-white shadow-lg flex items-center justify-center transition cursor-pointer"
           >
             {menuOpen ? "✖" : "☰"}
           </button>

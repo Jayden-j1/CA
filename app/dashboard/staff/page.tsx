@@ -59,7 +59,7 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         `🎉 Payment successful! ${
           staffEmail ? `${staffEmail} now has access.` : "Staff seat activated."
         }`,
-        { duration: 6000 }
+        { duration: 2000 }
       );
       onSuccess(); // refresh list
       window.history.replaceState(null, "", window.location.pathname);
@@ -70,7 +70,7 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         `❌ Payment canceled. ${
           staffEmail ? `${staffEmail} was not activated.` : ""
         }`,
-        { duration: 6000 }
+        { duration: 2000 }
       );
       window.history.replaceState(null, "", window.location.pathname);
     }
@@ -225,7 +225,7 @@ function StaffDashboardContent() {
             className={`px-3 py-1 rounded text-sm font-bold cursor-pointer ${
               filter === f
                 ? "bg-white text-blue-600"
-                : "bg-white/70 text-blue-900"
+                : "hover:bg-white bg-white/70 text-blue-900"
             }`}
             onClick={() => setFilter(f as "ALL" | Role)}
           >
@@ -263,7 +263,7 @@ function StaffDashboardContent() {
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => updateRole(staff.id, nextRole)}
-                      className={`px-3 py-1 rounded text-xs font-bold ${
+                      className={`px-3 py-1 rounded text-xs font-bold cursor-pointer ${
                         isAdmin
                           ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
                           : "bg-green-100 text-green-800 hover:bg-green-200"
@@ -274,7 +274,7 @@ function StaffDashboardContent() {
 
                     <button
                       onClick={() => confirmRemoveStaff(staff.id, staff.email)}
-                      className="text-red-600 hover:text-red-800 font-bold text-sm"
+                      className="text-red-600 hover:text-red-800 font-bold text-sm cursor-pointer"
                     >
                       Remove
                     </button>

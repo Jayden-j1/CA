@@ -162,7 +162,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
           <button
             type="button"
             onClick={() => setEmail(suggestDomain(email)!)}
-            className="ml-2 px-2 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600"
+            className="ml-2 px-2 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600 cursor-pointer"
           >
             ✅ Use this
           </button>
@@ -188,7 +188,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
         <button
           type="button"
           onClick={togglePasswordVisibility}
-          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline focus:outline-none"
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline focus:outline-none cursor-pointer"
           tabIndex={-1}
         >
           {showPassword ? "Hide" : "Show"}
@@ -207,7 +207,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
             value="individual"
             checked={userType === "individual"}
             onChange={() => setUserType("individual")}
-            className="accent-green-500"
+            className="accent-green-500 cursor-pointer"
           />
           Individual
         </label>
@@ -218,7 +218,7 @@ export default function SignupForm({ redirectTo }: SignupFormProps) {
             value="business"
             checked={userType === "business"}
             onChange={() => setUserType("business")}
-            className="accent-green-500"
+            className="accent-green-500 cursor-pointer"
           />
           Business
         </label>

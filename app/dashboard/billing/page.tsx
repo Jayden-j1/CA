@@ -185,7 +185,7 @@ export default function BillingPage() {
         <select
           value={purposeFilter}
           onChange={(e) => setPurposeFilter(e.target.value)}
-          className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow"
+          className="px-3 py-2 rounded bg-white text-gray-800 text-sm shadow cursor-pointer"
         >
           <option value="ALL">All Purposes</option>
           <option value="PACKAGE">Packages</option>
@@ -240,7 +240,7 @@ export default function BillingPage() {
         {/* CSV Export Button */}
         <button
           onClick={exportCSV}
-          className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white text-sm font-bold rounded shadow"
+          className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white text-sm font-bold rounded shadow cursor-pointer"
         >
           Export CSV
         </button>
