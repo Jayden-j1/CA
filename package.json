@@ -12,7 +12,9 @@
     "start": "next start",
     "postinstall": "prisma generate --schema=prisma/schema.prisma",
     "seed": "ts-node prisma/seed.ts",
-    "env-check": "tsx scripts/env-check.ts"
+    "env-check": "tsx scripts/env-check.ts",
+    "test": "jest --passWithNoTests",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",

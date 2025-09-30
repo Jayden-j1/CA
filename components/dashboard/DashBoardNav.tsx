@@ -9,20 +9,27 @@
 //      • BUSINESS_OWNER
 //      • ADMIN
 //
-// Why this filter here?
-// - The Navbar presents links based on the session state (role, hasPaid, businessId).
-// - We also guard the Billing PAGE itself (see billing/page.tsx), so typing the URL won’t bypass it.
-// - This keeps UX consistent: you don't see options you can't use.
+// Why filter here?
+// - The Navbar presents links based on the runtime session state (role, hasPaid, businessId).
+// - The Billing PAGE/API is also guarded server-side, so typing the URL won’t bypass it.
+// - Doing both creates a great UX: users don't see options they cannot access,
+//   and even if they type a URL directly, they’re blocked securely.
+//
+// Improvements in this version:
+// - Uses `useSession()` `status` to prevent a brief flicker of "Billing"/"Upgrade"
+//   while the session is being hydrated in the browser.
+// - Retains role filtering via config/navigation.ts + adds extra runtime conditions.
+// - Heavily documented to make the decision logic easy to maintain.
 
 'use client';
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { dashboardNavigation, NavItem } from "@/config/navigation";
 
-// NavbarProps allows optionally passing a custom nav array
+// NavbarProps allows optionally passing a custom nav array (defaults to dashboardNavigation)
 interface NavbarProps {
   navigation?: NavItem[];
 }
@@ -30,52 +37,81 @@ interface NavbarProps {
 const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const pathname = usePathname();
-  const { data: session } = useSession();
 
-  // Pull relevant values from session for filtering
+  // We use `useSession` to read the authenticated user's session:
+  // - `status === "loading"`: NextAuth hasn't hydrated the session yet on the client,
+  //    avoid rendering links that depend on session flags to prevent flicker.
+  // - `data`: the session object holding `user.role`, `user.businessId`, `user.hasPaid`, etc.
+  const { data: session, status } = useSession();
+
+  // Extract role/payment flags used for filtering.
   const role = session?.user?.role;
   const businessId = session?.user?.businessId || null;
-  const hasPaid = !!session?.user?.hasPaid;
+  const hasPaid = Boolean(session?.user?.hasPaid);
 
   // ------------------------------
-  // Final filtered list of nav items
+  // Build final nav items list
   // ------------------------------
-  const navItems = (navigation || dashboardNavigation).filter((item) => {
-    // Step 1: Role filter from config (exact match or array contains)
-    if (item.requiresRole) {
-      if (typeof item.requiresRole === "string") {
-        if (item.requiresRole !== role) return false;
-      } else if (Array.isArray(item.requiresRole)) {
-        if (!item.requiresRole.includes(role as any)) return false;
+  // We compute this with useMemo so that the array doesn't change on every render unnecessarily.
+  const navItems = useMemo<NavItem[]>(() => {
+    // Choose source array (caller can override via prop if needed).
+    const source = navigation || dashboardNavigation;
+
+    // If the session is still loading, we return a conservative set:
+    // - Either a blank array, or an array stripped of items that could flicker.
+    // Here we choose to hide all session-dependent links to prevent any mis-flash.
+    if (status === "loading") {
+      // Return only items that don't require any role and aren't Upgrade/Billing.
+      return source.filter(
+        (item) =>
+          !item.requiresRole &&
+          item.name !== "Upgrade" &&
+          item.name !== "Billing"
+      );
+    }
+
+    // Otherwise, filter based on:
+    // 1) Role requirement from config/navigation.ts
+    // 2) "Upgrade" hidden when hasPaid = true
+    // 3) "Billing" hidden for staff-seat users (role USER + businessId)
+    //    and for unpaid individual users (role USER + no businessId + !hasPaid)
+    return source.filter((item) => {
+      // Step 1: Role check
+      if (item.requiresRole) {
+        if (typeof item.requiresRole === "string") {
+          if (item.requiresRole !== role) return false;
+        } else if (Array.isArray(item.requiresRole)) {
+          if (!item.requiresRole.includes(role as any)) return false;
+        }
       }
-    }
 
-    // Step 2: Hide "Upgrade" for paid users
-    if (item.name === "Upgrade" && hasPaid) {
-      return false;
-    }
+      // Step 2: Hide "Upgrade" if the user already has access
+      if (item.name === "Upgrade" && hasPaid) {
+        return false;
+      }
 
-    // Step 3: Hide "Billing" for staff-seat users:
-    // - role === "USER"
-    // - businessId != null (means they belong to a business; i.e., seat user)
-    // - Indiv. purchasers (USER with no businessId) can see Billing IF they havePaid
-    if (item.name === "Billing") {
-      const isStaffSeatUser = role === "USER" && !!businessId;
-      if (isStaffSeatUser) return false;
+      // Step 3: Hide "Billing" for staff-seat users & unpaid individual users
+      if (item.name === "Billing") {
+        const isStaffSeatUser = role === "USER" && !!businessId;
+        if (isStaffSeatUser) return false;
 
-      // Optional: If you want to hide Billing from unpaid individual users as well:
-      const isIndividualUser = role === "USER" && !businessId;
-      if (isIndividualUser && !hasPaid) return false;
-    }
+        // Individual user case: show Billing only if they've paid
+        const isIndividualUser = role === "USER" && !businessId;
+        if (isIndividualUser && !hasPaid) return false;
+      }
 
-    return true;
-  });
+      // Otherwise keep it
+      return true;
+    });
+  }, [navigation, status, role, businessId, hasPaid]);
 
   return (
     <header>
       <nav className="relative bg-white border-gray-200 shadow-sm">
-        {/* Desktop nav */}
-        <div className="hidden lg:flex space-x-6 items-center">
+        {/* Desktop navigation:
+            - We render `navItems` computed above.
+            - Active route styling is based on next/navigation `usePathname`. */}
+        <div className="hidden lg:flex space-x-6 items-center px-4 py-3">
           {navItems.map((item) => (
             <Link
               key={item.name}
@@ -91,16 +127,22 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
           ))}
         </div>
 
-        {/* Mobile toggle */}
-        <button
-          onClick={() => setIsOpen(!isOpen)}
-          className="lg:hidden px-3 py-2 text-gray-700 border border-gray-300 rounded"
-          aria-label="Toggle menu"
-        >
-          ☰
-        </button>
+        {/* Mobile hamburger toggle:
+            - Toggles visibility of the collapsible mobile menu below. */}
+        <div className="px-4 py-3 lg:hidden">
+          <button
+            onClick={() => setIsOpen((open) => !open)}
+            className="px-3 py-2 text-gray-700 border border-gray-300 rounded"
+            aria-label="Toggle menu"
+            aria-expanded={isOpen}
+          >
+            ☰
+          </button>
+        </div>
 
-        {/* Mobile menu */}
+        {/* Mobile menu:
+            - Renders the same filtered `navItems`.
+            - Closes after selecting an item for a smoother UX. */}
         {isOpen && (
           <div className="absolute z-50 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow">
             {navItems.map((item) => (

@@ -2,26 +2,41 @@
 //
 // Purpose:
 // - Return filtered payment history for the billing dashboard.
-// - Strictly enforce access rules to match the Billing page guard:
-//   • ADMIN → can see all payments.
-//   • BUSINESS_OWNER → can see all payments for their business (owner + staff).
-//   • USER →
-//       - If staff-seat (businessId != null) → FORBIDDEN (403).
-//       - If individual (businessId == null) and hasPaid === true → own payments only.
-//       - Else → FORBIDDEN (403).
+// - Strictly enforce access rules to match Billing page UX requirements.
+// - Includes a distinct "users" list for ADMIN + BUSINESS_OWNER to power UI dropdowns.
 //
-// Query params:
-// - ?purpose=PACKAGE | STAFF_SEAT
-// - ?user=<userEmail> (allowed for ADMIN + BUSINESS_OWNER; ignored for USER)
+// Access Rules (must MATCH your frontend guard behaviour):
+// ----------------------------------------------------------------------
+// ADMIN
+//   - Can see ALL payments across the system.
+//   - Can filter by ?purpose=PACKAGE|STAFF_SEAT and by ?user=<email>.
+//   - Response includes `users` (distinct list of users who have payments).
 //
-// Response:
-// - { payments, users? } → users (distinct) only for ADMIN/BUSINESS_OWNER for UI dropdown.
+// BUSINESS_OWNER
+//   - Must have a businessId.
+//   - Can see ALL payments for their business (owner + staff).
+//   - Can filter by ?purpose and ?user=<email>, but results are scoped to their business.
+//   - Response includes `users` list scoped to their business (only those with payments).
+//
+// USER
+//   - If staff-seat (businessId != null) → FORBIDDEN (403). Staff do not see Billing.
+//   - If individual (businessId == null) and hasPaid === true → can see their OWN payments only.
+//   - Else → FORBIDDEN (403).
+//
+// Query Params (validated lightly):
+// - ?purpose=PACKAGE | STAFF_SEAT  (optional)
+// - ?user=<userEmail>              (ADMIN + BUSINESS_OWNER only)
 //
 // Notes:
-// - Prisma model Payment has only userId relation; to fetch "business-wide" data we filter by:
+// - The Payment model only stores `userId`, not `businessId`.
+//   To fetch business-wide data we filter via nested relation:
 //     where: { user: { businessId: <ownerBusinessId> } }
-// - We include `user` details for ADMIN + BUSINESS_OWNER so the UI can show "User" column.
-//   Individual USER sees only their own payments and doesn't need the extra user object.
+// - For ADMIN + BUSINESS_OWNER we include `user` in results so Billing UI can show a "User" column.
+//   For individual users we omit `user` as it's unnecessary.
+//
+// Security:
+// - All role gating happens server-side here (cannot be bypassed by typing the URL).
+// - The same rule is mirrored in the UI (hiding Billing link for staff), but the API is the source of truth.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -35,43 +50,47 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2) Extract role + ownership flags from session
-  const role = session.user.role;
-  const userId = session.user.id;
-  const businessId = session.user.businessId || null;
-  const hasPaid = Boolean(session.user.hasPaid);
+  // 2) Extract role + identity from session for decisions below
+  const role = session.user.role;               // "ADMIN" | "BUSINESS_OWNER" | "USER"
+  const userId = session.user.id;               // current user id
+  const businessId = session.user.businessId || null; // null for individual; non-null means staff/owner/admin tied to a business
+  const hasPaid = Boolean(session.user.hasPaid);       // computed by NextAuth JWT callback
 
   try {
-    // 3) Parse query parameters
+    // 3) Parse + normalize query params
     const { searchParams } = new URL(req.url);
-    const purposeParam = searchParams.get("purpose"); // "PACKAGE" | "STAFF_SEAT" or null
-    const userEmailParam = searchParams.get("user");  // user's email or null
 
-    // 4) Common where clause seeded by purpose (if valid)
+    // Normalize purpose to uppercase and validate
+    const purposeRaw = searchParams.get("purpose");
+    const purposeParam =
+      purposeRaw && ["PACKAGE", "STAFF_SEAT"].includes(purposeRaw.toUpperCase())
+        ? (purposeRaw.toUpperCase() as "PACKAGE" | "STAFF_SEAT")
+        : null;
+
+    const userEmailParam = searchParams.get("user"); // Optional filter for ADMIN/OWNER
+
+    // 4) Build a base "where" clause we can extend
     const baseWhere: any = {};
-    if (purposeParam === "PACKAGE" || purposeParam === "STAFF_SEAT") {
+    if (purposeParam) {
       baseWhere.purpose = purposeParam;
     }
 
-    // We’ll populate `payments` and (optionally) `users` (for dropdown)
+    // We'll populate `payments` and (optionally) `users` (for dropdowns)
     let payments: any[] = [];
     let users: { email: string; name: string | null }[] | undefined;
 
     // ============================================================
-    // ADMIN
-    // - Full access across all businesses/users.
-    // - Optional ?user filter by email.
-    // - Include user in the result so UI shows the "User" column.
-    // - Return distinct users for dropdown.
+    // ADMIN: Full access (all payments across all businesses).
     // ============================================================
     if (role === "ADMIN") {
       const whereClause: any = { ...baseWhere };
 
+      // If a specific user email is provided, apply nested filter
       if (userEmailParam) {
-        // Filter by nested user using email
         whereClause.user = { email: userEmailParam };
       }
 
+      // Include user fields, so table can show "User" column
       payments = await prisma.payment.findMany({
         where: whereClause,
         include: {
@@ -80,10 +99,10 @@ export async function GET(req: Request) {
         orderBy: { createdAt: "desc" },
       });
 
-      // Distinct users who have any payment
+      // Build distinct user list for admins (only those with at least one payment)
       users = await prisma.user.findMany({
         where: {
-          payments: { some: {} }, // at least one payment
+          payments: { some: {} },
         },
         select: { email: true, name: true },
         orderBy: { email: "asc" },
@@ -93,23 +112,19 @@ export async function GET(req: Request) {
     }
 
     // ============================================================
-    // BUSINESS_OWNER
-    // - Must have a businessId.
-    // - Sees all payments for that business (owner + all staff).
-    // - Optional ?user=email filter scoped to their business.
-    // - Include user for table display.
-    // - Return distinct users scoped to their business for dropdown.
+    // BUSINESS_OWNER: Must have businessId. Scope to their business only.
     // ============================================================
     if (role === "BUSINESS_OWNER") {
       if (!businessId) {
-        // Safety check: owner should always have a businessId
+        // Owners should always have a businessId, but check anyway
         return NextResponse.json({ error: "Business not found" }, { status: 400 });
       }
 
+      // Scope to current owner's business, optionally filter by a specific email
       const whereClause: any = {
         ...baseWhere,
         user: {
-          businessId: businessId,
+          businessId,
           ...(userEmailParam ? { email: userEmailParam } : {}),
         },
       };
@@ -122,10 +137,11 @@ export async function GET(req: Request) {
         orderBy: { createdAt: "desc" },
       });
 
+      // Distinct users within this business who have at least one payment
       users = await prisma.user.findMany({
         where: {
-          businessId: businessId,
-          payments: { some: {} }, // only users with payments inside owner’s business
+          businessId,
+          payments: { some: {} },
         },
         select: { email: true, name: true },
         orderBy: { email: "asc" },
@@ -135,38 +151,39 @@ export async function GET(req: Request) {
     }
 
     // ============================================================
-    // USER
-    // - Staff-seat user (businessId != null): FORBIDDEN.
-    // - Individual user (businessId == null):
-    //     Must have hasPaid === true to see Billing (API & page).
-    //     Only sees their own payments.
+    // USER:
+    // - Staff-seat user (businessId != null) => FORBIDDEN.
+    // - Individual user (businessId == null) must have hasPaid == true; can see own payments.
     // ============================================================
     if (role === "USER") {
       const isStaffSeat = !!businessId;
+
+      // Staff Seating: role USER + belongs to a business → blocked from Billing
       if (isStaffSeat) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+
+      // Individual user must be paid to access Billing
       if (!hasPaid) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
 
+      // Only this user’s own payments are visible
       const whereClause: any = {
         ...baseWhere,
-        userId: userId,
+        userId,
       };
 
-      // NOTE:
-      // - We don't need to include user for an individual user's own table.
-      //   Frontend Billing page renders fine if user is omitted.
       payments = await prisma.payment.findMany({
         where: whereClause,
         orderBy: { createdAt: "desc" },
       });
 
+      // Individual user does not need distinct `users` for dropdown
       return NextResponse.json({ payments });
     }
 
-    // Any unexpected role → forbid
+    // Fallback: unknown role — forbid
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   } catch (err) {
     console.error("[API] Payment history error:", err);
