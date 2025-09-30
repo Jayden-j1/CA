@@ -3,20 +3,23 @@
 // Purpose:
 // - Business Owner/Admin can add a staff member (USER or ADMIN) to their business.
 // - Immediately creates a Stripe Checkout session to bill for the staff seat.
-// - CRITICAL: Enforce that staff email domain matches the business domain.
-// - If Business.domain is empty the first time, auto-derive it from the caller's email
-//   (e.g., owner@example.com → example.com) and persist it.
+// - **Enforces email domain**: staff email must match the business domain (exact or subdomain).
+// - If Business.domain is missing, auto-derive it from the caller’s email and persist it.
 //
-// Security:
-// - Only authenticated Business Owners/Admins may call this endpoint.
-// - Prevents creating staff under the wrong business.
-// - Prevents duplicate user emails.
-// - Passwords are securely hashed with bcrypt.
-// - Server-side domain restriction prevents bypassing any client-side checks.
+// Why enforce domain here?
+// - Even if someone bypasses the form and hits the API directly, this route blocks invalid emails.
+// - Client-side validation is for UX; server-side validation guarantees security.
 //
-// Stripe:
-// - Metadata ties the payment to the staff account (userId = staff.id).
-// - Includes payerId + businessId for audit trails.
+// Subdomain rule (best practice):
+// - Accept same-domain: example.com
+// - Accept subdomains: dept.example.com, team.dept.example.com
+// - Reject different domains: fakeexample.com, example.org
+//
+// How the check works:
+// - Extract domain from the staff email (the part after "@").
+// - Extract canonical business domain (persisted or derived from caller).
+// - Allow if (candidate === businessDomain) OR (candidate.endsWith("." + businessDomain)).
+//   → This ensures "fakeexample.com" is NOT accepted for "example.com".
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -25,20 +28,35 @@ import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { stripe } from "@/lib/stripe";
 
-/**
- * Extract the domain part from an email address.
- * - Returns null if email is invalid or missing '@'.
- * - Lowercases for consistent comparison.
- *
- * Examples:
- *  - "Alice@Example.com" -> "example.com"
- *  - "bob.smith@sub.example.com" -> "sub.example.com" (we do not flatten)
- */
-function extractDomain(email: string | undefined | null): string | null {
+//
+// ---------- Small helpers ----------
+//
+
+/** Extract lowercase domain from an email address. Returns null if invalid. */
+function extractDomain(email: string | null | undefined): string | null {
   if (!email) return null;
   const at = email.lastIndexOf("@");
   if (at < 0 || at === email.length - 1) return null;
   return email.slice(at + 1).toLowerCase().trim();
+}
+
+/**
+ * Returns true if the candidate domain is allowed under the business domain.
+ * Allowed:
+ * - candidate === businessDomain
+ * - candidate ends with "." + businessDomain (true subdomain)
+ *
+ * Examples:
+ * businessDomain = "example.com"
+ * - "example.com"            ✅ (exact)
+ * - "dept.example.com"       ✅ (subdomain)
+ * - "fakeexample.com"        ❌ (not a subdomain, missing "." boundary)
+ */
+function isAllowedDomain(candidate: string, businessDomain: string): boolean {
+  if (!candidate || !businessDomain) return false;
+
+  if (candidate === businessDomain) return true;
+  return candidate.endsWith("." + businessDomain);
 }
 
 export async function POST(req: NextRequest) {
@@ -79,72 +97,66 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 5) Load the Business to enforce domain rule
-    //    (Admins with a businessId are also supported here)
+    // 5) Prevent duplicate users
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return NextResponse.json(
+        { error: "A user with that email already exists" },
+        { status: 400 }
+      );
+    }
+
+    // 6) Resolve the business and ensure it has a canonical domain
     const business = await prisma.business.findUnique({
       where: { id: businessId },
-      select: { id: true, domain: true, ownerId: true },
+      select: { id: true, domain: true },
     });
-
     if (!business) {
       return NextResponse.json({ error: "Business not found" }, { status: 400 });
     }
 
-    // 5a) Ensure Business.domain exists; if not, auto-derive from the caller's email
-    //     and persist it for future adds.
-    let effectiveDomain = (business.domain || "").toLowerCase().trim();
-    if (!effectiveDomain) {
+    let canonicalDomain = (business.domain || "").toLowerCase().trim();
+
+    // If domain missing, auto-derive from the caller's email and persist
+    if (!canonicalDomain) {
       const callerDomain = extractDomain(session.user.email);
       if (!callerDomain) {
         return NextResponse.json(
-          { error: "Unable to derive business domain from your account email" },
+          { error: "Unable to derive business domain from your email" },
           { status: 400 }
         );
       }
 
-      // Try to persist it once so business has a canonical domain from now on
       try {
         const updated = await prisma.business.update({
           where: { id: business.id },
           data: { domain: callerDomain },
           select: { domain: true },
         });
-        effectiveDomain = updated.domain.toLowerCase();
-        console.log("[Staff/Add] Business domain set to:", effectiveDomain);
+        canonicalDomain = updated.domain.toLowerCase();
+        console.log("[Staff/Add] Persisted business domain:", canonicalDomain);
       } catch (e: any) {
-        // In rare cases, domain uniqueness may clash; still fall back to enforcing
-        // with callerDomain in memory for this request
-        effectiveDomain = callerDomain;
+        // On uniqueness or other constraints, proceed with derived (not persisted)
+        canonicalDomain = callerDomain;
         console.warn(
-          "[Staff/Add] Failed to persist business domain; using derived domain for validation:",
-          effectiveDomain
+          "[Staff/Add] Failed to persist business domain; using derived domain:",
+          canonicalDomain
         );
       }
     }
 
-    // 6) Enforce staff email must match business domain (case-insensitive)
+    // 7) Enforce staff email domain (exact or subdomain)
     const staffEmailDomain = extractDomain(email);
     if (!staffEmailDomain) {
-      return NextResponse.json({ error: "Invalid staff email format" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid staff email" }, { status: 400 });
     }
 
-    if (staffEmailDomain !== effectiveDomain) {
-      // If you want to also accept subdomains like "sub.example.com", you can relax this
-      // check by comparing apex domain. For now, we require exact match to avoid ambiguity.
+    const domainOk = isAllowedDomain(staffEmailDomain, canonicalDomain);
+    if (!domainOk) {
       return NextResponse.json(
         {
-          error: `Email domain mismatch. Staff must use "@${effectiveDomain}"`,
-          requiredDomain: effectiveDomain,
+          error: `Staff email must use your company domain (exact or subdomain). Allowed: @${canonicalDomain}`,
         },
-        { status: 400 }
-      );
-    }
-
-    // 7) Prevent duplicate users
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      return NextResponse.json(
-        { error: "A user with that email already exists" },
         { status: 400 }
       );
     }
@@ -162,7 +174,7 @@ export async function POST(req: NextRequest) {
     // 10) Resolve Stripe price (always from env, in cents)
     const staffPrice = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10);
 
-    // 11) Create Stripe Checkout session for the staff seat
+    // 11) Create Stripe Checkout session
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -179,25 +191,24 @@ export async function POST(req: NextRequest) {
       // Redirects back to internal dashboard pages
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true&staff=${encodeURIComponent(staff.email)}`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?canceled=true&staff=${encodeURIComponent(staff.email)}`,
-      // ✅ Metadata is CRITICAL: webhook ties the payment to the staff account
+      // ✅ Metadata is CRITICAL: this is how webhook knows who this payment is for
       metadata: {
-        userId: staff.id,                                 // 🟢 tie to staff user account
+        userId: staff.id,                                 // 🟢 ensure payment is tied to *staff* account
         payerId: session.user.id,                         // 📝 the business owner/admin who paid
         businessId: staff.businessId || "",               // 🔗 business association
         purpose: "STAFF_SEAT",                            // distinguish from PACKAGE payments
         role: staff.role,                                 // mostly for audit/debug
-        description: `Staff Seat for ${staff.email}`,     // 🟢 human-readable description in DB
+        description: `Staff Seat for ${staff.email}`,     // 🟢 clear description in DB
       },
     });
 
-    // ✅ Safe log (never expose secrets)
+    // ✅ Safe log (never expose full keys/secrets)
     console.log("[Stripe] Staff Checkout Session Created", {
       staffId: staff.id,
       staffEmail: staff.email,
       businessId: staff.businessId,
       payerId: session.user.id,
       amount: staffPrice,
-      enforcedDomain: effectiveDomain,
     });
 
     // Respond with checkout URL to client
