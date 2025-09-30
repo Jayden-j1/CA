@@ -2,14 +2,19 @@
 //
 // Purpose:
 // - Layout wrapper for all *dashboard* pages (protected area).
-// - ✅ Uses the dedicated DashboardNavbar (role-aware, config-driven).
+// - Uses the centralized, config-driven DashboardNavbar.
 // - Excludes the public navbar and footer (no stacking).
 // - Adds an optional minimal dashboard footer (customizable later).
+//
+// Notes:
+// - This ensures the dashboard feels like a self-contained app.
+// - IMPORTANT: We import from "@/components/dashboard/DashboardNav"
+//   so we use the correct Navbar that consumes config/navigation.ts.
 
 "use client";
 
 import { ReactNode } from "react";
-import DashboardNavbar from "@/components/dashboard/DashBoardNav"; // ✅ correct navbar
+import DashboardNavbar from "@/components/dashboard/DashBoardNav";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -18,7 +23,7 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* ✅ Dashboard-only navbar */}
+      {/* ✅ Dashboard-only navbar (config-driven + role/pay aware) */}
       <DashboardNavbar />
 
       {/* ✅ Main content area */}

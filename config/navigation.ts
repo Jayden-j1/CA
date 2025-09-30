@@ -39,6 +39,9 @@ export interface NavVisibility {
 
 /**
  * One navigation entry.
+ * - align: "left" | "right" controls desktop grouping. For example:
+ *    • LEFT  → "Home", "Map", "Course", etc.
+ *    • RIGHT → "Logout"
  */
 export interface NavItem {
   name: string;
@@ -66,6 +69,7 @@ export const publicNavigation: NavItem[] = [
 // - Role-filtering + visibility rules are resolved by filterDashboardNavigation.
 // - "Upgrade" disappears automatically once hasPaid === true.
 // - "Billing" disappears for staff-seat users, and for unpaid individual users.
+// - "Logout" is aligned to the RIGHT so our navbar renders it on the right side on desktop.
 export const dashboardNavigation: NavItem[] = [
   { name: "Home", href: "/dashboard", align: "left" },
   { name: "Map", href: "/dashboard/map", align: "left" },
@@ -96,7 +100,7 @@ export const dashboardNavigation: NavItem[] = [
   },
 
   // ✅ Billing visibility rules:
-  // - hideForStaffSeat ⇒ hide when role=USER AND businessId != null
+  // - hideForStaffSeat ⇒ hide when role=USER AND businessId != null (staff-seat users)
   // - individualRequiresPaid ⇒ show only when individual USER has hasPaid = true
   {
     name: "Billing",
@@ -117,6 +121,7 @@ export const dashboardNavigation: NavItem[] = [
     align: "left",
   },
 
+  // 👉 RIGHT-aligned so our navbar renders it on the far right on desktop
   { name: "Logout", href: "/logout", align: "right" },
 ];
 
@@ -163,12 +168,11 @@ export function filterDashboardNavigation(ctx: NavFilterContext): NavItem[] {
     const v: NavVisibility = item.visibility || {};
 
     // 1) Loading-state handling:
-    //    Hide session-dependent items during hydration unless explicitly allowed.
     if (isLoading) {
       const shouldHideWhileLoading = v.hideWhileLoading ?? true; // default true
       if (shouldHideWhileLoading) return false;
 
-      // if the item requiresRole but session is still loading → hide
+      // If the item requires a role but session is still loading → hide
       if (item.requiresRole) return false;
     }
 
