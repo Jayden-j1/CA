@@ -38,23 +38,20 @@ export default function LoginForm() {
 
       if (result?.error) {
         // ------------------------------
-        // Parse error: could be "Invalid credentials" or JSON { systemError }
+        // Parse error
         // ------------------------------
         try {
           const parsedError = JSON.parse(result.error);
           if (parsedError?.systemError) {
-            // Backend signaled system-level failure
             showSystemErrorToast();
           } else {
-            // Unknown structured error → fallback to user error
             showRoleErrorToast("USER");
           }
         } catch {
-          // If error is plain string
           if (result.error === "Invalid credentials") {
-            showRoleErrorToast("USER"); // wrong password/email
+            showRoleErrorToast("USER");
           } else {
-            showSystemErrorToast(); // treat everything else as system error
+            showSystemErrorToast();
           }
         }
       } else {
@@ -122,7 +119,7 @@ export default function LoginForm() {
         <button
           type="button"
           onClick={togglePasswordVisibility}
-          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline focus:outline-none"
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-white text-xs hover:underline focus:outline-none cursor-pointer"
           tabIndex={-1}
         >
           {showPassword ? "Hide" : "Show"}
@@ -136,7 +133,7 @@ export default function LoginForm() {
         <button
           type="submit"
           disabled={loading}
-          className="px-8 py-4 bg-green-600 text-white hover:bg-green-500 font-bold rounded-2xl shadow border-2 border-white"
+          className="px-8 py-4 bg-green-600 text-white hover:bg-green-500 font-bold rounded-2xl shadow border-2 border-white cursor-pointer"
         >
           {loading ? "Logging in..." : "Login"}
         </button>
@@ -146,8 +143,9 @@ export default function LoginForm() {
           Footer
       ------------------------- */}
       <aside>
+        {/* ✅ Fixed: link to /forgot-password */}
         <p className="text-white text-xs sm:text-sm md:text-base mt-2 text-center sm:text-left leading-relaxed">
-          <a href="/login" className="text-white hover:underline font-bold ml-1">
+          <a href="/forgot-password" className="text-white hover:underline font-bold ml-1">
             Forgot your Password?
           </a>
         </p>
@@ -161,12 +159,3 @@ export default function LoginForm() {
     </form>
   );
 }
-
-
-
-
-
-
-
-
-
