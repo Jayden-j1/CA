@@ -2,22 +2,22 @@
 //
 // Purpose:
 // - Billing dashboard with payments table + filters + CSV export.
-// - Exports staff-seat vs package payments clearly for reconciliation/testing.
-// - Includes user role in CSV for finance clarity.
+// - Export includes Purpose (PACKAGE vs STAFF_SEAT) and Role (USER/ADMIN/BUSINESS_OWNER).
 //
-// New in this version:
-// - CSV export now has a dedicated "Purpose" column (PACKAGE vs STAFF_SEAT).
-// - CSV export now has a "Role" column (USER, ADMIN, BUSINESS_OWNER).
-// - Makes reconciliation easier for finance teams.
+// IMPORTANT ACCESS RULES:
+// - Allow: BUSINESS_OWNER, ADMIN
+// - Allow: USER who purchased individually (hasPaid = true AND businessId is null)
+// - Deny: USER staff-seat (businessId != null) → redirect back to /dashboard
 //
-// Flow:
-// 1. User filters payments (optional).
-// 2. Click "Export CSV" → downloads all currently visible payments.
-// 3. Finance team can open CSV in Excel/Sheets for analysis.
+// Why guard the page (not just the nav)?
+// - Users can type /dashboard/billing manually. This guard ensures they still can’t access it.
+// - Navbar remains a convenience, but page-level checks enforce security.
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 // ------------------------------
 // Shape of API response
@@ -58,23 +58,65 @@ function PurposeBadge({ purpose }: { purpose: string }) {
 }
 
 export default function BillingPage() {
-  // Data state
+  // ------------------------------
+  // 1) Session + access gate
+  // ------------------------------
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
+  // Compute access based on role + ownership vs staff seat
+  const role = session?.user?.role;
+  const businessId = session?.user?.businessId || null;
+  const hasPaid = !!session?.user?.hasPaid;
+
+  const allowBilling = useMemo(() => {
+    if (!role) return false;
+
+    // BUSINESS_OWNER or ADMIN → always allowed
+    if (role === "BUSINESS_OWNER" || role === "ADMIN") return true;
+
+    // USER:
+    // - If staff-seat: role USER + businessId != null → deny
+    // - If individual user: businessId == null → allowed only if hasPaid
+    if (role === "USER") {
+      const isStaffSeatUser = !!businessId;
+      if (isStaffSeatUser) return false;
+      return hasPaid; // individual users must be paid to see billing
+    }
+
+    return false;
+  }, [role, businessId, hasPaid]);
+
+  // Redirect away if not allowed (once session is ready)
+  useEffect(() => {
+    if (status === "loading") return;
+    if (!allowBilling) {
+      router.replace("/dashboard"); // silently go back to dashboard
+    }
+  }, [status, allowBilling, router]);
+
+  // While loading session or redirecting
+  if (status === "loading" || !allowBilling) {
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Loading billing...</p>
+      </section>
+    );
+  }
+
+  // ------------------------------
+  // 2) Billing table + filters + CSV
+  // ------------------------------
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Filters
   const [purposeFilter, setPurposeFilter] = useState("ALL");
   const [userFilter, setUserFilter] = useState("");
-
-  // For autocomplete
   const [userSearch, setUserSearch] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // ------------------------------
-  // Load filters from localStorage
-  // ------------------------------
   useEffect(() => {
     const storedPurpose = localStorage.getItem("billing:purposeFilter");
     const storedUser = localStorage.getItem("billing:userFilter");
@@ -85,9 +127,6 @@ export default function BillingPage() {
     }
   }, []);
 
-  // ------------------------------
-  // Fetch payments + users
-  // ------------------------------
   const fetchPayments = async () => {
     try {
       setLoading(true);
@@ -110,9 +149,6 @@ export default function BillingPage() {
     }
   };
 
-  // ------------------------------
-  // Persist filters + refetch
-  // ------------------------------
   useEffect(() => {
     localStorage.setItem("billing:purposeFilter", purposeFilter);
     localStorage.setItem("billing:userFilter", userFilter);
@@ -120,18 +156,12 @@ export default function BillingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [purposeFilter, userFilter]);
 
-  // ------------------------------
-  // Filter suggestions
-  // ------------------------------
   const filteredSuggestions = users.filter(
     (u) =>
       u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
       (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
-  // ------------------------------
-  // CSV Export
-  // ------------------------------
   const exportCSV = () => {
     // Add "Role" + "Purpose" to headers
     const headers = [
@@ -151,7 +181,7 @@ export default function BillingPage() {
       p.user?.email || "",
       p.user?.role || "N/A",
       p.description,
-      p.purpose, // Will output exactly "PACKAGE" or "STAFF_SEAT"
+      p.purpose, // "PACKAGE" or "STAFF_SEAT"
       p.amount,
       p.currency.toUpperCase(),
       new Date(p.createdAt).toLocaleString(),
@@ -171,7 +201,7 @@ export default function BillingPage() {
   };
 
   // ------------------------------
-  // Render
+  // Final Render
   // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
@@ -272,9 +302,13 @@ export default function BillingPage() {
                   {p.user && (
                     <td className="py-2 px-3 text-sm text-gray-700">
                       {p.user.name || "Unnamed"} <br />
-                      <span className="text-xs text-gray-500">{p.user.email}</span>
+                      <span className="text-xs text-gray-500">
+                        {p.user.email}
+                      </span>
                       <br />
-                      <span className="text-xs text-gray-400">({p.user.role})</span>
+                      <span className="text-xs text-gray-400">
+                        ({p.user.role})
+                      </span>
                     </td>
                   )}
                   <td className="py-2 px-3">{p.description}</td>

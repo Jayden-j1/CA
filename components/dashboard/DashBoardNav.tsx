@@ -1,3 +1,19 @@
+// components/dashboard/DashboardNavbar.tsx
+//
+// Purpose:
+// - Dashboard Navbar that filters navigation items by role and payment status.
+// - Hides "Upgrade" if session.user.hasPaid === true.
+// - Hides "Billing" for staff-seat users (role USER + businessId != null).
+//   → Billing is only meant for:
+//      • Individual users who paid directly (USER with no businessId and hasPaid = true)
+//      • BUSINESS_OWNER
+//      • ADMIN
+//
+// Why this filter here?
+// - The Navbar presents links based on the session state (role, hasPaid, businessId).
+// - We also guard the Billing PAGE itself (see billing/page.tsx), so typing the URL won’t bypass it.
+// - This keeps UX consistent: you don't see options you can't use.
+
 'use client';
 
 import { useState } from "react";
@@ -16,13 +32,16 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  // Role + businessId from session
+  // Pull relevant values from session for filtering
   const role = session?.user?.role;
   const businessId = session?.user?.businessId || null;
+  const hasPaid = !!session?.user?.hasPaid;
 
-  // Role-based + extra runtime filtering
+  // ------------------------------
+  // Final filtered list of nav items
+  // ------------------------------
   const navItems = (navigation || dashboardNavigation).filter((item) => {
-    // Step 1: Hide if requiresRole doesn’t match
+    // Step 1: Role filter from config (exact match or array contains)
     if (item.requiresRole) {
       if (typeof item.requiresRole === "string") {
         if (item.requiresRole !== role) return false;
@@ -31,11 +50,22 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
       }
     }
 
-    // Step 2: Special case for Billing
-    // - If role is USER and user belongs to a business (businessId != null)
-    //   → hide Billing (staff shouldn’t see it).
-    if (item.name === "Billing" && role === "USER" && businessId) {
+    // Step 2: Hide "Upgrade" for paid users
+    if (item.name === "Upgrade" && hasPaid) {
       return false;
+    }
+
+    // Step 3: Hide "Billing" for staff-seat users:
+    // - role === "USER"
+    // - businessId != null (means they belong to a business; i.e., seat user)
+    // - Indiv. purchasers (USER with no businessId) can see Billing IF they havePaid
+    if (item.name === "Billing") {
+      const isStaffSeatUser = role === "USER" && !!businessId;
+      if (isStaffSeatUser) return false;
+
+      // Optional: If you want to hide Billing from unpaid individual users as well:
+      const isIndividualUser = role === "USER" && !businessId;
+      if (isIndividualUser && !hasPaid) return false;
     }
 
     return true;
@@ -65,6 +95,7 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
         <button
           onClick={() => setIsOpen(!isOpen)}
           className="lg:hidden px-3 py-2 text-gray-700 border border-gray-300 rounded"
+          aria-label="Toggle menu"
         >
           ☰
         </button>

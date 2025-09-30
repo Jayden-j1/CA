@@ -5,8 +5,13 @@
 // - Desktop alignment (left/right) + role-gating via `requiresRole`.
 // - "Upgrade" is defined here but hidden at runtime if user.hasPaid === true.
 // - "Billing" is defined here for USER, BUSINESS_OWNER, ADMIN —
-//   but DashboardNavbar applies an extra runtime filter so staff
+//   but DashboardNavbar applies an additional runtime filter so STAFF-SEAT users
 //   (role USER + businessId != null) won’t see it.
+//
+// Why keep this simple?
+// - We keep the definitions declarative (what is possible).
+// - Final per-user visibility is enforced in the Navbar and (importantly) on the page route itself.
+//   → This avoids exposing links that a user can't actually access if typed manually.
 
 export type Role = "USER" | "BUSINESS_OWNER" | "ADMIN";
 
@@ -32,7 +37,7 @@ export const publicNavigation: NavItem[] = [
 // Dashboard navigation
 // ---------------------------
 // Notes:
-// - Role-filtering is applied at runtime.
+// - Role-filtering is applied at runtime (Navbar).
 // - Upgrade is hidden if user.hasPaid === true.
 // - Billing is further filtered in DashboardNavbar so that
 //   staff users under a business don’t see it.
