@@ -2,20 +2,14 @@
 //
 // Purpose:
 // - Layout wrapper for all *dashboard* pages (protected area).
-// - ✅ Uses the dedicated DashboardNavbar (role-aware, with staff-seat Billing rules).
+// - ✅ Uses the dedicated DashboardNavbar (role-aware, config-driven).
 // - Excludes the public navbar and footer (no stacking).
 // - Adds an optional minimal dashboard footer (customizable later).
-//
-// Why update?
-// - Previously, this file imported a DashboardNavbar from the *public header* module,
-//   which didn’t include the latest “hide Billing for staff-seat” rules.
-// - We now import the correct navbar from components/dashboard/DashboardNavbar.
 
 "use client";
 
 import { ReactNode } from "react";
-// ✅ Import the correct dashboard navbar (default export)
-import DashboardNavbar from "@/components/dashboard/DashBoardNav";
+import DashboardNavbar from "@/components/dashboard/DashBoardNav"; // ✅ correct navbar
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -24,7 +18,7 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* ✅ Dashboard-only navbar (role-aware + staff-seat filtering) */}
+      {/* ✅ Dashboard-only navbar */}
       <DashboardNavbar />
 
       {/* ✅ Main content area */}

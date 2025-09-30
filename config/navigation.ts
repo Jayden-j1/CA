@@ -1,37 +1,51 @@
 // config/navigation.ts
 //
 // Purpose:
-// - Central registry for all navigation entries.
-// - Desktop alignment (left/right) + role-gating via `requiresRole`.
-// - "Upgrade" is defined here but hidden at runtime if user.hasPaid === true.
-// - "Billing" is defined for USER, BUSINESS_OWNER, ADMIN —
-//   but DashboardNavbar applies an additional runtime filter so STAFF-SEAT users
-//   (role USER + businessId != null) won’t see it.
+// - Central registry for all navigation entries (public + dashboard).
+// - Declarative "who can see what" via:
+//    • requiresRole  → role-based gating
+//    • visibility    → feature flags like hideWhenPaid, hideForStaffSeat, etc.
+// - Export a single helper `filterDashboardNavigation(...)` that computes the
+//   final list of visible links for a given user/session.
 //
-// Why keep this simple?
-// - We keep the definitions declarative (what is possible).
-// - Final per-user visibility is enforced in the Navbar and (importantly) on the page route itself.
-//   → This avoids exposing links that a user can't actually access if typed manually.
+// Why this pattern?
+// - Single source of truth: instead of scattering business rules across Navbar components,
+//   pages, and APIs, we describe the intent here and consume it wherever needed.
+// - Zero-code changes: want to hide "Billing" for staff? Flip a flag here.
+// - Easy testing: one function can be unit-tested with many scenarios.
+//
+// Types:
+// - Role:                     application roles
+// - NavVisibility:            extra flags to describe visibility conditions
+// - NavItem:                  one entry in the nav with optional role/visibility
+// - Public + Dashboard navs:  declarative arrays
+// - filterDashboardNavigation: merges all rules to produce final list
 
 export type Role = "USER" | "BUSINESS_OWNER" | "ADMIN";
 
 /**
- * Extra visibility hints to document/drive runtime filtering.
- * - hideForStaffSeat: Hide this nav item for staff-seat users (role USER + businessId != null).
- * - individualRequiresPaid: If the user is an individual USER (no businessId),
- *   only show if they have hasPaid === true.
+ * Extra visibility hints that drive runtime filtering.
+ * - hideWhenPaid:            Hide if the user hasPaid === true (e.g., Upgrade).
+ * - hideForStaffSeat:        Hide for staff-seat users (role USER + businessId != null).
+ * - individualRequiresPaid:  If user is an individual (USER + no businessId), only show when hasPaid === true.
+ * - hideWhileLoading:        Hide during session hydration (prevents flicker); default true.
  */
 export interface NavVisibility {
+  hideWhenPaid?: boolean;
   hideForStaffSeat?: boolean;
   individualRequiresPaid?: boolean;
+  hideWhileLoading?: boolean;
 }
 
+/**
+ * One navigation entry.
+ */
 export interface NavItem {
   name: string;
   href: string;
   requiresRole?: Role | Role[];
   align?: "left" | "right";
-  visibility?: NavVisibility; // NEW: declarative hints for runtime
+  visibility?: NavVisibility;
 }
 
 // ---------------------------
@@ -49,10 +63,9 @@ export const publicNavigation: NavItem[] = [
 // Dashboard navigation
 // ---------------------------
 // Notes:
-// - Role-filtering is applied at runtime (Navbar).
-// - Upgrade is hidden if user.hasPaid === true.
-// - Billing is further filtered in DashboardNavbar so that
-//   staff users under a business don’t see it and individual unpaid users don't see it.
+// - Role-filtering + visibility rules are resolved by filterDashboardNavigation.
+// - "Upgrade" disappears automatically once hasPaid === true.
+// - "Billing" disappears for staff-seat users, and for unpaid individual users.
 export const dashboardNavigation: NavItem[] = [
   { name: "Home", href: "/dashboard", align: "left" },
   { name: "Map", href: "/dashboard/map", align: "left" },
@@ -71,16 +84,29 @@ export const dashboardNavigation: NavItem[] = [
     align: "left",
   },
 
-  { name: "Upgrade", href: "/dashboard/upgrade", align: "left" },
+  // ✅ Only visible when user.hasPaid === false
+  {
+    name: "Upgrade",
+    href: "/dashboard/upgrade",
+    align: "left",
+    visibility: {
+      hideWhenPaid: true, // hide once paid
+      hideWhileLoading: true, // also hide during hydration to prevent flicker
+    },
+  },
 
+  // ✅ Billing visibility rules:
+  // - hideForStaffSeat ⇒ hide when role=USER AND businessId != null
+  // - individualRequiresPaid ⇒ show only when individual USER has hasPaid = true
   {
     name: "Billing",
     href: "/dashboard/billing",
-    requiresRole: ["USER", "BUSINESS_OWNER", "ADMIN"], // Keep USER to allow individual USERs who paid
+    requiresRole: ["USER", "BUSINESS_OWNER", "ADMIN"],
     align: "left",
     visibility: {
-      hideForStaffSeat: true,        // Hide for staff-seat (role USER + businessId)
-      individualRequiresPaid: true,  // Show only for individual USERs if hasPaid
+      hideForStaffSeat: true,
+      individualRequiresPaid: true,
+      hideWhileLoading: true, // hide while loading to avoid flashes
     },
   },
 
@@ -93,3 +119,88 @@ export const dashboardNavigation: NavItem[] = [
 
   { name: "Logout", href: "/logout", align: "right" },
 ];
+
+// -------------------------------------------------------------------
+// Filter helper — central place to convert rules to a visible list
+// -------------------------------------------------------------------
+
+/**
+ * Input shape for filterDashboardNavigation.
+ */
+export interface NavFilterContext {
+  navigation?: NavItem[]; // optional override
+  role?: Role; // authenticated user's role
+  businessId?: string | null; // user's businessId (null for individuals)
+  hasPaid?: boolean; // whether the user has access
+  isLoading?: boolean; // whether session is hydrating on client
+}
+
+/**
+ * filterDashboardNavigation:
+ * Applies role checks + visibility flags to produce the final list of visible items.
+ *
+ * Rules:
+ * 1) While isLoading === true → hide any item with visibility.hideWhileLoading !== false
+ *    (default is true for safety). We also default to hiding items that rely on role/payment.
+ * 2) Role checks: if requiresRole is string/array, ensure the user's role is included.
+ * 3) Visibility flags:
+ *    - hideWhenPaid: hide when hasPaid === true
+ *    - hideForStaffSeat: hide when role === "USER" && businessId != null
+ *    - individualRequiresPaid: if role === "USER" && !businessId && !hasPaid → hide
+ */
+export function filterDashboardNavigation(ctx: NavFilterContext): NavItem[] {
+  const {
+    navigation,
+    role,
+    businessId,
+    hasPaid,
+    isLoading,
+  } = ctx;
+
+  const source = navigation || dashboardNavigation;
+
+  return source.filter((item) => {
+    const v: NavVisibility = item.visibility || {};
+
+    // 1) Loading-state handling:
+    //    Hide session-dependent items during hydration unless explicitly allowed.
+    if (isLoading) {
+      const shouldHideWhileLoading = v.hideWhileLoading ?? true; // default true
+      if (shouldHideWhileLoading) return false;
+
+      // if the item requiresRole but session is still loading → hide
+      if (item.requiresRole) return false;
+    }
+
+    // 2) Role checks:
+    if (item.requiresRole) {
+      if (!role) return false; // if we don't know role yet, hide it
+
+      if (typeof item.requiresRole === "string") {
+        if (item.requiresRole !== role) return false;
+      } else if (Array.isArray(item.requiresRole)) {
+        if (!item.requiresRole.includes(role)) return false;
+      }
+    }
+
+    // 3) Visibility flags:
+    //   - hideWhenPaid
+    if (v.hideWhenPaid && hasPaid) {
+      return false;
+    }
+
+    //   - hideForStaffSeat ⇒ role=USER + businessId present
+    const isStaffSeatUser = role === "USER" && !!businessId;
+    if (v.hideForStaffSeat && isStaffSeatUser) {
+      return false;
+    }
+
+    //   - individualRequiresPaid ⇒ role=USER + no businessId + !hasPaid
+    const isIndividualUser = role === "USER" && !businessId;
+    if (v.individualRequiresPaid && isIndividualUser && !hasPaid) {
+      return false;
+    }
+
+    return true;
+  });
+}
