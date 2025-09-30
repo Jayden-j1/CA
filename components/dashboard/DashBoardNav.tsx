@@ -1,4 +1,4 @@
-// components/dashboard/DashboardNavbar.tsx
+// components/dashboard/DashboardNav.tsx
 //
 // Purpose:
 // - Dashboard Navbar that filters navigation items by role and payment status.
@@ -9,19 +9,21 @@
 //      • BUSINESS_OWNER
 //      • ADMIN
 //
-// Why filter here?
-// - The Navbar presents links based on the runtime session state (role, hasPaid, businessId).
-// - The Billing PAGE/API is also guarded server-side, so typing the URL won’t bypass it.
-// - Doing both creates a great UX: users don't see options they cannot access,
-//   and even if they type a URL directly, they’re blocked securely.
-//
 // Improvements in this version:
-// - Uses `useSession()` `status` to prevent a brief flicker of "Billing"/"Upgrade"
-//   while the session is being hydrated in the browser.
-// - Retains role filtering via config/navigation.ts + adds extra runtime conditions.
-// - Heavily documented to make the decision logic easy to maintain.
+// - ✅ Reads visibility hints from config/navigation.ts (visibility.hideForStaffSeat,
+//   visibility.individualRequiresPaid) instead of hardcoding everything.
+// - ✅ Uses `status === 'loading'` to prevent flicker while session hydrates.
+// - ✅ Still applies role-based filtering and aligns with server-side route guard on /dashboard/billing.
+//
+// Why do both (navbar + route guard)?
+// - Navbar = better UX (hide links users can't use).
+// - API/Page guard = security (even if URL is typed manually, access is prevented).
+//
+// NOTE:
+// - This component is specific to the dashboard and should be used only inside dashboard
+//   layouts/pages. Public pages should use the public header navbar.
 
-'use client';
+"use client";
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
@@ -29,18 +31,18 @@ import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { dashboardNavigation, NavItem } from "@/config/navigation";
 
-// NavbarProps allows optionally passing a custom nav array (defaults to dashboardNavigation)
+// Optional prop to override navigation set (defaults to dashboardNavigation)
 interface NavbarProps {
   navigation?: NavItem[];
 }
 
-const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
+const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const pathname = usePathname();
 
   // We use `useSession` to read the authenticated user's session:
-  // - `status === "loading"`: NextAuth hasn't hydrated the session yet on the client,
-  //    avoid rendering links that depend on session flags to prevent flicker.
+  // - `status === "loading"`: NextAuth hasn't hydrated the session yet on the client.
+  //   We avoid rendering links that depend on session flags to prevent flicker.
   // - `data`: the session object holding `user.role`, `user.businessId`, `user.hasPaid`, etc.
   const { data: session, status } = useSession();
 
@@ -58,10 +60,9 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
     const source = navigation || dashboardNavigation;
 
     // If the session is still loading, we return a conservative set:
-    // - Either a blank array, or an array stripped of items that could flicker.
-    // Here we choose to hide all session-dependent links to prevent any mis-flash.
+    // - Only items that don't rely on session flags (no role/visibility dependencies).
+    // - We explicitly exclude Upgrade/Billing to avoid any flicker caused by late session hydration.
     if (status === "loading") {
-      // Return only items that don't require any role and aren't Upgrade/Billing.
       return source.filter(
         (item) =>
           !item.requiresRole &&
@@ -75,8 +76,10 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
     // 2) "Upgrade" hidden when hasPaid = true
     // 3) "Billing" hidden for staff-seat users (role USER + businessId)
     //    and for unpaid individual users (role USER + no businessId + !hasPaid)
+    // 4) Read additional visibility hints from config.visibility to keep Navbar
+    //    in sync with config declarations (belt & braces).
     return source.filter((item) => {
-      // Step 1: Role check
+      // Step 1: Role check from config
       if (item.requiresRole) {
         if (typeof item.requiresRole === "string") {
           if (item.requiresRole !== role) return false;
@@ -90,13 +93,23 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
         return false;
       }
 
-      // Step 3: Hide "Billing" for staff-seat users & unpaid individual users
+      // Step 3: Apply Billing-specific runtime rules
       if (item.name === "Billing") {
         const isStaffSeatUser = role === "USER" && !!businessId;
-        if (isStaffSeatUser) return false;
-
-        // Individual user case: show Billing only if they've paid
         const isIndividualUser = role === "USER" && !businessId;
+
+        // 3a) Use config.visibility as a declarative guide (sync with config)
+        const v = item.visibility || {};
+
+        // Hide for staff-seat users if configured (default true in our config)
+        if (v.hideForStaffSeat && isStaffSeatUser) return false;
+
+        // For individual USERs, require payment if configured
+        if (v.individualRequiresPaid && isIndividualUser && !hasPaid) return false;
+
+        // 3b) Defensive fallback in case config is missing:
+        // (This mirrors your existing explicit logic)
+        if (isStaffSeatUser) return false;
         if (isIndividualUser && !hasPaid) return false;
       }
 
@@ -166,4 +179,4 @@ const Navbar: React.FC<NavbarProps> = ({ navigation }) => {
   );
 };
 
-export default Navbar;
+export default DashboardNavbar;
