@@ -1,16 +1,12 @@
 // lib/rateLimit.ts
 //
 // Purpose:
-// - Simple rate limiter using Upstash Redis (serverless).
-// - Prevents abuse of sensitive endpoints (e.g., forgot-password).
+// - Minimal Upstash Redis rate limiter.
+// - Prevents brute-force or abuse on sensitive endpoints (e.g., forgot-password).
 //
-// Fixes:
-// - Cast Redis results to numbers (`Number(...)`) before comparing.
-//   Upstash returns strings, which caused type mismatches.
-//
-// Usage:
-//   const okIp = await limit(`rl:fp:ip:${ip}`, 5, 60);
-//   if (!okIp) return NextResponse.json({ ok: true });
+// Notes:
+// - Returns true if within limit, false if rate-limited.
+// - Fail-open in case of Redis outage (UX > protection here).
 
 import { Redis } from "@upstash/redis";
 
@@ -22,20 +18,14 @@ const redis =
       })
     : null;
 
-/**
- * limit
- * - Increments counter for a given key with expiry.
- * - Returns true if count <= max (within window), else false.
- */
 export async function limit(
   key: string,
   max: number,
   windowSeconds: number
 ): Promise<boolean> {
   try {
-    if (!redis) return true; // allow if no Redis configured
+    if (!redis) return true;
 
-    // Increment counter & get TTL atomically
     const results = await redis
       .multi()
       .incr(key)
@@ -45,14 +35,13 @@ export async function limit(
     const count = Number(results?.[0] ?? 0);
     const ttl = Number(results?.[1] ?? -1);
 
-    // If no TTL set, expire in `windowSeconds`
     if (ttl === -1) {
       await redis.expire(key, windowSeconds);
     }
 
     return count <= max;
   } catch (err) {
-    console.warn("[rateLimit] Redis error, allowing request:", err);
-    return true; // fail-open
+    console.warn("[rateLimit] Redis error; allowing request:", err);
+    return true;
   }
 }

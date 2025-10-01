@@ -1,34 +1,26 @@
 // lib/email/resendClient.ts
 //
 // Purpose:
-// - Centralized helper for sending transactional emails.
-// - Uses Resend API with React Email templates.
-// - Renders React → HTML with @react-email/render.
-// - Avoids Promise<string> issues by using `await render(...)`.
+// - Central helper to render and send transactional emails via Resend.
+// - Keeps API routes lean and consistent.
 //
-// Env vars:
+// Env:
 // - RESEND_API_KEY
-// - RESEND_FROM (e.g., "Support <no-reply@your-domain.com>")
+// - RESEND_FROM (e.g. "Support <no-reply@your-domain.com>")
 
 import { Resend } from "resend";
 import { render } from "@react-email/render";
 import ResetPasswordEmail from "@/emails/ResetPasswordEmail";
 
-// Instantiate client once
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-/**
- * sendResetPasswordEmail
- * - Sends a password reset email.
- * - Renders the ResetPasswordEmail template into HTML + fallback text.
- */
 export async function sendResetPasswordEmail(params: {
   to: string;
   resetUrl: string;
 }) {
   const { to, resetUrl } = params;
 
-  // Render React email template → HTML string
+  // Render React Email template to HTML
   const html = await render(
     ResetPasswordEmail({
       resetUrl,
@@ -37,15 +29,13 @@ export async function sendResetPasswordEmail(params: {
     })
   );
 
-  // Plain text fallback
-  const text = `Reset your password here: ${resetUrl}`;
+  const text = `Reset your password: ${resetUrl}`;
 
-  // Send with Resend
   await resend.emails.send({
     from: process.env.RESEND_FROM || "no-reply@your-domain.com",
     to,
     subject: "Reset your password",
-    html,
+    html, // ✅ string
     text,
   });
 }
