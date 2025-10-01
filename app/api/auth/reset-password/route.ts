@@ -1,12 +1,13 @@
 // app/api/auth/reset-password/route.ts
 //
 // Purpose:
-// - Accept { token, password } and reset the user's password if the token is valid.
-// - Server-validates password strength before applying.
-// - Uses Prisma model field `expires` (aligned with your schema).
+// - Accept { token, password } and reset if token valid and not expired.
+// - Canonical schema uses `expiresAt`, but we also handle legacy `expires`.
+// - Enforces password strength server-side.
 //
 // Security:
-// - Deletes the reset token(s) after a successful reset so links cannot be reused.
+// - Invalid/expired tokens are removed.
+// - All reset tokens for the user are deleted after success (no reuse).
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) Server-side password strength check
+    // 2) Enforce strong password rules (defense-in-depth)
     if (!isStrongPassword(password)) {
       return NextResponse.json(
         {
@@ -36,11 +37,10 @@ export async function POST(req: Request) {
       );
     }
 
-    // 3) Find token
-    const record = await prisma.passwordResetToken.findUnique({
+    // 3) Retrieve token record — we do NOT use a strict select to remain compatible
+    // across both `expiresAt` and legacy `expires` schemas.
+    const record: any = await prisma.passwordResetToken.findUnique({
       where: { token },
-      // ✅ Per your error, the model has `expires` (not `expiresAt`)
-      select: { id: true, userId: true, expires: true },
     });
 
     if (!record) {
@@ -50,21 +50,34 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4) Check expiry using `expires`
-    if (record.expires <= new Date()) {
-      // Token expired → delete and inform client
+    // 4) Compute expiry using either field
+    const expiresValue: Date | null =
+      record.expiresAt instanceof Date
+        ? record.expiresAt
+        : record.expires instanceof Date
+        ? record.expires
+        : null;
+
+    if (!expiresValue) {
+      // If neither field exists, treat as invalid
+      await prisma.passwordResetToken.delete({ where: { token } });
+      return NextResponse.json({ error: "Invalid token" }, { status: 400 });
+    }
+
+    // 5) Check expiration
+    if (expiresValue <= new Date()) {
       await prisma.passwordResetToken.delete({ where: { token } });
       return NextResponse.json({ error: "Token expired" }, { status: 400 });
     }
 
-    // 5) Hash new password and update
+    // 6) Update user's password
     const hashedPassword = await bcrypt.hash(password, 10);
     await prisma.user.update({
       where: { id: record.userId },
       data: { hashedPassword },
     });
 
-    // 6) Clean up tokens (prevent reuse)
+    // 7) Cleanup all reset tokens for this user (invalidate links)
     await prisma.passwordResetToken.deleteMany({
       where: { userId: record.userId },
     });
@@ -72,9 +85,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[ResetPassword] Error:", err);
-    return NextResponse.json(
-      { error: "Internal Server Error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
