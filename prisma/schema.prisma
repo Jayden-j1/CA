@@ -2,13 +2,12 @@
 //
 // Purpose:
 // - Single source of truth for DB models.
-// - Soft delete support via `User.isActive` (Boolean).
-// - Payment history stays intact while deactivating staff in UI.
-// - ✅ NEW: PasswordResetToken model for secure, expirable reset tokens.
+// - Adds PasswordResetToken model for forgot-password/reset-password flow.
+// - We keep Payment history + soft delete (isActive) unchanged.
 //
-// After editing this file:
-//   1) npx prisma migrate dev --name add_password_reset_token
-//   2) npx prisma generate
+// After editing this file, run:
+//   npx prisma migrate dev --name add_password_reset_token
+//   npx prisma generate
 
 generator client {
   provider = "prisma-client-js"
@@ -34,7 +33,7 @@ model User {
 
   businessId     String?
 
-  // ✅ Soft-delete flag. Active users show in UI. Inactive remain for audit.
+  // ✅ Soft-delete flag. Active users show in UI. Inactive users remain for audit.
   isActive       Boolean   @default(true)
 
   // Timestamps
@@ -48,7 +47,7 @@ model User {
   sessions       Session[]
   business       Business? @relation(fields: [businessId], references: [id])
 
-  // ✅ Password reset tokens relationship
+  // ✅ Relation to password reset tokens
   passwordResetTokens PasswordResetToken[]
 }
 
@@ -112,20 +111,20 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-enum PaymentPurpose {
-  PACKAGE
-  STAFF_SEAT
-}
-
-// ✅ NEW: Dedicated reset token model (do NOT reuse VerificationToken to keep concerns separate)
+// ✅ NEW: Token model for forgot-password flow
 model PasswordResetToken {
   id        String   @id @default(cuid())
-  token     String   @unique
-  userId    String
-  expires   DateTime
+  token     String   @unique        // random, unguessable
+  userId    String                    // FK → User
+  expiresAt DateTime                  // when the token expires
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id])
 
   @@index([userId])
+}
+
+enum PaymentPurpose {
+  PACKAGE
+  STAFF_SEAT
 }

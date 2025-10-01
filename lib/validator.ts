@@ -1,26 +1,23 @@
-// lib/validators.ts
+// lib/validator.ts
 //
 // Purpose:
-// - Central place for custom validators (like password complexity).
-// - Keeps rules consistent between signup, staff add, and future reset-password.
+// - Central place to keep simple, consistent validators.
+// - Strong password rule used by signup + reset-password.
 //
-// Why regex?
-// - Simple, fast, widely supported.
-// - Easy to adjust rules later (e.g., minimum length).
+// Rule:
+// - Min length: 8
+// - At least 1 uppercase letter
+// - At least 1 lowercase letter
+// - At least 1 number
+// - At least 1 special character
 
-/**
- * Validate password complexity.
- * Rules:
- * - Min 8 chars
- * - At least 1 uppercase
- * - At least 1 lowercase
- * - At least 1 number
- * - At least 1 special char
- *
- * Returns: true if valid, false otherwise.
- */
-export function isStrongPassword(password: string): boolean {
-  const complexityRegex =
-    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
-  return complexityRegex.test(password);
+export function isStrongPassword(pw: string): boolean {
+  if (!pw || pw.length < 8) return false;
+
+  const hasUpper = /[A-Z]/.test(pw);
+  const hasLower = /[a-z]/.test(pw);
+  const hasNumber = /\d/.test(pw);
+  const hasSpecial = /[ !"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(pw);
+
+  return hasUpper && hasLower && hasNumber && hasSpecial;
 }
