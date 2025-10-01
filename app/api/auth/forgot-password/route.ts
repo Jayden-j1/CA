@@ -1,15 +1,4 @@
 // app/api/auth/forgot-password/route.ts
-//
-// Purpose:
-// - Accept a user's email, issue a secure reset token, and send a password reset email.
-// - Canonical schema uses `expiresAt` (DateTime).
-// - To unblock deployments where Prisma Client or DB still use `expires`, we
-//   add a compatibility fallback that writes `expires` instead.
-//
-// Security:
-// - We never reveal whether an email exists (always return { ok: true }).
-// - Tokens are random, single-use, and time-limited.
-// - Email sending is centralized via lib/email/resendClient.ts.
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -34,38 +23,21 @@ export async function POST(req: Request) {
 
     // 3) Create secure token + expiry (1 hour from now)
     const token = crypto.randomBytes(32).toString("hex");
-    const expiresDate = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h
 
-    // 4) Persist token — prefer `expiresAt`, but fall back to `expires` if needed
-    try {
-      // PRIMARY path: your schema shows `expiresAt`
-      await prisma.passwordResetToken.create({
-        data: {
-          token,
-          userId: user.id,
-          // `as any` is used temporarily to compile even if Prisma Client types
-          // are from an older schema. You can remove `as any` once your types are up-to-date.
-          expiresAt: expiresDate,
-        } as any,
-      });
-    } catch (e) {
-      // FALLBACK path: some environments still use `expires`
-      console.warn(
-        "[ForgotPassword] Falling back to `expires` field (older schema). Please run Prisma migrate/generate."
-      );
-      await prisma.passwordResetToken.create({
-        data: {
-          token,
-          userId: user.id,
-          expires: expiresDate,
-        } as any,
-      });
-    }
+    // 4) Persist token in DB
+    await prisma.passwordResetToken.create({
+      data: {
+        token,
+        userId: user.id,
+        expiresAt, // ✅ must match your schema exactly
+      },
+    });
 
-    // 5) Build reset URL for the email
+    // 5) Build reset URL
     const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL}/reset-password/${token}`;
 
-    // 6) Send email via centralized helper (Resend + React Email)
+    // 6) Send email
     await sendResetPasswordEmail({ to: email, resetUrl });
 
     // 7) Always respond ok
