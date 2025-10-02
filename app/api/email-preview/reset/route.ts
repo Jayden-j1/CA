@@ -1,18 +1,3 @@
-// app/email-preview/reset/route.ts
-//
-// Purpose:
-// - Developer-only HTML preview for the ResetPasswordEmail React template.
-// - Helps you iterate on the email without sending it via Resend.
-// - BLOCKED in production for safety.
-//
-// How to use (dev):
-// - Start dev: npm run dev
-// - Visit http://localhost:3000/email-preview/reset
-//
-// Notes:
-// - We use @react-email/render to convert the React component to HTML.
-// - If you want to preview with a custom reset URL, you can pass ?url=... query param.
-
 import { NextResponse } from "next/server";
 import { render } from "@react-email/render";
 import ResetPasswordEmail from "@/emails/ResetPasswordEmail";
