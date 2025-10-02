@@ -17,7 +17,8 @@
     "test:watch": "jest --watch",
     "jest-test": "jest",
     "test:ci": "jest --ci --reporters=default --reporters=jest-junit",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "token:maintain": "tsx scripts/passwordResetToken.maintain.ts"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",

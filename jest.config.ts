@@ -25,6 +25,7 @@ const config: Config = {
   clearMocks: true,
   resetMocks: true,
   restoreMocks: true,
+  modulePaths: ["<rootDir>"]
 };
 
 export default config;

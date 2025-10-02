@@ -3,17 +3,17 @@
 // Purpose:
 // - Accept a user's email, issue a secure single-use reset token, and email a reset link.
 // - Uses canonical schema field `expiresAt` (DateTime) on PasswordResetToken.
-// - Silent-success strategy: Do not leak if the email exists or not.
+// - Silent-success strategy: Do not leak whether the email exists.
 //
 // Why this version:
 // - Your DB schema + Prisma Client are now aligned (expiresAt exists).
-// - Removed the old "expires" fallback paths to keep it clean and robust.
+// - Removed old "expires" fallbacks to keep it clean and robust.
 // - Keeps token issuance centralized and emails sent via Resend helper.
 //
 // Security considerations:
 // - Silent success prevents attackers from enumerating valid emails.
 // - Token is a random 32-byte hex (unguessable).
-// - Token expires in 1 hour; the reset route validates and invalidates it on use.
+// - Token expires in 1 hour; the reset route validates + invalidates it on use.
 // - This API does not reveal anything sensitive in responses.
 
 import { NextResponse } from "next/server";
@@ -63,11 +63,11 @@ export async function POST(req: Request) {
     // - userId: link to the user
     // - expiresAt: when token becomes invalid
     //
-    // Note:
-    // - If you want to invalidate prior tokens automatically, you could
-    //   add a cleanup here:
-    //   await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
-    //   Just be aware this changes behavior (only latest token remains valid).
+    // Note (optional behavior):
+    // - If you want to invalidate prior tokens automatically, you could add:
+    //     await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
+    //   This ensures *only the most recent token* works. Left commented to keep
+    //   current behavior (multiple unexpired tokens could exist).
     await prisma.passwordResetToken.create({
       data: {
         token,
@@ -79,16 +79,16 @@ export async function POST(req: Request) {
     // ---------------------------------------------------------
     // 5) Build reset URL for the email
     // ---------------------------------------------------------
-    // The reset page will read the token from the URL and allow the
-    // user to set a new password after re-validating the token server-side.
+    // The reset page will read the token from the URL and allow the user
+    // to set a new password after re-validating the token server-side.
     const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL}/reset-password/${token}`;
 
     // ---------------------------------------------------------
     // 6) Send the reset email via Resend + React Email
     // ---------------------------------------------------------
     // - Centralized in lib/email/resendClient to keep concerns isolated.
-    // - If email provider is temporarily down, we still return ok (to prevent
-    //   user enumeration or abuse-friendly feedback). You can log errors internally.
+    // - If the provider is temporarily down, we still return ok (to prevent
+    //   user enumeration or abuse-friendly feedback). You can log errors.
     await sendResetPasswordEmail({ to: email, resetUrl });
 
     // ---------------------------------------------------------
