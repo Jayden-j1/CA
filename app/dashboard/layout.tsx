@@ -2,19 +2,19 @@
 //
 // Purpose:
 // - Layout wrapper for all *dashboard* pages (protected area).
-// - Uses the centralized, config-driven DashboardNavbar.
-// - Excludes the public navbar and footer (no stacking).
-// - Adds an optional minimal dashboard footer (customizable later).
+// - Uses the centralized, config-driven DashboardNavbar (the one that
+//   reads role/payment-aware nav rules from config/navigation.ts).
 //
-// Notes:
-// - This ensures the dashboard feels like a self-contained app.
-// - IMPORTANT: We import from "@/components/dashboard/DashboardNav"
-//   so we use the correct Navbar that consumes config/navigation.ts.
+// Key fix in this version:
+// - Import the **correct** DashboardNavbar (named export) from Header/NavBar.
+//   Previously this layout pointed to a different component path, so any
+//   improvements to Header/NavBar were not reflected in the dashboard UI.
 
 "use client";
 
 import { ReactNode } from "react";
-import DashboardNavbar from "@/components/dashboard/DashBoardNav";
+// ✅ Use the named export from Header/NavBar (this is the one you shared)
+import { DashboardNavbar } from "@/components/Header/NavBar";
 
 interface DashboardLayoutProps {
   children: ReactNode;
