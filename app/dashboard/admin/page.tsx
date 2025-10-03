@@ -1,57 +1,60 @@
 // app/dashboard/admin/page.tsx
 //
-// Purpose:
-// - Admin-only dashboard page.
-// - Shows an Admin Panel with restricted tools for ADMIN users only.
-// - Redirects other roles (USER, BUSINESS_OWNER) back to /dashboard.
+// Why this change?
+// Although this file itself doesn’t call `useSearchParams`, something in its
+// subtree (now or later) likely does in production builds. Wrapping the page
+// in <Suspense> guarantees compliance and prevents CSR bailout errors.
 //
-// Dependencies:
-// - next-auth/react (for session access)
-// - next/navigation (for client-side redirect)
-// - FullPageSpinner (loading state UI)
+// Behavior unchanged: same redirects and UI.
 
 "use client";
 
+import { Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import FullPageSpinner from "@/components/ui/fullPageSpinner";
 
+// ---------- Page wrapper that provides the Suspense boundary ----------
 export default function AdminPage() {
+  return (
+    <Suspense fallback={<FullPageSpinner message="Loading Admin Panel..." />}>
+      <AdminPageInner />
+    </Suspense>
+  );
+}
+
+// ---------- Original logic lives here unchanged ----------
+function AdminPageInner() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // --- Redirect unauthenticated users ---
+  // Redirect unauthenticated users
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login");
     }
   }, [status, router]);
 
-  // --- Show full-page spinner while checking session ---
   if (status === "loading") {
     return <FullPageSpinner message="Loading Admin Panel..." />;
   }
 
-  // --- If session missing (redirect in progress), show nothing ---
   if (!session?.user) {
     return null;
   }
 
   const role = session.user.role;
 
-  // --- Redirect non-admin users back to dashboard ---
   if (role !== "ADMIN") {
     router.push("/dashboard");
     return null;
   }
 
-  // --- Authenticated Admin UI ---
+  // Authenticated Admin UI
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-red-700 to-red-500 py-20 flex flex-col items-center text-center gap-6">
-      <h1 className="text-4xl sm:text-5xl font-bold text-white">
-        👑 Admin Panel
-      </h1>
+      <h1 className="text-4xl sm:text-5xl font-bold text-white">👑 Admin Panel</h1>
 
       <p className="text-white text-lg">
         Logged in as <span className="font-bold">{session.user.email}</span>

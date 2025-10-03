@@ -1,27 +1,15 @@
 // app/dashboard/billing/page.tsx
 //
-// Purpose:
-// - Billing dashboard with payments table + filters + CSV export.
-// - Export includes Purpose (PACKAGE vs STAFF_SEAT) and Role (USER/ADMIN/BUSINESS_OWNER).
-//
-// IMPORTANT ACCESS RULES:
-// - Allow: BUSINESS_OWNER, ADMIN
-// - Allow: USER who purchased individually (hasPaid = true AND businessId is null)
-// - Deny: USER staff-seat (businessId != null) → redirect back to /dashboard
-//
-// Why guard the page (not just the nav)?
-// - Users can type /dashboard/billing manually. This guard ensures they still can’t access it.
-// - Navbar remains a convenience, but page-level checks enforce security.
+// Optional hardening: wrap page in <Suspense> to future-proof against any
+// nested component introducing useSearchParams/useRouter bailouts.
 
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
-// ------------------------------
-// Shape of API response
-// ------------------------------
 interface PaymentRecord {
   id: string;
   amount: number;
@@ -41,9 +29,6 @@ interface UserOption {
   name: string | null;
 }
 
-// ------------------------------
-// Badge for payment purpose
-// ------------------------------
 function PurposeBadge({ purpose }: { purpose: string }) {
   const style =
     purpose === "STAFF_SEAT"
@@ -57,27 +42,34 @@ function PurposeBadge({ purpose }: { purpose: string }) {
   );
 }
 
+// ---------- Page wrapper with Suspense ----------
 export default function BillingPage() {
-  // ------------------------------
-  // 1) Session + access gate
-  // ------------------------------
+  return (
+    <Suspense
+      fallback={
+        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+          <p className="text-white text-xl">Loading billing…</p>
+        </section>
+      }
+    >
+      <BillingPageInner />
+    </Suspense>
+  );
+}
+
+// ---------- Original logic unchanged ----------
+function BillingPageInner() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Compute access based on role + ownership vs staff seat
   const role = session?.user?.role;
   const businessId = session?.user?.businessId || null;
   const hasPaid = !!session?.user?.hasPaid;
 
   const allowBilling = useMemo(() => {
     if (!role) return false;
-
-    // BUSINESS_OWNER or ADMIN → always allowed
     if (role === "BUSINESS_OWNER" || role === "ADMIN") return true;
 
-    // USER:
-    // - If staff-seat: role USER + businessId != null → deny
-    // - If individual user: businessId == null → allowed only if hasPaid
     if (role === "USER") {
       const isStaffSeatUser = !!businessId;
       if (isStaffSeatUser) return false;
@@ -87,15 +79,13 @@ export default function BillingPage() {
     return false;
   }, [role, businessId, hasPaid]);
 
-  // Redirect away if not allowed (once session is ready)
   useEffect(() => {
     if (status === "loading") return;
     if (!allowBilling) {
-      router.replace("/dashboard"); // silently go back to dashboard
+      router.replace("/dashboard");
     }
   }, [status, allowBilling, router]);
 
-  // While loading session or redirecting
   if (status === "loading" || !allowBilling) {
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
@@ -104,9 +94,6 @@ export default function BillingPage() {
     );
   }
 
-  // ------------------------------
-  // 2) Billing table + filters + CSV
-  // ------------------------------
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -163,7 +150,6 @@ export default function BillingPage() {
   );
 
   const exportCSV = () => {
-    // Add "Role" + "Purpose" to headers
     const headers = [
       "User",
       "Email",
@@ -175,23 +161,20 @@ export default function BillingPage() {
       "Date",
     ];
 
-    // Rows reflect the headers order
     const rows = payments.map((p) => [
       p.user?.name || "Unnamed",
       p.user?.email || "",
       p.user?.role || "N/A",
       p.description,
-      p.purpose, // "PACKAGE" or "STAFF_SEAT"
+      p.purpose,
       p.amount,
       p.currency.toUpperCase(),
       new Date(p.createdAt).toLocaleString(),
     ]);
 
-    // Build CSV
     const csvContent =
       [headers, ...rows].map((row) => row.map(String).join(",")).join("\n");
 
-    // Trigger download
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -200,9 +183,6 @@ export default function BillingPage() {
     link.click();
   };
 
-  // ------------------------------
-  // Final Render
-  // ------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">

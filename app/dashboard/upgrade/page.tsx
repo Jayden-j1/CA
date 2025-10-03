@@ -1,22 +1,12 @@
 // app/dashboard/upgrade/page.tsx
 //
-// Purpose:
-// - Shown to logged-in users who have NOT purchased a package.
-// - Encourages upgrading to unlock Map + Course Content.
-// - Prices pulled from NEXT_PUBLIC_* env vars (consistent with services page).
-//
-// Features:
-// - Uses reusable <CheckoutButton /> for Stripe checkout.
-// - Displays success/error toasts based on Stripe redirect.
-// - Handles ?success, ?canceled, and ?error query params via <SearchParamsWrapper>.
-// - Supports staff seat purchases too, future-proof for business owners.
-//
-// Security:
-// - Prices shown here are for display only.
-// - Actual charges always come from STRIPE_*_PRICE on the server side.
+// Why this change?
+// This page uses `useSearchParams()` inside UpgradeToastHandler.
+// We wrap that subtree in <Suspense> so hydration can safely suspend.
 
 "use client";
 
+import { Suspense } from "react";
 import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
@@ -61,16 +51,19 @@ function UpgradeToastHandler() {
 // Main Upgrade Page
 // ------------------------------
 export default function UpgradePage() {
-  // ✅ Read display prices from env
+  // Display prices only (authoritative prices resolved server-side)
   const individualPrice = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "80";
   const businessPrice = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "200";
   const staffSeatPrice = process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE || "50";
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
-      <SearchParamsWrapper>
-        <UpgradeToastHandler />
-      </SearchParamsWrapper>
+      {/* ✅ Suspense boundary to safely use useSearchParams() */}
+      <Suspense fallback={null}>
+        <SearchParamsWrapper>
+          <UpgradeToastHandler />
+        </SearchParamsWrapper>
+      </Suspense>
 
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
         Upgrade Required

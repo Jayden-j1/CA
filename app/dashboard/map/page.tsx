@@ -1,20 +1,19 @@
 // app/dashboard/map/page.tsx
 //
-// Purpose:
-// - Gate the Map page based on payment/subscription.
-// - If the session says hasPaid === true, unlock immediately (fast path).
-// - Query /api/payments/check to populate package info and as server-source-of-truth.
-// - On /dashboard/map?success=true (post-checkout), poll briefly so webhook can land
-//   and unlock access without bouncing the user to the Upgrade page.
+// Why this change?
+// Next.js App Router requires any component calling `useSearchParams()`
+// to render within a <Suspense> boundary. This file now:
+//   1) Exposes a tiny page wrapper that renders <Suspense fallback=...>
+//   2) Moves the original logic into <MapPageInner/> (unchanged behavior)
 //
-// Pillars:
-// - Efficiency: fast allow via session; one server probe, short polling only when needed.
-// - Robustness: abort controller, duplicate-redirect guard, safe fallbacks.
-// - Simplicity: no external libs; a single effect orchestrates flow.
-// - Security: trust the server for final authorization.
+// NOTES
+// - Only structure changed (wrapper + inner); the gating logic is identical.
+// - This avoids Vercel build errors and is future-proof if nested children
+//   introduce `useSearchParams()` or other suspending hooks.
 
 "use client";
 
+import { Suspense } from "react"; // ✅ Suspense boundary
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -30,7 +29,24 @@ interface PaymentCheckResponse {
   } | null;
 }
 
+// ---------- Page wrapper that provides the Suspense boundary ----------
 export default function MapPage() {
+  return (
+    <Suspense
+      // Keep fallback visual consistent with your brand
+      fallback={
+        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+          <p className="text-white text-xl">Loading map…</p>
+        </section>
+      }
+    >
+      <MapPageInner />
+    </Suspense>
+  );
+}
+
+// ---------- Original logic lives here unchanged ----------
+function MapPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();

@@ -1,17 +1,12 @@
 // app/dashboard/course/page.tsx
 //
-// Purpose:
-// - Gated Course content.
-// - Unlock quickly if session.hasPaid === true, then confirm + hydrate details via API.
-// - On /dashboard/course?success=true after checkout, poll briefly so webhook can land.
-//
-// Pillars:
-// - Efficiency: quick allow via session, short poll only when needed.
-// - Robustness: abort controller, duplicate-redirect guard.
-// - Security: server remains source-of-truth.
+// Same pattern as /dashboard/map:
+// - Wrap whole page in <Suspense> so `useSearchParams()` can safely suspend.
+// - Move existing logic into <CourseContentInner/> without changing behavior.
 
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -26,7 +21,23 @@ interface PaymentCheckResponse {
   } | null;
 }
 
+// ---------- Page wrapper that provides the Suspense boundary ----------
 export default function CourseContentPage() {
+  return (
+    <Suspense
+      fallback={
+        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+          <p className="text-white text-xl">Loading course…</p>
+        </section>
+      }
+    >
+      <CourseContentInner />
+    </Suspense>
+  );
+}
+
+// ---------- Original logic lives here unchanged ----------
+function CourseContentInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
