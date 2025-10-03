@@ -66,7 +66,7 @@ model Payment {
   userId      String
   amount      Float
   currency    String
-  stripeId    String
+  stripeId    String         @unique
   description String
   createdAt   DateTime       @default(now())
 
