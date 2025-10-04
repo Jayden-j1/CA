@@ -1,20 +1,11 @@
 // components/forms/AddStaffForm.tsx
 //
-// Purpose:
-// - UI for adding staff members (USER or ADMIN).
-// - Fetches the "effective" business domain so users know which emails are allowed.
-// - Validates the email client-side BEFORE sending to server
-//   (server still enforces the same rule).
-// - Sends staff details to /api/staff/add.
-// - Redirects to Stripe Checkout.
+// Changes:
+// - Import and apply the SAME strong password validator used at signup.
+// - Show clear inline help if the password is too weak.
+// - No API shape changes: still POSTs to /api/staff/add with name/email/password/isAdmin/businessId.
 //
-// UX:
-// - Shows a clear hint: "Only @example.com or subdomains are allowed".
-// - Inline feedback turns red if the entered email doesn't match the rule.
-// - Submit is disabled while domain is loading or invalid.
-//
-// Security notes:
-// - Client validation is a convenience; server route fully enforces the rule.
+// Why: keep logic simple and safe. Server validates again (defense-in-depth).
 
 "use client";
 
@@ -22,10 +13,8 @@ import ButtonWithSpinner from "../ui/buttonWithSpinner";
 import { useState, FormEvent, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
+import { isStrongPassword } from "@/lib/validator"; // ✅ re-use same rule
 
-// ---------- Local helpers ----------
-
-/** Extract lowercase domain from an email address. Returns null if invalid. */
 function extractDomain(email: string | null | undefined): string | null {
   if (!email) return null;
   const at = email.lastIndexOf("@");
@@ -33,12 +22,6 @@ function extractDomain(email: string | null | undefined): string | null {
   return email.slice(at + 1).toLowerCase().trim();
 }
 
-/**
- * Returns true if the candidate domain is allowed under the business domain.
- * Allowed:
- * - candidate === businessDomain
- * - candidate ends with "." + businessDomain (true subdomain)
- */
 function isAllowedDomain(candidate: string | null, businessDomain: string | null): boolean {
   if (!candidate || !businessDomain) return false;
   if (candidate === businessDomain) return true;
@@ -50,9 +33,9 @@ interface AddStaffFormProps {
 }
 
 export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
-  const { data: session } = useSession(); // provides businessId, role, email
+  const { data: session } = useSession();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");         // staff email being invited/created
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -64,7 +47,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
   const [domainLoading, setDomainLoading] = useState(false);
   const [domainError, setDomainError] = useState<string | null>(null);
 
-  // Toggle password visibility
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
 
   // Fetch the effective business domain on mount
@@ -89,7 +71,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       }
     };
 
-    // Only attempt if user is authenticated and belongs to a business
     if (session?.user?.businessId) {
       fetchDomain();
     } else {
@@ -101,19 +82,17 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
   // Compute candidate domain from the email input
   const candidateDomain = useMemo(() => extractDomain(email), [email]);
 
-  // Determine if the email is valid for the effective domain
+  // Validate domain + password client-side for good UX
   const emailDomainValid = useMemo(() => {
-    // While loading domain or no domain present, we cannot validate.
-    // We'll disable submit in these cases.
     if (!effectiveDomain) return false;
     return isAllowedDomain(candidateDomain, effectiveDomain);
   }, [candidateDomain, effectiveDomain]);
 
-  // Handle submit
+  const passwordStrong = useMemo(() => isStrongPassword(password), [password]);
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    // Pre-flight guardrails
     const businessId = session?.user?.businessId;
     if (!businessId) {
       toast.error("You must belong to a business to add staff.");
@@ -127,13 +106,19 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       toast.error(`Email must use your company domain: @${effectiveDomain} (or a subdomain).`);
       return;
     }
+    if (!passwordStrong) {
+      toast.error(
+        "Default password must be 8+ chars and include uppercase, lowercase, number, and special character."
+      );
+      return;
+    }
 
     setLoading(true);
     try {
       const res = await fetch("/api/staff/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // We include businessId explicitly for the API (also validated server-side)
+        // BusinessId is validated server-side too
         body: JSON.stringify({ name, email: email.toLowerCase(), password, isAdmin, businessId }),
       });
 
@@ -144,12 +129,13 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       }
 
       if (data.checkoutUrl) {
-        // Redirect to Stripe
+        // Paid seat flow → redirect to Stripe
         window.location.href = data.checkoutUrl;
         return;
       }
 
-      toast.success("🎉 Staff created successfully (no payment link).");
+      // Free seat flow
+      toast.success("🎉 Staff created successfully.");
       setName("");
       setEmail("");
       setPassword("");
@@ -163,7 +149,6 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
     }
   };
 
-  // Render helper: instruction text below the email field
   const emailHelpText = useMemo(() => {
     if (domainLoading) return "Resolving your company domain...";
     if (domainError) return domainError;
@@ -174,11 +159,19 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       : `✖ Invalid: must use @${effectiveDomain} or a subdomain (e.g., team.${effectiveDomain}).`;
   }, [domainLoading, domainError, effectiveDomain, email, emailDomainValid]);
 
+  const passwordHelpText = useMemo(() => {
+    if (!password) return "Set a default password. The staff member will be forced to change it on first login.";
+    return passwordStrong
+      ? "✔ Strong password."
+      : "✖ Must be 8+ chars and include uppercase, lowercase, number, and special character.";
+  }, [password, passwordStrong]);
+
   const submitDisabled =
     loading ||
     domainLoading ||
-    !effectiveDomain || // need a domain to validate
-    !emailDomainValid;  // enforce rule
+    !effectiveDomain ||
+    !emailDomainValid ||
+    !passwordStrong;
 
   return (
     <form
@@ -230,9 +223,9 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         {emailHelpText}
       </p>
 
-      {/* Staff Password */}
+      {/* Default Password */}
       <label htmlFor="password" className="text-white font-bold text-sm md:text-base">
-        Password
+        Default Password (staff will change this on first login)
       </label>
       <div className="relative">
         <input
@@ -242,7 +235,8 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
           onChange={(e) => setPassword(e.target.value)}
           required
           placeholder="Enter password"
-          className="block w-full border-white border-2 rounded-2xl px-4 py-3 pr-20 bg-transparent text-white placeholder-white"
+          className={`block w-full border-2 rounded-2xl px-4 py-3 pr-20 bg-transparent text-white placeholder-white
+            ${password ? (passwordStrong ? "border-green-400" : "border-red-400") : "border-white"}`}
         />
         <button
           type="button"
@@ -253,6 +247,9 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
           {showPassword ? "Hide" : "Show"}
         </button>
       </div>
+      <p className={`text-xs ${password ? (passwordStrong ? "text-green-200" : "text-red-200") : "text-white/80"}`}>
+        {passwordHelpText}
+      </p>
 
       {/* Make Admin Option */}
       <div className="flex items-center gap-2 mt-2 relative">

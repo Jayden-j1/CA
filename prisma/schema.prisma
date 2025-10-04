@@ -1,13 +1,10 @@
 // prisma/schema.prisma
 //
 // Purpose:
-// - Single source of truth for DB models.
-// - Adds PasswordResetToken model for forgot-password/reset-password flow.
-// - We keep Payment history + soft delete (isActive) unchanged.
-//
-// After editing this file, run:
-//   npx prisma migrate dev --name add_password_reset_token
-//   npx prisma generate
+// - Add `mustChangePassword` to User so newly created staff are forced to update
+//   their default password on first login.
+// - This is a simple, robust, and auditable switch we can enforce in middleware.
+// - Acts as the single source of truth for Prisma + PostgreSQL models.
 
 generator client {
   provider = "prisma-client-js"
@@ -25,7 +22,7 @@ model User {
   emailVerified  DateTime?
   image          String?
 
-  // Bcrypt-hashed password (NOT plaintext)
+  // 🔐 Bcrypt-hashed password (NEVER plaintext)
   hashedPassword String?   @map("password")
 
   // Role: USER | BUSINESS_OWNER | ADMIN
@@ -33,21 +30,20 @@ model User {
 
   businessId     String?
 
-  // ✅ Soft-delete flag. Active users show in UI. Inactive users remain for audit.
-  isActive       Boolean   @default(true)
+  // ✅ Account flags
+  isActive           Boolean @default(true)   // soft-delete flag
+  mustChangePassword Boolean @default(false)  // force password update on first login
 
-  // Timestamps
+  // 📅 Timestamps
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  // Relations
+  // 🔗 Relations
   accounts       Account[]
   ownedBusiness  Business? @relation("BusinessOwner")
   payments       Payment[]
   sessions       Session[]
   business       Business? @relation(fields: [businessId], references: [id])
-
-  // ✅ Relation to password reset tokens
   passwordResetTokens PasswordResetToken[]
 }
 
@@ -57,6 +53,8 @@ model Business {
   domain    String   @unique
   ownerId   String   @unique
   createdAt DateTime @default(now())
+
+  // 🔗 Relations
   owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
   users     User[]
 }
@@ -73,6 +71,7 @@ model Payment {
   // Strongly typed purpose field: PACKAGE vs STAFF_SEAT
   purpose     PaymentPurpose @default(PACKAGE)
 
+  // 🔗 Relations
   user        User           @relation(fields: [userId], references: [id])
 }
 
@@ -90,6 +89,7 @@ model Account {
   id_token          String?
   session_state     String?
 
+  // 🔗 Relations
   user              User    @relation(fields: [userId], references: [id])
 
   @@unique([provider, providerAccountId])
@@ -100,6 +100,8 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+
+  // 🔗 Relations
   user         User     @relation(fields: [userId], references: [id])
 }
 
@@ -111,14 +113,15 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// ✅ NEW: Token model for forgot-password flow
+// ✅ Token model for forgot-password flow
 model PasswordResetToken {
   id        String   @id @default(cuid())
   token     String   @unique        // random, unguessable
-  userId    String                    // FK → User
-  expiresAt DateTime                  // when the token expires
+  userId    String                   // FK → User
+  expiresAt DateTime                 // when the token expires
   createdAt DateTime @default(now())
 
+  // 🔗 Relations
   user      User     @relation(fields: [userId], references: [id])
 
   @@index([userId])
