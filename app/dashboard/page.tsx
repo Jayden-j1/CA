@@ -18,6 +18,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import FullPageSpinner from "@/components/ui/fullPageSpinner";
+import TextType from "@/components/dashboard/TypingText";
 
 export default function DashboardPage() {
   const { data: session, status } = useSession();
@@ -43,14 +44,24 @@ export default function DashboardPage() {
   const role = session.user.role; // e.g., "USER" | "BUSINESS_OWNER" | "ADMIN"
 
   // --- Role-aware greeting ---
-  let greeting = "Welcome back!";
-  if (role === "BUSINESS_OWNER") greeting = "🎉 Welcome back, Business Owner!";
-  if (role === "USER") greeting = "🎉 Welcome back!";
-  if (role === "ADMIN") greeting = "👑 Welcome back, Admin!";
+  let greeting = 
+    <TextType 
+      text={["🎉 Jingi Walla!"]}
+      typingSpeed={75}
+      pauseDuration={1500}
+      showCursor={true}
+      cursorCharacter="|"
+    />;
+  if (role === "BUSINESS_OWNER") greeting;
+  if (role === "USER") greeting ;
+  if (role === "ADMIN") greeting;
 
   // --- Authenticated Dashboard Content ---
   return (
-    <section className="w-full py-10 flex flex-col items-center text-center gap-6">
+    
+<div className="grid grid-cols-5 grid-rows-5 gap-4">
+    <div className="col-span-3 row-span-2">
+      <section className="w-full py-10 flex flex-col items-center text-center gap-6">
       {/* Greeting headline */}
       <h1 className="text-4xl sm:text-5xl font-bold text-black">{greeting}</h1>
 
@@ -62,8 +73,15 @@ export default function DashboardPage() {
 
       {/* Example dashboard-specific content */}
       <p className="mt-4 text-black">
-        This is your personalised dashboard. Use the top navigation bar to navigate.
+        This is your personalised dashboard.<br/> Use the top navigation bar to navigate.
       </p>
     </section>
+    </div>
+    <div className="col-span-2 row-span-2 col-start-4">2</div>
+    <div className="col-span-3 row-span-3 row-start-3">3</div>
+    <div className="col-span-2 row-span-3 col-start-4 row-start-3">4</div>
+</div>
+    
+    
   );
 }
