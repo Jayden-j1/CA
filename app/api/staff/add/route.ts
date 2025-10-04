@@ -6,13 +6,14 @@
 // - New staff are always created with mustChangePassword = true.
 // - If under free staff limit → user created immediately, no payment.
 // - If over free staff limit → user still created, then owner is redirected to Stripe checkout.
-//   Stripe metadata contains staffUserId so webhook can later record payment for that staff.
+//   Stripe metadata contains **userId** and **purpose=STAFF_SEAT** so the webhook can
+//   correctly persist a Payment row that unlocks the staff account.
 //
-// Pillars (why this design):
-// - Efficiency: one simple flow for both free and paid seats.
-// - Robustness: always create the staff user first → avoids dangling Stripe records.
-// - Simplicity: rely on a single mustChangePassword flag to enforce first-login password reset.
-// - Security: password is hashed, strong password enforced server-side, role checked.
+// Why this fixes your issues:
+// - Previously, metadata didn't include `userId` nor `purpose`, so the webhook
+//   couldn't attach the payment to the staff user (no DB row → locked pages).
+// - With correct metadata, the webhook writes a `Payment{ purpose: 'STAFF_SEAT' }`
+//   for the staff's userId. Your gating + billing then see the payment immediately.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -30,7 +31,6 @@ export async function POST(req: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
   if (session.user.role !== "BUSINESS_OWNER" && session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Only business owners or admins can add staff" }, { status: 403 });
   }
@@ -38,12 +38,11 @@ export async function POST(req: NextRequest) {
   try {
     // --- 2. Parse body ---
     const { name, email, password, isAdmin, businessId } = await req.json();
-
     if (!name || !email || !password || !businessId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // --- 3. Validate password strength ---
+    // --- 3. Validate password strength (same rule as signup) ---
     if (!isStrongPassword(password)) {
       return NextResponse.json(
         { error: "Password too weak: must include upper, lower, number, special, 8+ chars" },
@@ -54,14 +53,13 @@ export async function POST(req: NextRequest) {
     // --- 4. Hash password ---
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // --- 5. Count existing staff (role USER/ADMIN, tied to this business) ---
+    // --- 5. Count existing staff (role USER only; admins are elevated) ---
     const staffCount = await prisma.user.count({
       where: { businessId, role: "USER" },
     });
+    const freeStaffLimit = 1; // allow N free staff seats
 
-    const freeStaffLimit = 1; // e.g. allow 1 free staff
-
-    // --- 6. Create staff user in DB ---
+    // --- 6. Create the staff user first (robust, avoids dangling stripe sessions) ---
     const staffUser = await prisma.user.create({
       data: {
         name,
@@ -74,7 +72,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // --- 7. Free seat flow ---
+    // --- 7. Free seat flow: done. ---
     if (staffCount < freeStaffLimit) {
       return NextResponse.json({
         requiresPayment: false,
@@ -83,8 +81,12 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // --- 8. Paid seat flow → create Stripe checkout session ---
-    const pricePerStaff = Number(process.env.STAFF_SEAT_PRICE || 50); // fallback AUD 50
+    // --- 8. Paid seat flow: create Stripe checkout session with CORRECT metadata ---
+    const pricePerStaff =
+      Number(process.env.STAFF_SEAT_PRICE) ||
+      Number(process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE) ||
+      50; // sensible fallback
+
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -93,17 +95,20 @@ export async function POST(req: NextRequest) {
           price_data: {
             currency: "aud",
             product_data: { name: "Staff Seat" },
-            unit_amount: Math.round(pricePerStaff * 100), // in cents
+            unit_amount: Math.round(pricePerStaff * 100), // cents
           },
           quantity: 1,
         },
       ],
       success_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?success=true`,
       cancel_url: `${process.env.NEXTAUTH_URL}/dashboard/staff?canceled=true`,
+      // 👇👇 THE IMPORTANT PART: tell the webhook who and what this payment is for
       metadata: {
-        businessId,
-        staffUserId: staffUser.id, // ✅ so webhook knows which user to attach payment
-        addedBy: session.user.id,  // audit trail
+        userId: staffUser.id,               // ✅ webhook saves payment for THIS staff user
+        purpose: "STAFF_SEAT",              // ✅ ensures purpose is saved as STAFF_SEAT
+        description: "Staff Seat",          // helpful default
+        businessId,                         // audit / optional
+        addedBy: session.user.id,           // audit / optional
       },
     });
 

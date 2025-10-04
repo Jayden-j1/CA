@@ -1,29 +1,22 @@
 // components/dashboard/DashboardNav.tsx
 //
 // Purpose:
-// - Dashboard Navbar that is 100% config-driven.
-// - It does not hardcode any business rules; instead, it delegates to
-//   filterDashboardNavigation(...) from config/navigation.ts.
-// - NEW: Split desktop nav into *left* and *right* groups using `item.align`
-//   so "Logout" is always rendered at the far right.
+// - Config-driven dashboard navigation.
+// - NOW: also trusts a lightweight server check so the nav updates quickly
+//   after a Stripe webhook (even before NextAuth token refresh).
 //
-// Why this approach?
-// - Single source of truth for visibility (config/navigation.ts).
-// - Zero-code changes for business rules (toggle flags in config).
-// - This component focuses only on layout + calling the filter helper.
-//
-// UX details:
-// - While NextAuth session is hydrating (status === "loading"), we render a
-//   conservative set (filter hides session-dependent items to prevent flicker).
-// - We use useMemo to avoid unnecessary re-renders.
-// - Desktop: left + right groups. Mobile: a flat menu (Logout will appear in
-//   the same list order, which is acceptable for small screens).
+// What changed:
+// - Added a tiny `/api/payments/check` probe on mount to compute `serverHasAccess`.
+// - Use `effectiveHasPaid = sessionHasPaid || serverHasAccess === true`.
+// - Expose `isLoading` while the probe runs to avoid flicker.
+// - (Optional/harmless) If the URL has `?success=true`, we could add short polling
+//   like elsewhere; here we do a single probe for simplicity & performance.
 
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
   NavItem,
@@ -32,8 +25,6 @@ import {
 } from "@/config/navigation";
 
 interface NavbarProps {
-  // Optional: you can override the config navigation from outside,
-  // but usually you let filterDashboardNavigation use its default.
   navigation?: NavItem[];
 }
 
@@ -41,39 +32,79 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const pathname = usePathname();
 
-  // We read the session to get role / businessId / hasPaid flags:
-  //  - status === "loading": NextAuth hasn't finished hydrating session on the client.
   const { data: session, status } = useSession();
   const role = session?.user?.role as Role | undefined;
   const businessId = session?.user?.businessId || null;
-  const hasPaid = Boolean(session?.user?.hasPaid);
-  const isLoading = status === "loading";
+  const sessionHasPaid = Boolean(session?.user?.hasPaid);
 
-  // Ask the central filter to compute the final list based on flags.
+  // ---- NEW: server truth (authoritative) for nav decisions
+  const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
+  const searchParams = useSearchParams();
+  const justSucceeded = searchParams.get("success") === "true";
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // If ?success=true (post-checkout), do a few retries so the nav flips ASAP.
+    const maxAttempts = justSucceeded ? 6 : 1; // ~9s if succeeded (6 * 1.5s)
+    const intervalMs = 1500;
+    let attempts = 0;
+
+    const probe = async () => {
+      try {
+        const res = await fetch("/api/payments/check", { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) setServerHasAccess(Boolean(res.ok && data?.hasAccess));
+      } catch {
+        if (!cancelled) setServerHasAccess(false);
+      } finally {
+        attempts += 1;
+        if (!cancelled && attempts < maxAttempts && serverHasAccess !== true) {
+          timer = setTimeout(probe, intervalMs);
+        }
+      }
+    };
+
+    probe();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, justSucceeded]); // omit serverHasAccess so we don't rearm unnecessarily
+
+  // Effective paid state for nav rules
+  const effectiveHasPaid = sessionHasPaid || serverHasAccess === true;
+
+  // Hide sensitive nav while loading to avoid flicker
+  const isLoading =
+    status === "loading" ||
+    (status === "authenticated" && serverHasAccess === null);
+
   const navItems = useMemo<NavItem[]>(
     () =>
       filterDashboardNavigation({
         navigation,
         role,
         businessId,
-        hasPaid,
+        hasPaid: effectiveHasPaid,
         isLoading,
       }),
-    [navigation, role, businessId, hasPaid, isLoading]
+    [navigation, role, businessId, effectiveHasPaid, isLoading]
   );
 
-  // Split items into left vs right for desktop layout
   const leftItems = navItems.filter((item) => item.align !== "right");
   const rightItems = navItems.filter((item) => item.align === "right");
 
   return (
     <header>
       <nav className="relative bg-white border-gray-200 shadow-sm">
-        {/* =======================
-             Desktop Navigation
-           ======================= */}
+        {/* Desktop */}
         <div className="hidden lg:flex items-center justify-between px-4 py-3">
-          {/* LEFT group: Home, Map, Course, etc. */}
           <div className="flex items-center space-x-6">
             {leftItems.map((item) => (
               <Link
@@ -90,7 +121,6 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
             ))}
           </div>
 
-          {/* RIGHT group: Logout (and any other future right-aligned items) */}
           <div className="flex items-center space-x-6">
             {rightItems.map((item) => (
               <Link
@@ -108,9 +138,7 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
           </div>
         </div>
 
-        {/* =======================
-             Mobile Toggle Button
-           ======================= */}
+        {/* Mobile Toggle */}
         <div className="px-4 py-3 lg:hidden">
           <button
             onClick={() => setIsOpen((open) => !open)}
@@ -122,9 +150,7 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
           </button>
         </div>
 
-        {/* =======================
-             Mobile Menu
-           ======================= */}
+        {/* Mobile Menu */}
         {isOpen && (
           <div className="absolute z-50 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow">
             {navItems.map((item) => (

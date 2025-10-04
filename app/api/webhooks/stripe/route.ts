@@ -1,41 +1,12 @@
 // app/api/webhooks/stripe/route.ts
 //
-// Purpose
-// -------
-// Securely receive Stripe events and persist successful payments into your DB.
-// This is the missing link that flips `hasPaid` to true after checkout, which:
-//   • unlocks Map/Course
-//   • hides "Upgrade"
-//   • shows "Billing" for paid individuals (and for owners/admin)
+// Purpose (unchanged):
+// - Verify Stripe event → persist a Payment row (idempotently).
 //
-// Events handled
-// --------------
-// - checkout.session.completed  (mode=payment, payment_status='paid')
-//
-// Security
-// --------
-// - We verify Stripe's signature using STRIPE_WEBHOOK_SECRET.
-// - We never trust client-provided amounts; we read amount_total from Stripe.
-// - We find the user by metadata.userId (preferred) or fallback to email.
-//
-// Data decisions
-// --------------
-// - We store amount in **dollars** (converted from Stripe cents) to match your UI,
-//   which displays `${payment.amount}` directly.
-// - `purpose` comes from metadata: "PACKAGE" or "STAFF_SEAT".
-// - `description` uses metadata.description, or falls back to the line item/product name.
-// - `stripeId` stores `session.id` for strong idempotency and audit trails.
-//
-// Idempotency
-// -----------
-// - Stripe guarantees at-least-once delivery; we may receive duplicates.
-// - We now rely on `stripeId = session.id` for idempotency. If we already have a row
-//   with the same stripeId, we skip creating another.
-//
-// Environment
-// -----------
-// - STRIPE_WEBHOOK_SECRET (from your Stripe Dashboard / CLI)
-// - We reuse your configured Stripe client from lib/stripe.
+// What changed:
+// - We now accept `metadata.userId` (preferred) **or** `metadata.staffUserId` (fallback).
+// - If `purpose` is missing but `staffUserId` is present, we default to "STAFF_SEAT".
+//   This makes the handler robust to any older checkout sessions that didn't send purpose.
 
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
@@ -65,17 +36,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    switch (event.type) {
-      case "checkout.session.completed":
-        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
-        break;
-
-      default:
-        // Not an error: ignore events we don't care about
-        break;
+    if (event.type === "checkout.session.completed") {
+      await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
     }
-
-    // Always 200 OK if we processed (or intentionally ignored) the event.
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (err) {
     console.error("[Stripe Webhook] Handler error:", err);
@@ -83,33 +46,32 @@ export async function POST(req: Request) {
   }
 }
 
-/**
- * Handle a completed Checkout Session:
- * - Only mode="payment" and payment_status="paid" are treated as purchases.
- * - Determine user, amount, purpose, description.
- * - Persist a Payment record if one doesn't already exist (idempotent via stripeId).
- */
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
   if (session.mode !== "payment") return;
   if (session.payment_status !== "paid") return;
 
-  // ── 1) Extract metadata
+  // 1) Metadata
   const md = (session.metadata || {}) as Record<string, string | undefined>;
-  const purposeRaw = (md.purpose || "").toUpperCase();
-  const purpose: "PACKAGE" | "STAFF_SEAT" =
-    purposeRaw === "STAFF_SEAT" ? "STAFF_SEAT" : "PACKAGE";
 
+  // Prefer `userId`; fall back to legacy `staffUserId` if present.
+  let userId = md.userId || md.staffUserId;
+
+  // Purpose: from metadata if present; otherwise infer STAFF_SEAT if staffUserId exists.
+  const purposeRaw = (md.purpose || "").toUpperCase();
+  let purpose: "PACKAGE" | "STAFF_SEAT";
+  if (purposeRaw === "PACKAGE" || purposeRaw === "STAFF_SEAT") {
+    purpose = purposeRaw as "PACKAGE" | "STAFF_SEAT";
+  } else {
+    purpose = md.staffUserId ? "STAFF_SEAT" : "PACKAGE";
+  }
+
+  // Convert cents → dollars; store lowercase currency to match your UI usage.
+  const amountCents = session.amount_total || 0;
+  const amount = Math.round((amountCents / 100) * 100) / 100;
+  const currency = (session.currency || "aud").toLowerCase();
   let description = md.description || "";
 
-  // Convert cents → dollars for display
-  const amountCents = session.amount_total || 0;
-  const amountDollars = Math.round((amountCents / 100) * 100) / 100;
-  const currency = (session.currency || "aud").toLowerCase();
-
-  // Prefer userId from metadata
-  let userId = md.userId;
-
-  // Fallback: resolve via email
+  // 2) If userId still not determined, fall back to email matching
   if (!userId) {
     const email =
       session.customer_details?.email ||
@@ -128,44 +90,37 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     return;
   }
 
-  // ── 2) Enrich description from line items if needed
+  // 3) Enrich description from first line item if still empty
   if (!description) {
     try {
       const full = await stripe.checkout.sessions.retrieve(session.id, {
         expand: ["line_items.data.price.product"],
       });
       const first = full.line_items?.data?.[0];
-      const prod = (first?.price?.product as Stripe.Product | null) || null;
+      const product = first?.price?.product as Stripe.Product | null;
       description =
-        prod?.name ||
-        first?.description ||
-        (purpose === "STAFF_SEAT" ? "Staff Seat" : "Package");
+        product?.name || first?.description || (purpose === "STAFF_SEAT" ? "Staff Seat" : "Package");
     } catch {
       description = purpose === "STAFF_SEAT" ? "Staff Seat" : "Package";
     }
   }
 
-  // ── 3) True idempotency guard using stripeId
-  const existing = await prisma.payment.findUnique({
+  // 4) Idempotency: stripeId is unique
+  const exists = await prisma.payment.findUnique({
     where: { stripeId: session.id },
     select: { id: true },
   });
-  if (existing) {
-    // Already processed → skip
-    return;
-  }
+  if (exists) return;
 
-  // ── 4) Persist Payment record
+  // 5) Create Payment row → this unlocks access for the target userId
   await prisma.payment.create({
     data: {
-      stripeId: session.id, // ✅ required and unique
+      stripeId: session.id,
       userId,
-      amount: amountDollars,
+      amount,
       currency,
       description,
       purpose,
     },
   });
-
-  // ✅ Done. NextAuth jwt() will pick this up and set session.user.hasPaid = true
 }
