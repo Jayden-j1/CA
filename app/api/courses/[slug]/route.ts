@@ -3,21 +3,21 @@
 // Purpose
 // -------
 // Return a single *published* course by slug in the normalized DTO your UI expects.
-// For now, we only read models that exist in your Prisma client today:
+// We intentionally only query models that exist in your Prisma client today:
 //   • Course
 //   • CourseModule
 // and we return `lessons: []` as placeholders (your UI already tolerates this).
 //
-// Why this change?
-// ----------------
-// Your previous build errors show Prisma does NOT expose `courseLesson` or
-// `quizQuestion`. Until those tables/models exist, attempting to query them
-// causes type errors. This version removes those queries and compiles cleanly.
+// What changed (tiny but important)
+// ---------------------------------
+// Modules are now ordered by `CourseModule.order ASC` (stable, explicit ordering)
+// instead of `createdAt`. This makes module sequencing deterministic and matches
+// your Prisma schema’s design.
 //
 // Phase 2
 // -------
-// When you add Lesson/Quiz tables, simply extend this handler to fetch them and
-// populate `lessons` (and `quiz`) instead of leaving them empty.
+// When you add Lesson/Quiz tables, extend this handler to fetch them and populate
+// `lessons` (and `quiz`) instead of leaving them empty.
 //
 // Pillars
 // -------
@@ -56,10 +56,10 @@ export async function GET(
     }
 
     // 2) Load all published modules for the course (ordered)
-    //    NOTE: We only query CourseModule because this model is confirmed to exist.
+    //    ✅ CHANGE: use CourseModule.order for a stable, intentional sequence.
     const modules = await prisma.courseModule.findMany({
       where: { courseId: course.id, isPublished: true },
-      orderBy: { createdAt: "asc" },
+      orderBy: { order: "asc" }, // ← was createdAt; now using explicit ordering
       select: {
         id: true,
         title: true,
@@ -103,6 +103,9 @@ export async function GET(
     return NextResponse.json({ course: dto });
   } catch (err) {
     console.error("[GET /api/courses/[slug]] Error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
