@@ -5,6 +5,7 @@
 // - ADD course delivery models (Course, CourseModule, Quiz) and progress tracking
 //   (UserCourseProgress, UserModuleProgress) with clear, minimal relations.
 // - Keep it simple, scalable, and easy to extend later.
+// - ✅ Updated to use Prisma Data Proxy engine to avoid binary .dll locks on Windows.
 //
 // Design notes:
 // - Module-level videoUrl covers your initial video needs (hosted on your CDN/Vimeo/Wistia).
@@ -20,10 +21,24 @@
 // - Ease of management: comments + obvious fields; minimal surprises.
 // - Security: no PII added, all access enforced in API.
 
+// -------------------------
+// ⚙️ Generator Configuration
+// -------------------------
+// Using Data Proxy engine avoids native binary locks on Windows (no .dlls).
+// Set PRISMA_CLIENT_ENGINE_TYPE=dataproxy in .env to activate this mode.
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+
+  // ✅ To avoid Windows .dll lock errors, we switch to the Data Proxy engine.
+  // This engine is pure JS (no native binaries).
+  // You can toggle back to binary mode by changing this to "binary" if needed on Linux/CI.
+  engineType = "dataproxy"
 }
 
+
+// -------------------------
+// 🔗 Database Connection
+// -------------------------
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -199,13 +214,8 @@ model Quiz {
   id           String        @id @default(cuid())
   moduleId     String        @unique                 // 1:1 with module (simple)
   title        String?
-  // Array of questions like:
-  // [
-  //   { "id": "q1", "question": "...", "options": ["a","b","c"], "correctIndex": 1 },
-  //   ...
-  // ]
-  questions    Json
-  passingScore Int?                                  // optional min % or min correct for pass
+  questions    Json                                    // quiz stored as JSON for simplicity
+  passingScore Int?                                   // optional min % or min correct for pass
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
@@ -219,7 +229,7 @@ model UserCourseProgress {
   courseId           String
   completedModuleIds String[]                        // Postgres text[]
   lastModuleId       String?
-  percent            Int?                            // 0..100 (computed server-side, kept for cheap reads)
+  percent            Int?                            // 0..100 (computed server-side, cached)
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 

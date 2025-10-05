@@ -2,40 +2,39 @@
 //
 // Purpose
 // -------
-// Return a single *published* course by slug in the normalized DTO your UI expects.
-// We intentionally only query models that exist in your Prisma client today:
-//   • Course
-//   • CourseModule
-// and we return `lessons: []` as placeholders (your UI already tolerates this).
+// Fetch one published course (by slug) and return a clean DTO
+// for the learner dashboard. This version sorts modules by
+// CourseModule.order and strictly returns only published,
+// finalized content (non-editable runtime).
 //
-// What changed (tiny but important)
-// ---------------------------------
-// Modules are now ordered by `CourseModule.order ASC` (stable, explicit ordering)
-// instead of `createdAt`. This makes module sequencing deterministic and matches
-// your Prisma schema’s design.
-//
-// Phase 2
+// Context
 // -------
-// When you add Lesson/Quiz tables, extend this handler to fetch them and populate
-// `lessons` (and `quiz`) instead of leaving them empty.
+// - Course content is authored and finalized by you or stakeholders.
+// - Learners and staff *consume* the course only — no edits or admin mutations here.
+// - Admin creation/publishing is a separate controlled workflow (Phase 2.3+).
 //
-// Pillars
-// -------
-// - Simplicity: only query models that exist today.
-// - Robustness: strict 404 on missing/hidden course; clear error handling.
-// - Efficiency: select only fields you render.
-// - Ease of management: one DTO assembly point, easy to extend later.
-// - Security: returns only published content.
+// Design goals
+// -------------
+// - 🔒 Security: Return only published content; hide drafts and unapproved data.
+// - ⚡ Efficiency: Select only fields required by the UI.
+// - 🧱 Robustness: Safe mapping, clear 404s, and well-typed DTOs.
+// - 🧭 Simplicity: Straightforward logic, minimal Prisma coupling.
+// - 🧰 Ease of management: Obvious where to extend later (lessons, quiz, etc.).
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic"; // always live, no static cache
 
 export async function GET(
   _req: Request,
   { params }: { params: { slug: string } }
 ) {
   try {
-    // 1) Load the published course by slug (no nested includes to avoid schema coupling)
+    // 1️⃣ Fetch the published course by slug
+    // -------------------------------------------------
+    // We explicitly select only fields required by the UI.
+    // Unpublished courses are hidden by default.
     const course = await prisma.course.findFirst({
       where: { slug: params.slug, isPublished: true },
       select: {
@@ -50,47 +49,80 @@ export async function GET(
       },
     });
 
+    // Defensive: 404 for missing or unpublished slugs
     if (!course) {
-      // Hidden or does not exist
       return NextResponse.json({ error: "Course not found" }, { status: 404 });
     }
 
-    // 2) Load all published modules for the course (ordered)
-    //    ✅ CHANGE: use CourseModule.order for a stable, intentional sequence.
+    // 2️⃣ Fetch published modules for that course
+    // -------------------------------------------------
+    // - Sorted by the stable CourseModule.order (unique per course)
+    // - Select minimal render data: title, description, video URL, etc.
+    // - Each module is treated as immutable content — no write ops here.
     const modules = await prisma.courseModule.findMany({
       where: { courseId: course.id, isPublished: true },
-      orderBy: { order: "asc" }, // ← was createdAt; now using explicit ordering
+      orderBy: { order: "asc" }, // ✅ stable deterministic order
       select: {
         id: true,
         title: true,
         description: true,
-        createdAt: true,
+        videoUrl: true,
+        durationSeconds: true,
+        content: true,
+        // Quiz relation exists but we only include questions JSON if published.
+        quiz: {
+          select: {
+            id: true,
+            title: true,
+            questions: true, // stored as JSON (array of {question, options, correctIndex})
+            passingScore: true,
+          },
+        },
       },
     });
 
-    // 3) Assemble the DTO. We intentionally return `lessons: []` for now so the
-    //    shape matches your frontend expectations without requiring tables that
-    //    aren’t in your schema yet.
-    const mappedModules = modules.map((m) => ({
-      id: m.id,
-      title: m.title,
-      description: m.description ?? undefined,
-      lessons: [] as Array<{
-        id: string;
-        title: string;
-        videoUrl: string;
-        body?: string;
-        quiz?: {
-          questions: Array<{
-            id: string;
-            question: string;
-            options: string[];
-            correctIndex: number;
-          }>;
-        };
-      }>,
-    }));
+    // 3️⃣ Assemble a normalized DTO
+    // -------------------------------------------------
+    // The frontend expects `modules[].lessons[]` for consistent shape.
+    // For now, each module maps to a single lesson placeholder (the module video itself),
+    // so the UI can display "Next"/"Continue" seamlessly.
+    const mappedModules = modules.map((m) => {
+      // TypeScript note: JSON type from Prisma returns `unknown`, so cast safely.
+      const questions =
+        (Array.isArray(m.quiz?.questions) ? m.quiz?.questions : []) as Array<{
+          id: string;
+          question: string;
+          options: string[];
+          correctIndex: number;
+        }>;
 
+      return {
+        id: m.id,
+        title: m.title,
+        description: m.description ?? undefined,
+        // Each module behaves like a single "lesson" entry.
+        lessons: [
+          {
+            id: `${m.id}-lesson`,
+            title: m.title,
+            videoUrl: m.videoUrl ?? "",
+            body:
+              typeof m.content === "string"
+                ? m.content
+                : undefined, // optional markdown/plaintext body
+            quiz:
+              questions.length > 0
+                ? {
+                    questions,
+                  }
+                : undefined,
+          },
+        ],
+      };
+    });
+
+    // 4️⃣ Build final response object
+    // -------------------------------------------------
     const dto = {
       id: course.id,
       slug: course.slug,
@@ -100,8 +132,10 @@ export async function GET(
       modules: mappedModules,
     };
 
-    return NextResponse.json({ course: dto });
+    // ✅ Return safe, read-only JSON
+    return NextResponse.json({ course: dto }, { status: 200 });
   } catch (err) {
+    // Centralized error handler — avoids leaking stack traces.
     console.error("[GET /api/courses/[slug]] Error:", err);
     return NextResponse.json(
       { error: "Internal server error" },

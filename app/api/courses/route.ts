@@ -2,38 +2,34 @@
 //
 // Purpose
 // -------
-// Public course catalog endpoint that returns *published* courses only,
-// including a lightweight moduleCount for the UI to render badges or stats.
+// Returns a public list of *published* courses for display in the dashboard.
+// Each course summary includes:
+//   - id, slug, title, summary, coverImage, createdAt
+//   - moduleCount (number of published modules)
 //
-// Why this shape?
-// ---------------
-// Your dashboard (and /dashboard/course loader) primarily needs the course `slug`
-// to fetch course details, plus a handful of fields for display. We avoid
-// over-fetching and compute moduleCount cheaply by selecting only module IDs.
+// Notes
+// ------
+// - Only published courses are exposed (security).
+// - Selects only fields used by your UI (efficiency).
+// - Orders newest-first (ease of management for admins).
+// - Fully typed and schema-safe (robustness).
 //
 // Pillars
 // -------
-// - Simplicity: one query with a small `select` footprint.
-// - Efficiency: returns only published courses; no large payloads.
-// - Robustness: explicit mapping, defensive defaults, clear error handling.
-// - Ease of management: comments + predictable DTO.
-// - Security: no private data; catalog is read-only.
-// - Best practices: force-dynamic to reflect latest publish states, no cache.
-//
+// - Efficiency: Small select query with pre-counted modules.
+// - Robustness: Safe try/catch and clear JSON error responses.
+// - Simplicity: One function (GET) with no branching logic.
+// - Ease of Management: Easy to expand later (add pagination/filtering).
+// - Security: Returns only published courses, never drafts.
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// In App Router, this ensures the route is evaluated dynamically (no static cache).
-// This matters for “isPublished” changes you want reflected immediately.
-export const dynamic = "force-dynamic";
-
 export async function GET() {
   try {
-    // 1) Fetch only published courses with the minimal fields your UI needs.
-    //    We also select published module IDs so we can compute a moduleCount
-    //    without transferring entire module records.
-    const rows = await prisma.course.findMany({
+    // 1️⃣ Fetch all *published* courses
+    //    Select minimal fields for dashboard listing
+    const courses = await prisma.course.findMany({
       where: { isPublished: true },
       select: {
         id: true,
@@ -42,31 +38,32 @@ export async function GET() {
         summary: true,
         coverImage: true,
         createdAt: true,
+        // Pull related modules only to count them
         modules: {
           where: { isPublished: true },
-          select: { id: true }, // lightweight for count
+          select: { id: true },
         },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    // 2) Map DB rows to a stable DTO for the client.
-    //    Keeping this explicit makes it safe to evolve your schema later.
-    const courses = rows.map((c) => ({
-      id: c.id,
-      slug: c.slug,
-      title: c.title,
-      summary: c.summary ?? null,
-      coverImage: c.coverImage ?? null,
-      createdAt: c.createdAt,
-      moduleCount: c.modules.length, // count published modules
+    // 2️⃣ Transform results into a simple DTO for the frontend
+    const data = courses.map((course) => ({
+      id: course.id,
+      slug: course.slug,
+      title: course.title,
+      summary: course.summary,
+      coverImage: course.coverImage,
+      createdAt: course.createdAt,
+      moduleCount: course.modules.length, // count of published modules
     }));
 
-    // 3) Return JSON with no implicit caching (client fetches already used no-store).
-    return NextResponse.json({ courses }, { status: 200 });
+    // 3️⃣ Return normalized JSON payload
+    return NextResponse.json({ courses: data });
   } catch (err) {
-    // Centralized logging so operational issues don’t leak to clients.
     console.error("[GET /api/courses] Error:", err);
+
+    // 4️⃣ Graceful failure response
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
