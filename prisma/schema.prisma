@@ -1,10 +1,24 @@
 // prisma/schema.prisma
 //
 // Purpose:
-// - Add `mustChangePassword` to User so newly created staff are forced to update
-//   their default password on first login.
-// - This is a simple, robust, and auditable switch we can enforce in middleware.
-// - Acts as the single source of truth for Prisma + PostgreSQL models.
+// - Existing auth/billing models remain unchanged.
+// - ADD course delivery models (Course, CourseModule, Quiz) and progress tracking
+//   (UserCourseProgress, UserModuleProgress) with clear, minimal relations.
+// - Keep it simple, scalable, and easy to extend later.
+//
+// Design notes:
+// - Module-level videoUrl covers your initial video needs (hosted on your CDN/Vimeo/Wistia).
+// - Quiz questions stored as JSON to ship fast now; easy to migrate to relational later.
+// - Course progress tracked at BOTH module level (granular, quizScore) and course level
+//   (completedModuleIds[], percent). This gives flexible, cheap reads for dashboards.
+// - Stable ordering via CourseModule.order with unique constraint per course.
+//
+// Pillars:
+// - Efficiency: indices/uniques on hot paths (slug, (courseId, order), (userId, moduleId)).
+// - Robustness: explicit relations, unique constraints to avoid duplicates.
+// - Simplicity: JSON for questions, a single progress upsert path.
+// - Ease of management: comments + obvious fields; minimal surprises.
+// - Security: no PII added, all access enforced in API.
 
 generator client {
   provider = "prisma-client-js"
@@ -14,6 +28,10 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// -------------------------
+// EXISTING MODELS (unchanged)
+// -------------------------
 
 model User {
   id             String    @id @default(cuid())
@@ -45,6 +63,10 @@ model User {
   sessions       Session[]
   business       Business? @relation(fields: [businessId], references: [id])
   passwordResetTokens PasswordResetToken[]
+
+  // NEW relations
+  courseProgress  UserCourseProgress[]
+  moduleProgress  UserModuleProgress[]
 }
 
 model Business {
@@ -130,4 +152,99 @@ model PasswordResetToken {
 enum PaymentPurpose {
   PACKAGE
   STAFF_SEAT
+}
+
+// -------------------------
+// NEW COURSE MODELS
+// -------------------------
+
+model Course {
+  id          String         @id @default(cuid())
+  slug        String         @unique              // human-friendly stable identifier, e.g. "cultural-awareness-basics"
+  title       String
+  summary     String?
+  coverImage  String?
+  isPublished Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  modules     CourseModule[]
+  progress    UserCourseProgress[]
+}
+
+model CourseModule {
+  id              String     @id @default(cuid())
+  courseId        String
+  order           Int                                // stable ordering within a course, starts at 1
+  title           String
+  description     String?
+  videoUrl        String?                            // your hosted video (Vercel Blob, Vimeo, Wistia, S3)
+  durationSeconds Int?
+  isPublished     Boolean    @default(false)
+  content         Json?                              // optional rich text/markdown AST, future-friendly
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relations
+  course          Course     @relation(fields: [courseId], references: [id])
+  quiz            Quiz?
+  userProgress    UserModuleProgress[]
+
+  @@index([courseId, order])
+  @@unique([courseId, order])                        // enforce unique order per course
+}
+
+model Quiz {
+  id           String        @id @default(cuid())
+  moduleId     String        @unique                 // 1:1 with module (simple)
+  title        String?
+  // Array of questions like:
+  // [
+  //   { "id": "q1", "question": "...", "options": ["a","b","c"], "correctIndex": 1 },
+  //   ...
+  // ]
+  questions    Json
+  passingScore Int?                                  // optional min % or min correct for pass
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  module       CourseModule  @relation(fields: [moduleId], references: [id])
+}
+
+// Per-user course summary progress (fast to read for dashboards)
+model UserCourseProgress {
+  id                 String     @id @default(cuid())
+  userId             String
+  courseId           String
+  completedModuleIds String[]                        // Postgres text[]
+  lastModuleId       String?
+  percent            Int?                            // 0..100 (computed server-side, kept for cheap reads)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // Relations
+  user               User       @relation(fields: [userId], references: [id])
+  course             Course     @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+}
+
+// Per-user per-module progress (granular)
+model UserModuleProgress {
+  id         String       @id @default(cuid())
+  userId     String
+  moduleId   String
+  completed  Boolean      @default(false)          // completed the module (watch + quiz pass if required)
+  quizScore  Int?                                  // last score (0..100) if a quiz exists
+  updatedAt  DateTime     @updatedAt
+  createdAt  DateTime     @default(now())
+
+  // Relations
+  user       User         @relation(fields: [userId], references: [id])
+  module     CourseModule @relation(fields: [moduleId], references: [id])
+
+  @@unique([userId, moduleId])
+  @@index([moduleId])
 }

@@ -1,7 +1,18 @@
 // app/dashboard/billing/page.tsx
 //
-// Optional hardening: wrap page in <Suspense> to future-proof against any
-// nested component introducing useSearchParams/useRouter bailouts.
+// Purpose:
+// - Billing dashboard that lists payments with simple filters and CSV export.
+// - (Fixed) React rule-of-hooks: ALL hooks now appear before any conditional returns.
+//
+// What changed (high level):
+// - Moved all useState/useEffect/useMemo above the early return that shows the loading/redirect screen.
+// - Guarded effects so they only run when the user is allowed to view billing.
+//
+// Pillars:
+// - Efficiency: fetch only when allowed, debounce-heavy work not needed.
+// - Robustness: server-side rules still enforced in /api/payments/history.
+// - Simplicity & ease of management: minimal changes; same UX.
+// - Security: UI guards mirror server rules, but server remains source of truth.
 
 "use client";
 
@@ -43,6 +54,7 @@ function PurposeBadge({ purpose }: { purpose: string }) {
 }
 
 // ---------- Page wrapper with Suspense ----------
+// (unchanged)
 export default function BillingPage() {
   return (
     <Suspense
@@ -57,43 +69,34 @@ export default function BillingPage() {
   );
 }
 
-// ---------- Original logic unchanged ----------
+// ---------- Main component (fixed hook order) ----------
 function BillingPageInner() {
+  // 1) ALWAYS declare hooks before any conditional return
+  // ----------------------------------------------------
   const { data: session, status } = useSession();
   const router = useRouter();
 
+  // Derive flags used for access gating (pure computation, safe before returns)
   const role = session?.user?.role;
   const businessId = session?.user?.businessId || null;
   const hasPaid = !!session?.user?.hasPaid;
 
+  // Memoized gate: who is allowed to see Billing UI?
   const allowBilling = useMemo(() => {
     if (!role) return false;
+
     if (role === "BUSINESS_OWNER" || role === "ADMIN") return true;
 
     if (role === "USER") {
       const isStaffSeatUser = !!businessId;
-      if (isStaffSeatUser) return false;
+      if (isStaffSeatUser) return false; // staff-seat (role USER, tied to business) cannot see billing
       return hasPaid; // individual users must be paid to see billing
     }
 
     return false;
   }, [role, businessId, hasPaid]);
 
-  useEffect(() => {
-    if (status === "loading") return;
-    if (!allowBilling) {
-      router.replace("/dashboard");
-    }
-  }, [status, allowBilling, router]);
-
-  if (status === "loading" || !allowBilling) {
-    return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
-        <p className="text-white text-xl">Loading billing...</p>
-      </section>
-    );
-  }
-
+  // Local UI state (MUST be above any return)
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,6 +107,7 @@ function BillingPageInner() {
   const [userSearch, setUserSearch] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
 
+  // Persisted filters (read once on mount)
   useEffect(() => {
     const storedPurpose = localStorage.getItem("billing:purposeFilter");
     const storedUser = localStorage.getItem("billing:userFilter");
@@ -114,6 +118,15 @@ function BillingPageInner() {
     }
   }, []);
 
+  // Redirect users who are not allowed — only after session has resolved.
+  useEffect(() => {
+    if (status === "loading") return;
+    if (!allowBilling) {
+      router.replace("/dashboard");
+    }
+  }, [status, allowBilling, router]);
+
+  // Fetch helper (no hooks inside; safe to define here)
   const fetchPayments = async () => {
     try {
       setLoading(true);
@@ -128,27 +141,38 @@ function BillingPageInner() {
 
       setPayments(data.payments || []);
       setUsers(data.users || []);
+      setError("");
     } catch (err: any) {
       console.error("[BillingPage] Error fetching payments:", err);
-      setError(err.message || "Internal error");
+      setError(err?.message || "Internal error");
     } finally {
       setLoading(false);
     }
   };
 
+  // Re-fetch when filters change — but only when:
+  // - session is authenticated
+  // - and the user is allowed to view billing
   useEffect(() => {
+    // Save filters for next visit
     localStorage.setItem("billing:purposeFilter", purposeFilter);
     localStorage.setItem("billing:userFilter", userFilter);
+
+    if (status !== "authenticated") return;
+    if (!allowBilling) return;
+
     fetchPayments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [purposeFilter, userFilter]);
+  }, [purposeFilter, userFilter, status, allowBilling]);
 
+  // Derived suggestion list (pure computation)
   const filteredSuggestions = users.filter(
     (u) =>
       u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
       (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
+  // CSV export (pure UI helper)
   const exportCSV = () => {
     const headers = [
       "User",
@@ -183,6 +207,19 @@ function BillingPageInner() {
     link.click();
   };
 
+  // 2) Now it’s safe to conditionally return UI
+  // -------------------------------------------
+  // We kept your UX: while session is loading OR user can’t access, show a simple screen.
+  if (status === "loading" || !allowBilling) {
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Loading billing...</p>
+      </section>
+    );
+  }
+
+  // 3) Main UI (unchanged except for comments)
+  // ------------------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
@@ -202,7 +239,7 @@ function BillingPageInner() {
           <option value="STAFF_SEAT">Staff Seats</option>
         </select>
 
-        {/* User Search */}
+        {/* User Search (only shown if server provided a user list) */}
         {users.length > 0 && (
           <div className="relative">
             <input
