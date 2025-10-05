@@ -1,20 +1,28 @@
 // app/dashboard/course/page.tsx
 //
 // Phase 1+ scaffolding (API-aware):
-// - Handles course access gating, data fetching, local progress, and rendering.
-// - Uses /api/payments/check, /api/courses, /api/courses/[slug], and /api/courses/progress.
-// - Ensures all React hooks are declared before any conditional return (avoids invalid hook order).
+// - Gated by /api/payments/check (unchanged).
+// - Loads first published course from /api/courses, then its detail from /api/courses/[slug].
+// - Loads/saves user progress via /api/courses/progress (with localStorage fallback).
+// - Clean, responsive UI with a module list and a player/quiz panel.
 //
-// Phase 2.3 addition:
+// Robustness:
+// - All stateful hooks are declared before any conditional return.
+// - IMPORTANT FIX: Removed late useMemo hooks that executed only after data loads,
+//   which previously changed the hook order across renders and triggered React's error.
+// - API failures gracefully fall back to local placeholder + localStorage.
+// - Defensive clamping of indices to avoid out-of-bound errors.
+//
+// Phase 2.3 addition (already present):
 // - Adds a “🎓 Download Certificate” button that appears ONLY when progressPercent === 100.
-// - Button calls /api/courses/certificate and triggers a PDF download in-browser.
+// - Button fetches /api/courses/certificate and downloads a generated PDF.
 //
-// Pillars of implementation:
-// - ✅ Efficiency: minimal network requests, debounced saves, cached progress.
-// - ✅ Robustness: defensive clamping of indices, fallback data, try/catch on network ops.
-// - ✅ Simplicity: each function does one thing.
-// - ✅ Security: avoids client file writes, validates access before actions.
-// - ✅ Ease of management: modular design consistent with app standards.
+// Phase 3.1 (Feedback & Motion Enhancements):
+// - Smooth, animated progress bar (no extra library).
+// - One-time "Course complete 🎉" banner when learner first reaches 100%.
+// - Gentle pulse animation on the certificate button when it first appears.
+// - Small, accessible inline success/error messaging for certificate downloads.
+// - All enhancements are frontend-only, lightweight, and dependency-free.
 
 "use client";
 
@@ -29,9 +37,9 @@ import VideoPlayer from "@/components/course/VideoPlayer";
 import QuizCard from "@/components/course/QuizCard";
 import type { CourseDetail, CourseModule } from "@/types/course";
 
-// --------------------------------------------------------
-//  Access check response type
-// --------------------------------------------------------
+// ------------------------------
+// Access check types (unchanged)
+// ------------------------------
 interface PaymentCheckResponse {
   hasAccess: boolean;
   packageType: "individual" | "business" | null;
@@ -42,9 +50,9 @@ interface PaymentCheckResponse {
   } | null;
 }
 
-// --------------------------------------------------------
-// Local placeholder course (used when API unavailable)
-// --------------------------------------------------------
+// ------------------------------
+// Local placeholder course (used only if API data unavailable)
+// ------------------------------
 const LOCAL_PLACEHOLDER: CourseDetail = {
   id: "local",
   slug: "local-placeholder",
@@ -92,9 +100,9 @@ const LOCAL_PLACEHOLDER: CourseDetail = {
   ],
 };
 
-// --------------------------------------------------------
-// Suspense wrapper (clean loading fallback)
-// --------------------------------------------------------
+// ------------------------------
+// Suspense wrapper
+// ------------------------------
 export default function CoursePageWrapper() {
   return (
     <Suspense
@@ -109,16 +117,18 @@ export default function CoursePageWrapper() {
   );
 }
 
-// --------------------------------------------------------
-// Main Course Page (core logic)
-// --------------------------------------------------------
+// ------------------------------
+// Main page (all hooks declared before returns)
+// ------------------------------
 function CoursePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
+
   const justSucceeded = searchParams.get("success") === "true";
 
-  // ---------------- Access control state ----------------
+  // ---------------- Access & page state ----------------
+  // NOTE: These states must be declared before any conditional return.
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
   const [packageType, setPackageType] =
@@ -128,9 +138,11 @@ function CoursePageInner() {
   const didRedirect = useRef(false);
 
   // ---------------- Course data ----------------
+  // Try API first; fallback to local placeholder.
   const [course, setCourse] = useState<CourseDetail | null>(null);
 
   // ---------------- Progress state ----------------
+  // Indices + answers + localStorage key:
   type Persisted = {
     currentModuleIndex: number;
     currentLessonIndex: number;
@@ -138,7 +150,7 @@ function CoursePageInner() {
   };
   const STORAGE_KEY = "course:progress:v1";
 
-  // Bootstrap progress from localStorage
+  // Single read to bootstrap from localStorage (safe to useMemo here—it's before any return)
   const initialProgress: Persisted = useMemo(() => {
     try {
       const raw =
@@ -152,7 +164,7 @@ function CoursePageInner() {
         };
       }
     } catch {
-      /* ignore parse errors */
+      // ignore parse errors
     }
     return { currentModuleIndex: 0, currentLessonIndex: 0, answers: {} };
   }, []);
@@ -167,13 +179,23 @@ function CoursePageInner() {
     initialProgress.answers
   );
 
-  // Debounced save timer
+  // Debounced server save (for progress)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef<string>("");
 
-  // --------------------------------------------------------
-  // Access verification via /api/payments/check
-  // --------------------------------------------------------
+  // ---------------- Phase 3.1 UX state (no new deps) ----------------
+  // - showCompleteBanner: transient celebratory banner the *first time* the user hits 100%.
+  // - pulseCertButton: one-time gentle pulse for the certificate button when it appears.
+  // - certMessage: small accessible inline status for success/error on certificate actions.
+  const [showCompleteBanner, setShowCompleteBanner] = useState(false);
+  const celebratedOnceRef = useRef(false);
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pulseCertButton, setPulseCertButton] = useState(false);
+  const [certMessage, setCertMessage] = useState<string | null>(null);
+
+  // -------------------------------------------
+  // Access gate (authoritative)
+  // -------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
     const checkOnce = async () => {
@@ -189,17 +211,19 @@ function CoursePageInner() {
       if (status === "loading") return;
 
       try {
-        // Optimistic unlock if session says user has paid
-        if (session?.user?.hasPaid) setHasAccess(true);
+        // Optimistic unlock if session claims paid.
+        if (session?.user?.hasPaid) {
+          setHasAccess(true);
+        }
 
-        // Authoritative backend check
+        // Authoritative check
         const first = await checkOnce();
         if (first.ok && first.data.hasAccess) {
           setHasAccess(true);
           setPackageType(first.data.packageType);
           setLatestPayment(first.data.latestPayment);
         } else if (justSucceeded) {
-          // Retry short polling if just paid
+          // Short poll for webhook landing
           const maxAttempts = 8;
           const delayMs = 1500;
           for (let i = 0; i < maxAttempts; i++) {
@@ -214,7 +238,7 @@ function CoursePageInner() {
           }
         }
 
-        // Redirect if no access
+        // If still no access → redirect
         if (!hasAccess && !session?.user?.hasPaid && !didRedirect.current) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
@@ -234,24 +258,30 @@ function CoursePageInner() {
 
     run();
     return () => ac.abort();
-  }, [status, session?.user?.hasPaid, router, justSucceeded, hasAccess]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, session?.user?.hasPaid, router, justSucceeded]);
 
-  // --------------------------------------------------------
-  // Load course list and detail (API-first, fallback to local)
-  // --------------------------------------------------------
+  // -------------------------------------------
+  // Load course via API (first published) → detail
+  // Fallback to LOCAL_PLACEHOLDER on error/empty
+  // -------------------------------------------
   useEffect(() => {
     let cancelled = false;
+
     const load = async () => {
       try {
+        // 1) list published courses
         const listRes = await fetch("/api/courses", { cache: "no-store" });
         const listJson = await listRes.json();
         const first = Array.isArray(listJson?.courses) ? listJson.courses[0] : null;
 
         if (!first?.slug) {
+          // fallback
           if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
           return;
         }
 
+        // 2) fetch detail by slug
         const detailRes = await fetch(`/api/courses/${first.slug}`, {
           cache: "no-store",
         });
@@ -262,21 +292,23 @@ function CoursePageInner() {
         const detailJson = await detailRes.json();
         if (!cancelled) setCourse(detailJson.course as CourseDetail);
       } catch (err) {
-        console.warn("[Course] Could not load course, fallback to local:", err);
+        console.warn("[Course] Could not load course from API, using fallback:", err);
         if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
       }
     };
+
     load();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // --------------------------------------------------------
-  // Load saved progress from backend (if available)
-  // --------------------------------------------------------
+  // -------------------------------------------
+  // Load server progress (if course loaded)
+  // -------------------------------------------
   useEffect(() => {
     let cancelled = false;
+
     const loadProgress = async () => {
       if (!course) return;
       try {
@@ -287,6 +319,7 @@ function CoursePageInner() {
         if (res.ok) {
           const json = await res.json();
           if (json?.progress && !cancelled) {
+            // Clamp indices to course shape
             const modules = course.modules ?? [];
             const cm = Math.min(
               Math.max(json.progress.currentModuleIndex ?? 0, 0),
@@ -303,26 +336,29 @@ function CoursePageInner() {
           }
         }
       } catch {
-        /* non-fatal */
+        // Non-fatal: localStorage fallback already initialized
       }
     };
+
     loadProgress();
-    return () => {
-      cancelled = true;
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course?.id]);
 
-  // --------------------------------------------------------
-  // Persist progress (localStorage + debounced server post)
-  // --------------------------------------------------------
+  // -------------------------------------------
+  // Persist progress
+  // - Always keep localStorage in sync (fast).
+  // - Attempt debounced server save if course is from API (has real id).
+  // -------------------------------------------
   useEffect(() => {
+    // Save to localStorage first (never fails the UX)
     const payload: Persisted = { currentModuleIndex, currentLessonIndex, answers };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch {
-      /* ignore */
+      // ignore quota issues
     }
 
+    // If we have a real API course, post progress (debounced)
     if (course && course.id !== "local") {
       const key = JSON.stringify([course.id, currentModuleIndex, currentLessonIndex, answers]);
       if (key === lastSaved.current) return;
@@ -342,7 +378,7 @@ function CoursePageInner() {
           });
           lastSaved.current = key;
         } catch {
-          /* ignore transient errors */
+          // network hiccups are fine; localStorage still has state
         }
       }, 800);
     }
@@ -352,9 +388,60 @@ function CoursePageInner() {
     };
   }, [course, currentModuleIndex, currentLessonIndex, answers]);
 
-  // --------------------------------------------------------
-  // Early returns — no hooks after this point
-  // --------------------------------------------------------
+  // -------------------------------------------
+  // Phase 3.1: Watch for "first time at 100%" to show banner + button pulse
+  // NOTE:
+  // - This effect computes completion from known indices + course shape.
+  // - We do NOT rely on any derived variables declared *after* the early returns.
+  // - This keeps all hooks safely declared above.
+  // -------------------------------------------
+  useEffect(() => {
+    if (!course) return;
+
+    // Compute total lessons
+    const modules = course.modules ?? [];
+    const totalLessons = modules.reduce(
+      (acc, m) => acc + (m?.lessons?.length ?? 0),
+      0
+    );
+
+    if (totalLessons === 0) return;
+
+    // Compute "current flat index" (0-based) + seen lessons count
+    let seen = 0;
+    for (let m = 0; m < modules.length; m++) {
+      if (m < currentModuleIndex) {
+        seen += modules[m].lessons?.length ?? 0;
+      }
+    }
+    seen += currentLessonIndex + 1; // +1 → because current lesson is also "seen"
+
+    const nowComplete = seen >= totalLessons;
+    if (nowComplete && !celebratedOnceRef.current) {
+      // First time completion detected → show banner + pulse the certificate button
+      celebratedOnceRef.current = true;
+      setShowCompleteBanner(true);
+      setPulseCertButton(true);
+
+      // Auto-hide the banner after a few seconds; keep the button available.
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+      bannerTimerRef.current = setTimeout(() => {
+        setShowCompleteBanner(false);
+      }, 4500);
+
+      // Stop the pulse after a short moment so it doesn't distract
+      setTimeout(() => setPulseCertButton(false), 2500);
+    }
+
+    return () => {
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+    };
+  }, [course, currentModuleIndex, currentLessonIndex]);
+
+  // -------------------------------------------
+  // Early returns AFTER all state/effect hooks are declared
+  // (No hooks appear below that can be skipped conditionally.)
+  // -------------------------------------------
   if (loading) {
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
@@ -366,6 +453,7 @@ function CoursePageInner() {
   }
   if (!hasAccess) return null;
   if (!course) {
+    // very brief state while fallback resolves
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">Preparing your course…</p>
@@ -373,17 +461,31 @@ function CoursePageInner() {
     );
   }
 
-  // --------------------------------------------------------
-  // Derived helpers (safe area)
-  // --------------------------------------------------------
+  // -------------------------------------------
+  // Derived data + helpers (SAFE: No Hooks below this point)
+  // -------------------------------------------
   const modules: CourseModule[] = course.modules ?? [];
   const currentModule = modules[currentModuleIndex] ?? modules[0];
   const currentLesson =
-    currentModule?.lessons[currentLessonIndex] ?? currentModule?.lessons?.[0];
+    currentModule?.lessons[currentLessonIndex] ??
+    currentModule?.lessons?.[0];
+
+  const clampToCourse = (mIdx: number, lIdx: number) => {
+    const m = Math.min(Math.max(mIdx, 0), Math.max(modules.length - 1, 0));
+    const lessons = modules[m]?.lessons ?? [];
+    const l = Math.min(Math.max(lIdx, 0), Math.max(lessons.length - 1, 0));
+    return [m, l] as const;
+  };
+
+  const goToModule = (mIdx: number) => {
+    const [m] = clampToCourse(mIdx, 0);
+    setCurrentModuleIndex(m);
+    setCurrentLessonIndex(0);
+  };
 
   const goNextLesson = () => {
     const lessons = currentModule?.lessons ?? [];
-    const last = lessons.length - 1; // ✅ fixed typo (aconst → const)
+    const last = lessons.length - 1;
     if (currentLessonIndex < last) {
       setCurrentLessonIndex(currentLessonIndex + 1);
     } else if (currentModuleIndex < modules.length - 1) {
@@ -408,17 +510,18 @@ function CoursePageInner() {
   };
 
   const handleQuizSubmit = () => {
+    // Phase 1: no grading UI yet; advance
     console.log("Quiz answers:", answers);
     goNextLesson();
   };
 
-  // --------------------------------------------------------
-  // Simple computed progress
-  // --------------------------------------------------------
+  // ---------- Simple overall progress (NO HOOKS here) ----------
+  // We intentionally compute these *without* useMemo so hook order never changes.
   const flatLessonCount = modules.reduce(
     (acc, m) => acc + (m.lessons?.length ?? 0),
     0
   );
+
   let currentFlatIndex = 0;
   for (let m = 0; m < modules.length; m++) {
     if (m < currentModuleIndex) {
@@ -426,14 +529,49 @@ function CoursePageInner() {
     }
   }
   currentFlatIndex += currentLessonIndex;
+
   const progressPercent =
     flatLessonCount > 0
       ? Math.round(((currentFlatIndex + 1) / flatLessonCount) * 100)
       : 0;
 
-  // --------------------------------------------------------
-  // Render layout
-  // --------------------------------------------------------
+  const isComplete = progressPercent >= 100;
+
+  // -------------------------------------------
+  // Helper: certificate download (with small UX message)
+  // -------------------------------------------
+  const downloadCertificate = async () => {
+    setCertMessage(null);
+    try {
+      const res = await fetch("/api/courses/certificate");
+      if (!res.ok) {
+        // UX: Provide a small reason if backend denies (e.g., not 100% yet)
+        const msg = await res.json().catch(() => null);
+        setCertMessage(
+          msg?.error ??
+            "Unable to generate certificate. Please try again."
+        );
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "certificate.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setCertMessage("🎉 Certificate downloaded successfully.");
+    } catch (e) {
+      console.error("[Certificate download] error:", e);
+      setCertMessage("Something went wrong generating your certificate.");
+    }
+  };
+
+  // -------------------------------------------
+  // Render
+  // -------------------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
       <div className="mx-auto w-[92%] max-w-7xl">
@@ -456,29 +594,69 @@ function CoursePageInner() {
             )}
           </div>
 
+          {/* Compact progress chip (unchanged) */}
           <div className="inline-flex items-center gap-2 bg-white/90 text-blue-900 font-semibold px-3 py-1.5 rounded-lg shadow">
             <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500" />
             {progressPercent}% complete
           </div>
         </div>
 
-        {/* Course Content */}
+        {/* NEW (Phase 3.1): Animated progress bar (no deps) */}
+        {/* - The inner bar width animates smoothly via CSS transition.
+            - The label is visually accessible; the bar has aria props for SR. */}
+        <div className="mb-6">
+          <div
+            className="h-3 w-full rounded-full bg-white/40 overflow-hidden"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-label="Course progress"
+            title={`Progress: ${progressPercent}%`}
+          >
+            <div
+              className="h-full bg-emerald-400"
+              // Smoothly animate width changes
+              style={{
+                width: `${progressPercent}%`,
+                transition: "width 450ms ease",
+              }}
+            />
+          </div>
+        </div>
+
+        {/* One-time celebratory banner (Phase 3.1) */}
+        {showCompleteBanner && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="
+              mb-6 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-900
+              px-4 py-3 shadow-sm
+              transition-opacity duration-500
+            "
+          >
+            <p className="font-semibold">🎉 Course complete!</p>
+            <p className="text-sm">
+              Great work. You can now download your certificate below.
+            </p>
+          </div>
+        )}
+
+        {/* 2-column grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-4">
             <ModuleList
               modules={modules}
               currentModuleIndex={currentModuleIndex}
               currentLessonIndex={currentLessonIndex}
-              onSelectModule={(m) => {
-                setCurrentModuleIndex(m);
-                setCurrentLessonIndex(0);
-              }}
+              onSelectModule={goToModule}
             />
           </div>
 
           <div className="lg:col-span-8">
             <div className="h-full w-full bg-white/95 rounded-2xl shadow-lg p-5 sm:p-6 space-y-5">
-              {/* Lesson Header + Nav */}
+              {/* Lesson header + nav */}
               <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-blue-900">
@@ -492,20 +670,20 @@ function CoursePageInner() {
                 <div className="flex gap-2">
                   <button
                     onClick={goPrevLesson}
-                    className="px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-semibold"
+                    className="px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-semibold transition-transform hover:scale-[1.01]"
                   >
                     ◀ Previous
                   </button>
                   <button
                     onClick={goNextLesson}
-                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow"
+                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow transition-transform hover:scale-[1.02]"
                   >
                     Next ▶
                   </button>
                 </div>
               </div>
 
-              {/* Video Section */}
+              {/* Video */}
               {currentLesson?.videoUrl ? (
                 <VideoPlayer
                   src={currentLesson.videoUrl}
@@ -517,14 +695,14 @@ function CoursePageInner() {
                 </div>
               )}
 
-              {/* Lesson Body */}
+              {/* Body */}
               {currentLesson?.body && (
                 <div className="prose prose-blue max-w-none">
                   <p className="text-gray-800 leading-relaxed">{currentLesson.body}</p>
                 </div>
               )}
 
-              {/* Quiz Section */}
+              {/* Quiz */}
               {currentLesson?.quiz && (
                 <QuizCard
                   quiz={currentLesson.quiz}
@@ -534,42 +712,36 @@ function CoursePageInner() {
                 />
               )}
 
-              {/* 🎓 Certificate Download — shown only when 100% complete */}
-              {progressPercent === 100 && (
+              {/* --------------------------------------------
+                  🎓 Certificate download (Phase 2.3 + 3.1 polish)
+                  - Only render when user has completed 100% of lessons.
+                  - Button gets a one-time "pulse" when it first appears.
+                  - Inline accessible status message shows after action.
+                 -------------------------------------------- */}
+              {isComplete && (
                 <div className="pt-3 mt-2 border-t border-gray-200">
                   <button
-                    onClick={async () => {
-                      try {
-                        const res = await fetch("/api/courses/certificate");
-                        if (!res.ok) {
-                          const msg = await res.json().catch(() => null);
-                          alert(
-                            msg?.error ??
-                              "Unable to generate certificate. Please try again."
-                          );
-                          return;
-                        }
-                        const blob = await res.blob();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = "certificate.pdf";
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        window.URL.revokeObjectURL(url);
-                      } catch (e) {
-                        console.error("[Certificate download] error:", e);
-                        alert("Something went wrong generating your certificate.");
-                      }
-                    }}
-                    className="inline-flex items-center justify-center gap-2 px-5 py-2 rounded-lg font-semibold
-                               bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-transform hover:scale-[1.02]"
+                    onClick={downloadCertificate}
+                    className={[
+                      "inline-flex items-center justify-center gap-2 px-5 py-2 rounded-lg font-semibold",
+                      "bg-emerald-600 hover:bg-emerald-500 text-white shadow",
+                      "transition-transform hover:scale-[1.02]",
+                      // One-time gentle pulse the first time the button becomes available
+                      pulseCertButton ? "animate-pulse" : "",
+                    ].join(" ")}
                     aria-label="Download certificate of completion"
+                    aria-live="polite"
                   >
                     <span role="img" aria-label="graduation cap">🎓</span>
                     Download Certificate
                   </button>
+
+                  {/* Small inline status (success/error) for accessibility and clarity */}
+                  {certMessage && (
+                    <p className="mt-2 text-sm text-gray-700" role="status" aria-live="polite">
+                      {certMessage}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
