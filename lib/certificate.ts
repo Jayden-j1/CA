@@ -104,7 +104,7 @@ export async function generateCertificatePDF({
           align: "center",
         });
 
-      // 8) Finalize PDF
+      // 8) Finalize PDF (flushes data events, then "end" → resolve)
       doc.end();
     } catch (err) {
       reject(err);
