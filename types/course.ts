@@ -1,14 +1,15 @@
 // types/course.ts
 //
-// Purpose:
-// - Centralized type definitions for all course-related data.
-// - Matches API responses and schema-safe fields exactly.
+// Purpose
+// -------
+// Reusable TypeScript interfaces that describe your course DTOs
+// exactly as returned by /api/courses/[slug].
 //
-// Pillars:
-// - Simplicity: Clear, composable interfaces.
-// - Robustness: Optional fields for defensive rendering.
-// - Ease of management: Reusable across pages and API routes.
-// - Efficiency: Only includes fields relevant to the UI.
+// Pillars
+// -------
+// - Simplicity: clear and minimal.
+// - Robustness: optional fields where appropriate.
+// - Ease of management: central definitions used across pages/APIs.
 
 export interface CourseQuizQuestion {
   id: string;
