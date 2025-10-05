@@ -7,7 +7,9 @@
 // - Clean, responsive UI with a module list and a player/quiz panel.
 //
 // Robustness:
-// - All hooks declared before returns (prevents hook-order issues).
+// - All stateful hooks are declared before any conditional return.
+// - IMPORTANT FIX: Removed late useMemo hooks that executed only after data loads,
+//   which previously changed the hook order across renders and triggered React's error.
 // - API failures gracefully fall back to local placeholder + localStorage.
 // - Defensive clamping of indices to avoid out-of-bound errors.
 
@@ -114,7 +116,8 @@ function CoursePageInner() {
 
   const justSucceeded = searchParams.get("success") === "true";
 
-  // Access state (kept from your original pattern)
+  // ---------------- Access & page state ----------------
+  // NOTE: These states must be declared before any conditional return.
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
   const [packageType, setPackageType] =
@@ -123,19 +126,20 @@ function CoursePageInner() {
     useState<PaymentCheckResponse["latestPayment"]>(null);
   const didRedirect = useRef(false);
 
-  // Course data: try API first; fallback to local
+  // ---------------- Course data ----------------
+  // Try API first; fallback to local placeholder.
   const [course, setCourse] = useState<CourseDetail | null>(null);
 
-  // Progress (indices + answers) + persistence keys
+  // ---------------- Progress state ----------------
+  // Indices + answers + localStorage key:
   type Persisted = {
     currentModuleIndex: number;
     currentLessonIndex: number;
     answers: Record<string, number | null>;
   };
-
   const STORAGE_KEY = "course:progress:v1";
 
-  // Initialize localStorage progress (single read)
+  // Single read to bootstrap from localStorage (safe to useMemo here—it's before any return)
   const initialProgress: Persisted = useMemo(() => {
     try {
       const raw =
@@ -164,7 +168,7 @@ function CoursePageInner() {
     initialProgress.answers
   );
 
-  // Debounced server save (for progress) refs
+  // Debounced server save (for progress)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef<string>("");
 
@@ -186,10 +190,12 @@ function CoursePageInner() {
       if (status === "loading") return;
 
       try {
+        // Optimistic unlock if session claims paid.
         if (session?.user?.hasPaid) {
           setHasAccess(true);
         }
 
+        // Authoritative check
         const first = await checkOnce();
         if (first.ok && first.data.hasAccess) {
           setHasAccess(true);
@@ -362,7 +368,8 @@ function CoursePageInner() {
   }, [course, currentModuleIndex, currentLessonIndex, answers]);
 
   // -------------------------------------------
-  // Early returns AFTER all hooks are declared
+  // Early returns AFTER all state/effect hooks are declared
+  // (No hooks appear below that can be skipped conditionally.)
   // -------------------------------------------
   if (loading) {
     return (
@@ -384,7 +391,7 @@ function CoursePageInner() {
   }
 
   // -------------------------------------------
-  // Derived data + helpers (safe: course is defined)
+  // Derived data + helpers (SAFE: No Hooks below this point)
   // -------------------------------------------
   const modules: CourseModule[] = course.modules ?? [];
   const currentModule = modules[currentModuleIndex] ?? modules[0];
@@ -437,21 +444,20 @@ function CoursePageInner() {
     goNextLesson();
   };
 
-  // Optional simple overall progress display
-  const flatLessonCount = useMemo(
-    () => modules.reduce((acc, m) => acc + (m.lessons?.length ?? 0), 0),
-    [modules]
+  // ---------- Simple overall progress (NO HOOKS here) ----------
+  // We intentionally compute these *without* useMemo so hook order never changes.
+  const flatLessonCount = modules.reduce(
+    (acc, m) => acc + (m.lessons?.length ?? 0),
+    0
   );
-  const currentFlatIndex = useMemo(() => {
-    let idx = 0;
-    for (let m = 0; m < modules.length; m++) {
-      if (m < currentModuleIndex) {
-        idx += modules[m].lessons?.length ?? 0;
-      }
+
+  let currentFlatIndex = 0;
+  for (let m = 0; m < modules.length; m++) {
+    if (m < currentModuleIndex) {
+      currentFlatIndex += modules[m].lessons?.length ?? 0;
     }
-    idx += currentLessonIndex;
-    return idx;
-  }, [modules, currentModuleIndex, currentLessonIndex]);
+  }
+  currentFlatIndex += currentLessonIndex;
 
   const progressPercent =
     flatLessonCount > 0
@@ -508,7 +514,9 @@ function CoursePageInner() {
                   <h2 className="text-xl sm:text-2xl font-bold text-blue-900">
                     {currentModule?.title ?? "Module"}
                   </h2>
-                  <p className="text-sm text-gray-600">{currentLesson?.title ?? "Lesson"}</p>
+                    <p className="text-sm text-gray-600">
+                      {currentLesson?.title ?? "Lesson"}
+                    </p>
                 </div>
 
                 <div className="flex gap-2">
