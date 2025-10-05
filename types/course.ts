@@ -45,3 +45,14 @@ export interface CourseDetail {
   coverImage?: string | null;
   modules: CourseModule[];
 }
+
+/**
+ * Optional read-only progress metadata returned by /api/courses/progress (GET).
+ * This is *separate* from the granular client-side indices & answers.
+ * Keep it minimal and schema-aligned.
+ */
+export interface UserCourseProgressDTO {
+  completedModuleIds: string[];
+  lastModuleId: string | null;
+  percent: number | null; // 0..100 or null if not computed
+}
