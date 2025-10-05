@@ -1,3 +1,5 @@
+// /components/dashboard/TypingText.tsx
+
 'use client';
 
 import {
