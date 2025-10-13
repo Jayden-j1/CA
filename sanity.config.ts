@@ -1,28 +1,40 @@
-'use client'
+// sanity.config.ts
+//
+// Purpose
+// -------
+// Central Sanity configuration for the embedded Studio at /cms.
+//
+// This file is imported by app/cms/[[...tool]]/page.tsx using a relative path.
+// Vercel requires absolute module resolution, so make sure this file is at the
+// project root (same level as package.json).
+//
+// Pillars
+// -------
+// - Simplicity: all schema imports declared here.
+// - Robustness: validated config shape for Studio runtime.
+// - Maintainability: future schema additions only modify this file.
 
-/**
- * This configuration is used to for the Sanity Studio that’s mounted on the `\app\cms\[[...tool]]\page.tsx` route
- */
+import { defineConfig } from "sanity";
+import { deskTool } from "sanity/desk";
+import { visionTool } from "@sanity/vision";
 
-import {visionTool} from '@sanity/vision'
-import {defineConfig} from 'sanity'
-import {structureTool} from 'sanity/structure'
-
-// Go to https://www.sanity.io/docs/api-versioning to learn how API versioning works
-import {apiVersion, dataset, projectId} from './sanity/env'
-import {schema} from './sanity/schemaTypes'
-import {structure} from './sanity/structure'
+// Import your schemas (adjust path if you renamed your folder)
+import course from "./app/cms/schemas/course";
+import module from "./app/cms/schemas/module";
+import lesson from "./app/cms/schemas/lesson";
 
 export default defineConfig({
-  basePath: '/cms',
-  projectId,
-  dataset,
-  // Add and edit the content schema in the './sanity/schemaTypes' folder
-  schema,
-  plugins: [
-    structureTool({structure}),
-    // Vision is for querying with GROQ from inside the Studio
-    // https://www.sanity.io/docs/the-vision-plugin
-    visionTool({defaultApiVersion: apiVersion}),
-  ],
-})
+  name: "default",
+  title: "Cultural Awareness CMS",
+
+  projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID!,
+  dataset: process.env.NEXT_PUBLIC_SANITY_DATASET || "production",
+
+  basePath: "/cms",
+
+  plugins: [deskTool(), visionTool()],
+
+  schema: {
+    types: [course, module, lesson],
+  },
+});
