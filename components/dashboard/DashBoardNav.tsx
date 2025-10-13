@@ -2,15 +2,24 @@
 //
 // Purpose:
 // - Config-driven dashboard navigation.
-// - NOW: also trusts a lightweight server check so the nav updates quickly
-//   after a Stripe webhook (even before NextAuth token refresh).
 //
-// What changed:
-// - Added a tiny `/api/payments/check` probe on mount to compute `serverHasAccess`.
-// - Use `effectiveHasPaid = sessionHasPaid || serverHasAccess === true`.
-// - Expose `isLoading` while the probe runs to avoid flicker.
-// - (Optional/harmless) If the URL has `?success=true`, we could add short polling
-//   like elsewhere; here we do a single probe for simplicity & performance.
+// Why these fixes?
+// - Next.js App Router + TypeScript can type `useSearchParams()` and `usePathname()`
+//   as possibly `null` during certain build/SSR phases.
+// - Making both calls null-safe removes Vercel build crashes while keeping
+//   your logic 100% unchanged.
+//
+// Behavior retained:
+// - Trusts a lightweight server probe `/api/payments/check` to flip the nav
+//   quickly after Stripe webhook (before the NextAuth token refresh).
+// - If landing with ?success=true, it polls a few times to reflect payment ASAP.
+// - Filters items via filterDashboardNavigation (role, businessId, paid state).
+//
+// Pillars:
+// - Efficiency: short polling window only on success; single probe otherwise.
+// - Robustness: null-safe URL hooks; no flicker while loading.
+// - Simplicity: original structure preserved; comments added.
+// - Security: no client mutations; server remains source of truth for access.
 
 "use client";
 
@@ -30,17 +39,23 @@ interface NavbarProps {
 
 const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
-  const pathname = usePathname();
+
+  // ✅ Null-safe: `usePathname()` may be `null` during prerender/hydration.
+  // We coerce to empty string for stable comparisons.
+  const pathname = usePathname() ?? "";
 
   const { data: session, status } = useSession();
   const role = session?.user?.role as Role | undefined;
   const businessId = session?.user?.businessId || null;
   const sessionHasPaid = Boolean(session?.user?.hasPaid);
 
-  // ---- NEW: server truth (authoritative) for nav decisions
+  // ---- Authoritative server truth (fast nav update after webhook)
   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
+
+  // ✅ Null-safe: `useSearchParams()` may be unavailable momentarily in some builds.
+  // Optional chaining + fallback prevents "possibly null" errors in CI/Vercel.
   const searchParams = useSearchParams();
-  const justSucceeded = searchParams.get("success") === "true";
+  const justSucceeded = (searchParams?.get("success") ?? "") === "true";
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -48,8 +63,9 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    // If ?success=true (post-checkout), do a few retries so the nav flips ASAP.
-    const maxAttempts = justSucceeded ? 6 : 1; // ~9s if succeeded (6 * 1.5s)
+    // If we return from Stripe with ?success=true, poll briefly so the nav
+    // flips from "Upgrade" → "Billing" as soon as the webhook lands.
+    const maxAttempts = justSucceeded ? 6 : 1; // ~9s window (6 * 1.5s) on success; single probe otherwise
     const intervalMs = 1500;
     let attempts = 0;
 
@@ -75,12 +91,12 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, justSucceeded]); // omit serverHasAccess so we don't rearm unnecessarily
+  }, [status, justSucceeded]); // omit `serverHasAccess` to avoid re-arming the loop
 
-  // Effective paid state for nav rules
+  // Effective paid state for nav decisions
   const effectiveHasPaid = sessionHasPaid || serverHasAccess === true;
 
-  // Hide sensitive nav while loading to avoid flicker
+  // Hide sensitive links while session/probe are loading to avoid flicker
   const isLoading =
     status === "loading" ||
     (status === "authenticated" && serverHasAccess === null);
