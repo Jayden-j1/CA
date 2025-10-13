@@ -19,9 +19,9 @@ import { deskTool } from "sanity/desk";
 import { visionTool } from "@sanity/vision";
 
 // Import your schemas (adjust path if you renamed your folder)
-import course from "./app/cms/schemas/course";
-import module from "./app/cms/schemas/module";
-import lesson from "./app/cms/schemas/lesson";
+import course from "./cms/schemas/course";
+import module from "./cms/schemas/module";
+import lesson from "./cms/schemas/lesson";
 
 export default defineConfig({
   name: "default",
