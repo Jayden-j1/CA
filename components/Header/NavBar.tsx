@@ -1,18 +1,22 @@
 // components/Header/NavBar.tsx
 //
 // Purpose:
-// - Shared Navbar for public + dashboard.
-// - DashboardNavbar delegates visibility to filterDashboardNavigation()
-//   so that "Upgrade" hides when paid and "Billing" appears for paid individuals
-//   and for owners/admins.
-// - Adds a lightweight server confirmation (`/api/payments/check`) so nav updates
-//   even before NextAuth session token refreshes post-webhook.
+// - Shared Navbar for both public and dashboard contexts.
+// - Handles route highlighting, logout, and live nav updates after payments.
 //
-// Key updates in this version:
-// - Compute `effectiveHasPaid = session.user.hasPaid || serverHasAccess`.
-// - When landing on /dashboard?success=true, poll the check briefly to avoid
-//   showing “Upgrade” and to reveal “Billing” ASAP once webhook writes Payment.
-// - While loading, we use hideWhileLoading in nav config to avoid flicker.
+// Key Fixes (2025-10):
+// 1. ✅ Null-safe useSearchParams() via optional chaining and fallback.
+// 2. ✅ Safe pathname comparison (pathname ?? "") to avoid TS warnings.
+// 3. ✅ Preserve correct property: `item.name` (not `label`).
+// 4. ✅ Maintain all behavior: session-aware filtering, responsive UI.
+//
+// Pillars applied:
+// - Efficiency: Single-pass polling, minimal renders.
+// - Robustness: Build-proof under Next.js 15’s strict type checking.
+// - Simplicity: Original structure untouched, only type-safe guards added.
+// - Ease of Management: Comments + clear defensive improvements.
+// - Security: Sign-out callback remains safe and explicit.
+//
 
 'use client';
 
@@ -28,16 +32,21 @@ import {
 } from "@/config/navigation";
 
 // ---------------------------------------------------------
-// BaseNavbar: Presentational component
+// BaseNavbar: Presentational component for any nav list
 // ---------------------------------------------------------
 const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const pathname = usePathname();
 
+  // ✅ Safe pathname access (may be null during prerender)
+  const pathname = usePathname() ?? "";
+
+  // Split items for left/right alignment
   const leftItems = navItems.filter((item) => item.align !== "right");
   const rightItems = navItems.filter((item) => item.align === "right");
 
-  // Intercept Logout → call NextAuth.signOut with callbackUrl (for a friendly toast)
+  // ---------------------------------------------------------
+  // Intercept Logout → signOut() with friendly redirect toast
+  // ---------------------------------------------------------
   const handleMaybeLogout = async (
     e: React.MouseEvent<HTMLAnchorElement>,
     href: string
@@ -49,10 +58,13 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
     await signOut({ callbackUrl });
   };
 
+  // ---------------------------------------------------------
+  // Render: Desktop & Mobile versions unified
+  // ---------------------------------------------------------
   return (
     <header>
       <nav className="relative bg-white border-gray-200 shadow-sm px-4 py-3 flex items-center justify-between">
-        {/* Desktop left-aligned items */}
+        {/* Left-aligned links (desktop) */}
         <div className="hidden lg:flex space-x-6 items-center">
           {leftItems.map((item) => (
             <Link
@@ -70,7 +82,7 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
           ))}
         </div>
 
-        {/* Desktop right-aligned items */}
+        {/* Right-aligned links (desktop) */}
         <div className="hidden lg:flex space-x-6 items-center ml-auto">
           {rightItems.map((item) => (
             <Link
@@ -99,7 +111,7 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
           </button>
         </div>
 
-        {/* Mobile menu */}
+        {/* Mobile dropdown menu */}
         {isOpen && (
           <div className="absolute top-full left-0 w-full lg:hidden px-4 pb-4 space-y-1 bg-white shadow z-50">
             {navItems.map((item) => (
@@ -125,36 +137,40 @@ const BaseNavbar: React.FC<{ navItems: NavItem[] }> = ({ navItems }) => {
 };
 
 // ---------------------------------------------------------
-// Public Navbar
+// Public Navbar (for non-authenticated routes)
 // ---------------------------------------------------------
 export const PublicNavbar: React.FC = () => (
   <BaseNavbar navItems={publicNavigation} />
 );
 
 // ---------------------------------------------------------
-// Dashboard Navbar (role/payment-aware)
+// Dashboard Navbar (role/payment-aware dynamic nav)
 // ---------------------------------------------------------
 export const DashboardNavbar: React.FC = () => {
   const { data: session, status } = useSession();
+
+  // ✅ Null-safe searchParams (prevents Vercel build crash)
   const searchParams = useSearchParams();
+  const justSucceeded = (searchParams?.get("success") ?? "") === "true";
 
   const role = session?.user?.role;
   const businessId = session?.user?.businessId ?? null;
   const sessionHasPaid = Boolean(session?.user?.hasPaid);
 
-  // ——— Lightweight server truth for nav (so we don't wait for session refresh)
+  // Track server-confirmed access to update nav faster than token refresh
   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
 
-  // If landing with success=true post-checkout, poll briefly so nav reflects payment as soon as webhook lands.
-  const justSucceeded = searchParams.get("success") === "true";
-
+  // ---------------------------------------------------------
+  // Lightweight polling: after Stripe success, wait for webhook
+  // ---------------------------------------------------------
   useEffect(() => {
     if (status !== "authenticated") return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
-    const maxAttempts = justSucceeded ? 8 : 1; // ~12s if just succeeded (8 * 1.5s), else single probe
+
+    const maxAttempts = justSucceeded ? 8 : 1; // ~12s polling window
     const intervalMs = 1500;
 
     const probe = async () => {
@@ -179,17 +195,17 @@ export const DashboardNavbar: React.FC = () => {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, justSucceeded]); // intentionally omit serverHasAccess to avoid rearming the poll loop
+  }, [status, justSucceeded]);
 
-  // Effective hasPaid for nav decisions:
-  // - trusts either the session (fast) OR the server check (authoritative)
+  // Effective "paid" status combines session + server truth
   const effectiveHasPaid = sessionHasPaid || serverHasAccess === true;
 
-  // Loading state for nav items that opt-into hideWhileLoading
+  // Nav loading state (hides items that opt into hideWhileLoading)
   const isLoading =
     status === "loading" ||
     (status === "authenticated" && serverHasAccess === null);
 
+  // Apply filtering rules for dashboard navigation
   const filtered = filterDashboardNavigation({
     navigation: dashboardNavigation,
     role,
