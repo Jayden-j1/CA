@@ -1,13 +1,18 @@
 // lib/toastMessages.ts
 //
 // Purpose:
-// - Centralize role-based toast logic (success, error, and system-level errors).
-// - Keeps forms clean and ensures consistent toast styles across the app.
+// - Centralize toast messaging (success, role-specific errors, invalid-credential hint, and system errors).
+// - Keep messages consistent and non-technical for end users.
+// - Single place to adjust copy/branding later.
+//
+// Notes:
+// - This adds `showInvalidCredentialsToast()` which your LoginForm imports.
+// - All existing exports (showRoleToast, showRoleErrorToast, showSystemErrorToast) are preserved.
 
 import toast from "react-hot-toast";
 
 // ------------------------------
-// Success toast by role
+// Success toast by role (unchanged)
 // ------------------------------
 export function showRoleToast(role: string) {
   switch (role) {
@@ -33,7 +38,7 @@ export function showRoleToast(role: string) {
 }
 
 // ------------------------------
-// Error toast by role
+// Error toast by role (unchanged)
 // ------------------------------
 export function showRoleErrorToast(role: string) {
   switch (role) {
@@ -59,21 +64,27 @@ export function showRoleErrorToast(role: string) {
 }
 
 // ------------------------------
-// Default system-level error
+// New: Friendly invalid-credentials message
 // ------------------------------
-// Used when something unexpected happens (server error, network error, etc.)
+// Use this when the email doesn't match an account OR the password is wrong.
+// (Security-aware: avoids confirming whether the email exists.)
+export function showInvalidCredentialsToast() {
+  toast.error(
+    "We couldn’t find an account with that email or the password is incorrect.",
+    {
+      style: { background: "#334155", color: "#fff" }, // slate
+      duration: 3000,
+    }
+  );
+}
+
+// ------------------------------
+// System-level error (unchanged)
+// ------------------------------
+// Use this for unexpected server/network/runtime errors.
 export function showSystemErrorToast() {
   toast.error("⚠️ A system error occurred. Please try again later.", {
     style: { background: "#6b21a8", color: "#fff" }, // deep purple
     duration: 2000,
   });
 }
-
-
-
-
-
-
-
-
-

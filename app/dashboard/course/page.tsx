@@ -1,25 +1,24 @@
 // app/dashboard/course/page.tsx
 //
 // ============================================================
-// Phase 3.3 — Lesson Transitions + Micro-interactions
+// Course Page — Robust access gating + full UI restored
 // ============================================================
 //
-// Purpose:
-// ----------
-// - Introduces subtle yet professional motion using Framer Motion.
-// - Smoothly fades/slides lessons in/out during navigation.
-// - Adds tactile hover/tap feedback for navigation & certificate buttons.
-// - Respects `prefers-reduced-motion` for accessibility.
-// - Keeps codebase lightweight, resilient, and easy to maintain.
+// What this file ensures:
+// - ✅ No “blank page”: we always render a user-friendly fallback instead of `return null`
+// - ✅ Null-safe useSearchParams(): `(searchParams?.get(...) ?? "")` avoids CI type errors
+// - ✅ Abort-safe fetch: ignores expected aborts/unmounts (No noisy console errors)
+// - ✅ Polling after Stripe success: briefly re-check access so UI flips quickly
+// - ✅ Keyboard navigation: ← → switches lessons
+// - ✅ Progress persistence: stored in localStorage
+// - ✅ Your full UI restored: sticky header, ModuleList, VideoPlayer, QuizCard, certificate button
 //
-// Pillars:
-// ----------
-// • Simplicity – All motion logic lives in this file.
-// • Robustness – No new hooks; no change to render order.
-// • Efficiency – GPU-accelerated transforms, minimal re-renders.
-// • Ease of Management – Well-commented motion sections.
-// • Security – Pure client-side animation; no data mutation.
-// ============================================================
+// Pillars: efficiency, robustness, simplicity, ease of management, security
+// - Efficiency: only minimal polling on `?success=true`, quick bailouts on abort
+// - Robustness: defensive guards, never `return null` for primary states
+// - Simplicity: single file concentrates page behavior; comments explain critical parts
+// - Ease of management: predictable state flow; safe cleanup on unmount
+// - Security: access is determined server-side (/api/payments/check); UI follows
 
 "use client";
 
@@ -57,8 +56,7 @@ const LOCAL_PLACEHOLDER: CourseDetail = {
     {
       id: "m1",
       title: "Introduction to Country & Connection",
-      description:
-        "Foundations of Country as identity, law, and responsibility.",
+      description: "Foundations of Country as identity, law, and responsibility.",
       lessons: [
         {
           id: "m1l1",
@@ -117,15 +115,13 @@ export default function CoursePageWrapper() {
 function CoursePageInner() {
   const router = useRouter();
 
-  // NOTE (⚠️ build fix):
+  // ⚠️ Build fix:
   // `useSearchParams()` can be typed as possibly `null` in some setups.
   // We make it null-safe using optional chaining and a default fallback string.
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
-  // ✅ FIX: make null-safe for production builds
-  // - If `searchParams` is null, `searchParams?.get("success")` returns `undefined`
-  // - We coalesce to an empty string and compare to "true"
+  // ✅ Null-safe query param access
   const justSucceeded = (searchParams?.get("success") ?? "") === "true";
 
   // ---------- Access & Course State ----------
@@ -176,31 +172,55 @@ function CoursePageInner() {
   );
 
   // ------------------------------------------------------------
-  // Authoritative Access Check
+  // 🛡 Authoritative Access Check (abort-safe + post-payment polling)
   // ------------------------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
+    let unmounted = false;
+
     const checkOnce = async () => {
-      const res = await fetch("/api/payments/check", {
-        signal: ac.signal,
-        cache: "no-store",
-      });
-      const data: PaymentCheckResponse = await res.json();
-      return { ok: res.ok, data };
+      try {
+        const res = await fetch("/api/payments/check", {
+          signal: ac.signal,
+          cache: "no-store",
+        });
+        const data: PaymentCheckResponse = await res.json();
+        return { ok: res.ok, data };
+      } catch (err: any) {
+        // 🧹 Swallow expected aborts (strict mode remounts, nav changes, etc.)
+        if (
+          err?.name === "AbortError" ||
+          err === "component-unmounted" ||
+          err?.message === "component-unmounted"
+        ) {
+          return {
+            ok: false,
+            data: { hasAccess: false, packageType: null, latestPayment: null },
+          };
+        }
+        throw err; // real errors propagate
+      }
     };
 
     const run = async () => {
       if (status === "loading") return;
 
       try {
+        // Trust session for immediate UX
         if (session?.user?.hasPaid) setHasAccess(true);
+
+        // First authoritative probe
         const first = await checkOnce();
+        if (unmounted || ac.signal.aborted) return;
+
         if (first.ok && first.data.hasAccess) {
           setHasAccess(true);
           setPackageType(first.data.packageType);
           setLatestPayment(first.data.latestPayment);
         } else if (justSucceeded) {
+          // After redirect from Stripe, poll briefly while webhook lands
           for (let i = 0; i < 8; i++) {
+            if (unmounted || ac.signal.aborted) break;
             await new Promise((r) => setTimeout(r, 1500));
             const retry = await checkOnce();
             if (retry.ok && retry.data.hasAccess) {
@@ -212,24 +232,40 @@ function CoursePageInner() {
           }
         }
 
+        // If still no access → redirect to Upgrade (once)
         if (!hasAccess && !session?.user?.hasPaid && !didRedirect.current) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
         }
-      } catch (err) {
-        console.error("[Course] Access check failed:", err);
-        if (!didRedirect.current) {
+      } catch (err: any) {
+        // Only log real unexpected errors (ignore controlled aborts)
+        if (
+          err?.name !== "AbortError" &&
+          err !== "component-unmounted" &&
+          err?.message !== "component-unmounted"
+        ) {
+          console.error("[Course] Access check failed:", err);
+        }
+        if (!didRedirect.current && !unmounted) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
         }
       } finally {
-        setLoading(false);
+        if (!unmounted) setLoading(false);
       }
     };
 
     run();
-    return () => ac.abort();
-  }, [status, session?.user?.hasPaid, router, justSucceeded, hasAccess]);
+
+    // ✅ Cleanup: abort fetch with *reason* to silence devtools error noise
+    return () => {
+      unmounted = true;
+      if (!ac.signal.aborted) ac.abort("component-unmounted");
+    };
+
+    // Keep deps minimal; don't include `hasAccess` or we'll re-run unnecessarily
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, session?.user?.hasPaid, router, justSucceeded]);
 
   // ------------------------------------------------------------
   // Load Course Data (with fallback)
@@ -254,8 +290,7 @@ function CoursePageInner() {
         }
         const detailJson = await detailRes.json();
         if (!cancelled) setCourse(detailJson.course as CourseDetail);
-      } catch (err) {
-        console.warn("[Course] Could not load course from API:", err);
+      } catch {
         if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
       }
     };
@@ -275,7 +310,8 @@ function CoursePageInner() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  });
+    // no deps → re-register only on mount/unmount
+  }, [currentLessonIndex, currentModuleIndex]); // (optional) include to keep arrows responsive after state changes
 
   // ------------------------------------------------------------
   // Persist progress to localStorage
@@ -336,7 +372,7 @@ function CoursePageInner() {
   };
 
   // ------------------------------------------------------------
-  // Render States
+  // Render States (never render null → no blank page)
   // ------------------------------------------------------------
   if (loading)
     return (
@@ -348,7 +384,17 @@ function CoursePageInner() {
         </p>
       </section>
     );
-  if (!hasAccess) return null;
+
+  if (!hasAccess) {
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">
+          You don’t currently have access to this course.
+        </p>
+      </section>
+    );
+  }
+
   if (!course)
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
@@ -357,7 +403,7 @@ function CoursePageInner() {
     );
 
   // ------------------------------------------------------------
-  // Main JSX
+  // Main JSX (FULL UI RESTORED)
   // ------------------------------------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
@@ -404,7 +450,7 @@ function CoursePageInner() {
           <div className="lg:col-span-8">
             <AnimatePresence mode="wait">
               <motion.div
-                key={`${currentModuleIndex}-${currentLessonIndex}`}
+                key={`${currentModuleIndex}-${currentLessonIndex}`} // ✅ correct template literal
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
@@ -516,10 +562,7 @@ function CoursePageInner() {
                           a.remove();
                           window.URL.revokeObjectURL(url);
                         } catch (e) {
-                          console.error(
-                            "[Certificate download] error:",
-                            e
-                          );
+                          console.error("[Certificate download] error:", e);
                           alert(
                             "Something went wrong generating your certificate."
                           );
