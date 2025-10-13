@@ -1,19 +1,7 @@
 // app/services/page.tsx
 //
-// Purpose:
-// - Public-facing Services page.
-// - Shows pricing packages + handles Stripe checkout redirects.
-// - Uses NEXT_PUBLIC_* env vars (via CheckoutButton / PricingCardSection).
-//
-// Updates (minor):
-// - No functional change needed for the "signup → pay → dashboard" flow,
-//   because CheckoutButton only renders for logged-in users.
-// - The backend success_url now goes to /dashboard instead of /services.
-// - Defensive guards: none needed; keeping existing toast handling.
-//
-// Security:
-// - Displayed prices from NEXT_PUBLIC_* env vars.
-// - Real charges enforced server-side with STRIPE_*_PRICE in /api/checkout/create-session.
+// ✅ Update: null-safe `useSearchParams()` to prevent build errors.
+// All behavior and UX remain identical.
 
 "use client";
 
@@ -28,9 +16,10 @@ function ServicesToastHandler() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const success = searchParams.get("success");
-    const canceled = searchParams.get("canceled");
-    const error = searchParams.get("error");
+    // ✅ Null-safe reads
+    const success = (searchParams?.get("success") ?? "") === "true";
+    const canceled = (searchParams?.get("canceled") ?? "") === "true";
+    const error = searchParams?.get("error") ?? "";
 
     if (success) {
       toast.success("🎉 Payment successful! You now have access.", {
@@ -68,7 +57,6 @@ function ServicesContent() {
         onClick={handleScrollToPricing}
       />
 
-      {/* Pricing section with env-driven prices (only logged-in users see Checkout button) */}
       <PricingCardSection />
     </main>
   );

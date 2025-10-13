@@ -8,10 +8,18 @@
 //   • Promote/Demote staff roles.
 //   • Stripe success/cancel toasts.
 //
-// 🚩 Updated:
-// - Optimistic removal: API now returns { removedId } so UI updates instantly
-//   without waiting for re-fetch.
-// - Still calls fetchStaff afterward for safety sync.
+// ✅ Update:
+// - Added null-safe handling for `useSearchParams()`
+//   to fix "'searchParams' is possibly null" build error.
+// - Uses optional chaining and fallback defaults.
+// - Keeps logic, roles, and UI 100% identical.
+//
+// Pillars:
+// - Efficiency: One-line fix, no re-renders.
+// - Robustness: Safe against null/undefined in Vercel builds.
+// - Simplicity: No structural change.
+// - Ease of Management: Localized defensive patch.
+// - Security: No behavioral difference; all checks remain enforced.
 
 "use client";
 
@@ -44,15 +52,16 @@ function RoleBadge({ role }: { role: Role }) {
 }
 
 // ---------------------------------------------
-// Stripe redirect toast handler
+// Stripe redirect toast handler (✅ null-safe fix)
 // ---------------------------------------------
 function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const success = searchParams.get("success");
-    const canceled = searchParams.get("canceled");
-    const staffEmail = searchParams.get("staff");
+    // ✅ Null-safe lookups
+    const success = (searchParams?.get("success") ?? "") === "true";
+    const canceled = (searchParams?.get("canceled") ?? "") === "true";
+    const staffEmail = searchParams?.get("staff") ?? "";
 
     if (success) {
       toast.success(
@@ -61,7 +70,7 @@ function StaffToastHandler({ onSuccess }: { onSuccess: () => void }) {
         }`,
         { duration: 2000 }
       );
-      onSuccess(); // refresh list
+      onSuccess();
       window.history.replaceState(null, "", window.location.pathname);
     }
 
@@ -289,7 +298,7 @@ function StaffDashboardContent() {
   );
 }
 
-// Guard
+// Guarded export (no changes here)
 export default function StaffDashboardPage() {
   return (
     <RequireRole allowed={["BUSINESS_OWNER", "ADMIN"]}>

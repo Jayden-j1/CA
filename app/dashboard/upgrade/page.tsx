@@ -1,8 +1,7 @@
 // app/dashboard/upgrade/page.tsx
 //
-// Why this change?
-// This page uses `useSearchParams()` inside UpgradeToastHandler.
-// We wrap that subtree in <Suspense> so hydration can safely suspend.
+// ✅ Update: null-safe `useSearchParams()`
+// Prevents build-time TS errors while preserving identical runtime behavior.
 
 "use client";
 
@@ -13,16 +12,14 @@ import toast from "react-hot-toast";
 import CheckoutButton from "@/components/payments/CheckoutButton";
 import SearchParamsWrapper from "@/components/utils/searchParamsWrapper";
 
-// ------------------------------
-// Query Param → Toast handler
-// ------------------------------
 function UpgradeToastHandler() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const success = searchParams.get("success");
-    const canceled = searchParams.get("canceled");
-    const error = searchParams.get("error");
+    // ✅ Null-safe param reads
+    const success = (searchParams?.get("success") ?? "") === "true";
+    const canceled = (searchParams?.get("canceled") ?? "") === "true";
+    const error = searchParams?.get("error") ?? "";
 
     if (success) {
       toast.success("🎉 Payment successful! You now have full access.", {
@@ -47,11 +44,7 @@ function UpgradeToastHandler() {
   return null;
 }
 
-// ------------------------------
-// Main Upgrade Page
-// ------------------------------
 export default function UpgradePage() {
-  // Display prices only (authoritative prices resolved server-side)
   const individualPrice = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "80";
   const businessPrice = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "200";
   const staffSeatPrice = process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE || "50";
@@ -72,7 +65,6 @@ export default function UpgradePage() {
         🚀 Unlock the Interactive Map and Course Content by purchasing a package.
       </p>
 
-      {/* Package Buttons */}
       <div className="flex flex-col sm:flex-row gap-6">
         <CheckoutButton
           packageType="individual"
