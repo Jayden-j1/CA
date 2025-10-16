@@ -1,77 +1,49 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    // --- Output / module resolution ---
+    "target": "ES2022",
     "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
     ],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "jsx": "preserve",
+    "allowJs": false,
+    "noEmit": true,
     "incremental": true,
-    "baseUrl": ".", 
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
+    // --- Quality / DX ---
+    "strict": true,
+    "skipLibCheck": true, // ✅ ignore node_modules type noise
+    "noUncheckedIndexedAccess": false, // you can enable later if you want
+    "forceConsistentCasingInFileNames": true,
+    // --- Path aliases ---
+    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./*"
       ]
     },
-    // ✅ ensure NextAuth augmentation is picked up
-    "typeRoots": [
-      "./types",
-      "./node_modules/@types"
+    // --- Interop ---
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
     ]
+    // --- Important: DO NOT list missing type packages here ---
+    // "types": []  // ← Intentionally omitted to avoid “Cannot find type definition file for …”
   },
   "include": [
+    "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    "next-env.d.ts",
-    // ".next/types/**/*.ts",
-    "types/**/*.d.ts" // ✅ explicitly include your custom types folder
-    ,
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules",
-    ".next"
+    "node_modules"
   ]
 }
-// {
-//   "compilerOptions": {
-//     "target": "ES2017",
-//     "lib": ["dom", "dom.iterable", "esnext"],
-//     "allowJs": true,
-//     "skipLibCheck": true,
-//     "strict": true,
-//     "noEmit": true,
-//     "esModuleInterop": true,
-//     "module": "esnext",
-//     "moduleResolution": "bundler",
-//     "resolveJsonModule": true,
-//     "isolatedModules": true,
-//     "jsx": "preserve",
-//     "incremental": true,
-//     "plugins": [
-//       {
-//         "name": "next"
-//       }
-//     ],
-//     "paths": {
-//       "@/*": ["./*"]
-//     }
-//   },
-//   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-//   "exclude": ["node_modules"]
-// }
