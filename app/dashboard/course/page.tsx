@@ -1,8 +1,9 @@
 // app/dashboard/course/page.tsx
 //
 // ============================================================
-/* Course Page — Robust access gating + Preview-safe client wiring
-   + Portable Text type fix (string → blocks[] wrapper) */
+// Course Page
+// Robust access gating + Preview-safe client wiring
+// Integrated PortableTextRenderer (images + inline video support)
 // ============================================================
 
 "use client";
@@ -10,18 +11,17 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { PortableText } from "@portabletext/react";
-import type { TypedObject } from "@portabletext/types"; // ✅ for safe PT typing
+import type { TypedObject } from "@portabletext/types";
 import { motion, AnimatePresence } from "framer-motion";
 
 import ModuleList from "@/components/course/ModuleList";
 import VideoPlayer from "@/components/course/VideoPlayer";
 import QuizCard from "@/components/course/QuizCard";
+import PortableTextRenderer from "@/components/course/PortableTextRenderer"; // ✅ Replaces old PortableText
 import type { CourseDetail, CourseModule } from "@/types/course";
-import PortableTextRenderer from "@/components/course/PortableTextRenderer";
 
 // ------------------------------------------------------------
-// Access check response type
+// Access check response type (API parity)
 // ------------------------------------------------------------
 interface PaymentCheckResponse {
   hasAccess: boolean;
@@ -30,7 +30,7 @@ interface PaymentCheckResponse {
 }
 
 // ------------------------------------------------------------
-// Local fallback course (shown if API fails)
+// Local fallback course (used if API or network fails)
 // ------------------------------------------------------------
 const LOCAL_PLACEHOLDER: CourseDetail = {
   id: "local",
@@ -79,7 +79,7 @@ const LOCAL_PLACEHOLDER: CourseDetail = {
 };
 
 // ------------------------------------------------------------
-// Suspense wrapper – isolates data/loading states
+// Suspense wrapper — isolates data/loading states cleanly
 // ------------------------------------------------------------
 export default function CoursePageWrapper() {
   return (
@@ -96,40 +96,42 @@ export default function CoursePageWrapper() {
 }
 
 // ------------------------------------------------------------
-// Main Course Page Component
+// Main Course Page
 // ------------------------------------------------------------
 function CoursePageInner() {
   const router = useRouter();
-
-  // null-safe params (build-friendly)
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
+  // Determine if this request is for preview content
   const justSucceeded = (searchParams?.get("success") ?? "") === "true";
-
-  // ✅ Client-side preview flag; server APIs decide draft vs published
   const isPreview = (searchParams?.get("preview") ?? "") === "true";
   const requestedSlug = searchParams?.get("slug") ?? "";
 
-  // ---------- Access & Course State ----------
+  // ------------------------------------------------------------
+  // Access & course state management
+  // ------------------------------------------------------------
   const [loading, setLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
   const [packageType, setPackageType] =
     useState<"individual" | "business" | null>(null);
   const [latestPayment, setLatestPayment] =
     useState<PaymentCheckResponse["latestPayment"]>(null);
+  const [course, setCourse] = useState<CourseDetail | null>(null);
   const didRedirect = useRef(false);
 
-  const [course, setCourse] = useState<CourseDetail | null>(null);
-
-  // ---------- Progress (persistent) ----------
+  // ------------------------------------------------------------
+  // Local storage persistence for course progress
+  // ------------------------------------------------------------
   type Persisted = {
     currentModuleIndex: number;
     currentLessonIndex: number;
     answers: Record<string, number | null>;
   };
+
   const STORAGE_KEY = "course:progress:v1";
 
+  // Load saved progress (if any)
   const initialProgress: Persisted = useMemo(() => {
     try {
       const raw =
@@ -157,7 +159,7 @@ function CoursePageInner() {
   );
 
   // ------------------------------------------------------------
-  // Authoritative Access Check (abort-safe + post-payment polling)
+  // Access check (polls API securely after payment)
   // ------------------------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
@@ -172,16 +174,7 @@ function CoursePageInner() {
         const data: PaymentCheckResponse = await res.json();
         return { ok: res.ok, data };
       } catch (err: any) {
-        if (
-          err?.name === "AbortError" ||
-          err === "component-unmounted" ||
-          err?.message === "component-unmounted"
-        ) {
-          return {
-            ok: false,
-            data: { hasAccess: false, packageType: null, latestPayment: null },
-          };
-        }
+        if (err?.name === "AbortError") return { ok: false, data: null };
         throw err;
       }
     };
@@ -195,16 +188,17 @@ function CoursePageInner() {
         const first = await checkOnce();
         if (unmounted || ac.signal.aborted) return;
 
-        if (first.ok && first.data.hasAccess) {
+        if (first.ok && first.data?.hasAccess) {
           setHasAccess(true);
           setPackageType(first.data.packageType);
           setLatestPayment(first.data.latestPayment);
         } else if (justSucceeded) {
+          // Retry few times post-payment success
           for (let i = 0; i < 8; i++) {
             if (unmounted || ac.signal.aborted) break;
             await new Promise((r) => setTimeout(r, 1500));
             const retry = await checkOnce();
-            if (retry.ok && retry.data.hasAccess) {
+            if (retry.ok && retry.data?.hasAccess) {
               setHasAccess(true);
               setPackageType(retry.data.packageType);
               setLatestPayment(retry.data.latestPayment);
@@ -217,14 +211,8 @@ function CoursePageInner() {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
         }
-      } catch (err: any) {
-        if (
-          err?.name !== "AbortError" &&
-          err !== "component-unmounted" &&
-          err?.message !== "component-unmounted"
-        ) {
-          console.error("[Course] Access check failed:", err);
-        }
+      } catch (err) {
+        console.error("[Course] Access check failed:", err);
         if (!didRedirect.current && !unmounted) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
@@ -237,13 +225,12 @@ function CoursePageInner() {
     run();
     return () => {
       unmounted = true;
-      if (!ac.signal.aborted) ac.abort("component-unmounted");
+      if (!ac.signal.aborted) ac.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, session?.user?.hasPaid, router, justSucceeded]);
 
   // ------------------------------------------------------------
-  // Load Course Data (with preview pass-through + fallback)
+  // Fetch course data (Sanity or Prisma)
   // ------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -253,7 +240,6 @@ function CoursePageInner() {
         const listUrl = isPreview
           ? "/api/courses?preview=true"
           : "/api/courses";
-
         const listRes = await fetch(listUrl, { cache: "no-store" });
         const listJson = await listRes.json();
 
@@ -270,7 +256,6 @@ function CoursePageInner() {
         const detailUrl = isPreview
           ? `/api/courses/${encodeURIComponent(slugToLoad)}?preview=true`
           : `/api/courses/${encodeURIComponent(slugToLoad)}`;
-
         const detailRes = await fetch(detailUrl, { cache: "no-store" });
         if (!detailRes.ok) {
           if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
@@ -290,7 +275,7 @@ function CoursePageInner() {
   }, [isPreview, requestedSlug]);
 
   // ------------------------------------------------------------
-  // Keyboard Navigation (← →)
+  // Keyboard navigation shortcuts (← →)
   // ------------------------------------------------------------
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -299,10 +284,10 @@ function CoursePageInner() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [currentLessonIndex, currentModuleIndex]);
+  });
 
   // ------------------------------------------------------------
-  // Persist progress to localStorage
+  // Persist progress in localStorage
   // ------------------------------------------------------------
   useEffect(() => {
     try {
@@ -312,7 +297,7 @@ function CoursePageInner() {
   }, [currentModuleIndex, currentLessonIndex, answers]);
 
   // ------------------------------------------------------------
-  // Derived values for rendering
+  // Helpers
   // ------------------------------------------------------------
   const modules: CourseModule[] = course?.modules ?? [];
   const currentModule = modules[currentModuleIndex] ?? modules[0];
@@ -333,9 +318,6 @@ function CoursePageInner() {
   const progressPercent =
     totalLessons > 0 ? Math.round((completed / totalLessons) * 100) : 0;
 
-  // ------------------------------------------------------------
-  // Navigation Helpers
-  // ------------------------------------------------------------
   const goNextLesson = () => {
     const lessons = currentModule?.lessons ?? [];
     const lastIndex = lessons.length - 1;
@@ -346,6 +328,7 @@ function CoursePageInner() {
       setCurrentLessonIndex(0);
     }
   };
+
   const goPrevLesson = () => {
     if (currentLessonIndex > 0) {
       setCurrentLessonIndex(currentLessonIndex - 1);
@@ -357,38 +340,7 @@ function CoursePageInner() {
     }
   };
 
-  // ------------------------------------------------------------
-  // Render States (never render null → no blank page)
-  // ------------------------------------------------------------
-  if (loading)
-    return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
-        <p className="text-white text-xl">
-          {justSucceeded
-            ? "Finalizing your payment..."
-            : "Checking course access..."}
-        </p>
-      </section>
-    );
-
-  if (!hasAccess) {
-    return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
-        <p className="text-white text-xl">
-          You don’t currently have access to this course.
-        </p>
-      </section>
-    );
-  }
-
-  if (!course)
-    return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
-        <p className="text-white text-xl">Preparing your course…</p>
-      </section>
-    );
-
-  // ✅ Helper: Normalize body for PortableText (string → blocks[])
+  // ✅ Normalize text-only content into Portable Text array
   const toPortableText = (body?: unknown): TypedObject[] | undefined => {
     if (!body) return undefined;
     if (Array.isArray(body)) return body as TypedObject[];
@@ -406,12 +358,40 @@ function CoursePageInner() {
   };
 
   // ------------------------------------------------------------
-  // Main JSX (FULL UI + Portable Text + Preview badge)
+  // Render (main content)
   // ------------------------------------------------------------
+  if (loading)
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">
+          {justSucceeded
+            ? "Finalizing your payment..."
+            : "Checking course access..."}
+        </p>
+      </section>
+    );
+
+  if (!hasAccess)
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">
+          You don’t currently have access to this course.
+        </p>
+      </section>
+    );
+
+  if (!course)
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Preparing your course…</p>
+      </section>
+    );
+
+  // ✅ Main JSX
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
       <div className="mx-auto w-[92%] max-w-7xl">
-        {/* Sticky Header */}
+        {/* Header */}
         <div className="sticky top-0 z-20 bg-gradient-to-b from-blue-700 to-blue-500/90 backdrop-blur-sm mb-6 sm:mb-8 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 shadow-md">
           <div>
             <button
@@ -441,7 +421,7 @@ function CoursePageInner() {
           </div>
         </div>
 
-        {/* Two-column layout */}
+        {/* Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Sidebar */}
           <div className="lg:col-span-4">
@@ -456,7 +436,7 @@ function CoursePageInner() {
             />
           </div>
 
-          {/* Main Content Area with Motion */}
+          {/* Main content area */}
           <div className="lg:col-span-8">
             <AnimatePresence mode="wait">
               <motion.div
@@ -470,7 +450,7 @@ function CoursePageInner() {
                 }}
                 className="h-full w-full bg-white/95 rounded-2xl shadow-lg p-5 sm:p-6 space-y-5"
               >
-                {/* Lesson Header */}
+                {/* Lesson header */}
                 <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
                   <div>
                     <h2 className="text-xl sm:text-2xl font-bold text-blue-900">
@@ -481,7 +461,7 @@ function CoursePageInner() {
                     </p>
                   </div>
 
-                  {/* Navigation Buttons (animated on tap) */}
+                  {/* Navigation buttons */}
                   <div className="flex gap-2">
                     <motion.button
                       whileTap={{ scale: 0.95 }}
@@ -509,7 +489,7 @@ function CoursePageInner() {
                   </div>
                 </div>
 
-                {/* Lesson Content */}
+                {/* Top-level video */}
                 {currentLesson?.videoUrl ? (
                   <VideoPlayer
                     src={currentLesson.videoUrl}
@@ -523,34 +503,12 @@ function CoursePageInner() {
                   </div>
                 )}
 
-                {/* Portable Text (rich content) */}
+                {/* ✅ Portable Text rendering (images + embedded videos) */}
                 {toPortableText(currentLesson?.body) && (
-                  <div className="prose prose-blue max-w-none">
-                    <PortableText
-                      value={toPortableText(currentLesson.body)!}
-                      components={{
-                        block: {
-                          h2: ({ children }) => (
-                            <h2 className="text-xl font-bold text-blue-800 my-4">
-                              {children}
-                            </h2>
-                          ),
-                          normal: ({ children }) => (
-                            <p className="text-gray-800 leading-relaxed mb-3">
-                              {children}
-                            </p>
-                          ),
-                        },
-                        list: {
-                          bullet: ({ children }) => (
-                            <ul className="list-disc ml-6 text-gray-800">
-                              {children}
-                            </ul>
-                          ),
-                        },
-                      }}
-                    />
-                  </div>
+                  <PortableTextRenderer
+                    value={toPortableText(currentLesson.body)!}
+                    className="prose prose-blue max-w-none"
+                  />
                 )}
 
                 {/* Quiz */}
@@ -568,7 +526,7 @@ function CoursePageInner() {
                   />
                 )}
 
-                {/* Certificate Button */}
+                {/* Certificate button */}
                 {progressPercent === 100 && (
                   <div className="pt-3 mt-2 border-t border-gray-200">
                     <motion.button
@@ -596,9 +554,7 @@ function CoursePageInner() {
                           window.URL.revokeObjectURL(url);
                         } catch (e) {
                           console.error("[Certificate download] error:", e);
-                          alert(
-                            "Something went wrong generating your certificate."
-                          );
+                          alert("Something went wrong generating your certificate.");
                         }
                       }}
                       className="inline-flex items-center justify-center gap-2 px-5 py-2 rounded-lg font-semibold
