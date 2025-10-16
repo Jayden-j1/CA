@@ -1,11 +1,16 @@
-// lib/sanity/schemaTypes/objects/videoEmbed.ts
+// lib/sanity/schemaTypes/videoEmbed.ts
 //
 // Purpose
 // -------
-// Inline video embed object for Portable Text.
-// Editors can place a video URL + optional caption right in the flow.
+// Enable inline video embeds *inside* lesson body (Portable Text).
+// Authors paste a URL (YouTube/Vimeo/Mux/CDN). Your PT renderer will
+// render this with <VideoPlayer /> inline.
 //
-// Rendered by <PortableTextRenderer /> using <VideoPlayer />.
+// Pillars
+// -------
+// • Simplicity: single URL + optional caption.
+// • Robustness: basic URL validation.
+// • Ease of management: clear title/description.
 
 import { defineType, defineField } from "sanity";
 
@@ -18,21 +23,25 @@ export const videoEmbed = defineType({
       name: "url",
       title: "Video URL",
       type: "url",
-      description: "YouTube/Vimeo/Mux (or other embeddable URL).",
-      validation: (rule) => rule.required(),
+      validation: (rule) =>
+        rule.required().uri({
+          allowRelative: false,
+          scheme: ["http", "https"],
+        }),
+      description:
+        "Paste a direct video URL (YouTube, Vimeo, Mux, or your CDN).",
     }),
     defineField({
       name: "caption",
       title: "Caption (optional)",
       type: "string",
-      validation: (rule) => rule.max(180),
     }),
   ],
   preview: {
-    select: { url: "url", caption: "caption" },
-    prepare: ({ url, caption }) => ({
-      title: caption || "Video",
-      subtitle: url || "",
+    select: { title: "url" },
+    prepare: ({ title }) => ({
+      title: title || "Video",
+      subtitle: "Inline video embed",
     }),
   },
 });

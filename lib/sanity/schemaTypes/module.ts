@@ -2,25 +2,24 @@
 //
 // Purpose
 // -------
-// A course module that supports BOTH:
-//  • ordered lessons (references to `lesson`)
-//  • ordered nested sub-modules (self-references to `courseModule`)
+// A course module that may contain ordered lessons AND/OR ordered submodules.
+// This allows hierarchies like "Module 1 → 1.1 … 1.6" etc.
 //
-// Why allow nested sub-modules?
-// -----------------------------
-// Lets you model structures like:
-//   Module 1
-//     ├─ Submodule 1.1
-//     │   ├─ Lesson A
-//     │   └─ Lesson B
-//     └─ Submodule 1.2
-//         └─ Lesson C
+// Fields
+// ------
+//  • title       (required)
+//  • description (optional)
+//  • order       (optional; numeric ordering helper)
+//  • lessons     (array of references to `lesson`)
+//  • submodules  (array of references to *this* type `courseModule`) ← nested
 //
-// UI impact
-// ---------
-// Your frontend can either:
-//  • render the hierarchy, OR
-//  • flatten it in the API layer (recommended initially to avoid UI churn).
+// Notes
+// -----
+// • Your API will flatten nested submodules into a 1-level module list
+//   so your current UI does not change.
+// • Order precedence we’ll enforce later in query/flatten:
+//   - array position (drag/drop) as primary
+//   - numeric `order` as a secondary sort key if needed.
 
 import { defineType, defineField } from "sanity";
 
@@ -39,55 +38,36 @@ export const courseModule = defineType({
       type: "text",
       rows: 3,
     }),
-
-    // Optional numeric sort key
     defineField({
       name: "order",
-      title: "Order",
+      title: "Order (optional)",
       type: "number",
       description:
-        "Optional ordering helper (0..9999). If omitted, array order from the parent document is used.",
+        "Optional ordering helper. If omitted, parent array order is used.",
       validation: (rule) => rule.min(0).max(9999),
     }),
-
-    // Lessons (keeps array order)
     defineField({
       name: "lessons",
       title: "Lessons (in order)",
       type: "array",
       of: [{ type: "reference", to: [{ type: "lesson" }] }],
-      validation: (rule) => rule.min(0), // lesson-less 'index' modules are allowed when they only group subModules
     }),
-
-    // NEW: nested sub-modules (self-reference)
     defineField({
-      name: "subModules",
-      title: "Sub-modules (in order)",
+      name: "submodules",
+      title: "Submodules (in order)",
       type: "array",
       of: [{ type: "reference", to: [{ type: "courseModule" }] }],
-      validation: (rule) => rule.min(0),
       description:
-        "Optional. Use when this module is a 'container' of smaller modules.",
+        "Optional nested submodules. The API flattens these to keep the front-end simple.",
     }),
   ],
-
   preview: {
-    select: {
-      title: "title",
-      countLessons: "lessons.length",
-      countSubs: "subModules.length",
-      order: "order",
-    },
-    prepare: ({ title, countLessons, countSubs, order }) => {
-      const parts: string[] = [];
-      if (typeof order === "number") parts.push(`#${order}`);
-      if (typeof countLessons === "number") parts.push(`${countLessons} lesson${countLessons === 1 ? "" : "s"}`);
-      if (typeof countSubs === "number" && countSubs > 0)
-        parts.push(`${countSubs} sub-module${countSubs === 1 ? "" : "s"}`);
-      return {
-        title: title || "Untitled Module",
-        subtitle: parts.join(" · "),
-      };
-    },
+    select: { title: "title", count: "lessons.length", order: "order" },
+    prepare: ({ title, count, order }) => ({
+      title: title || "Untitled Module",
+      subtitle: `${order != null ? `#${order} · ` : ""}${count || 0} lesson${
+        (count || 0) === 1 ? "" : "s"
+      }`,
+    }),
   },
 });

@@ -7,22 +7,13 @@
 // - Preview (draftMode + ?preview=true): from Sanity (includes drafts)
 // - Otherwise: from Prisma (published data only)
 //
-// Key changes in this version
-// ---------------------------
-// • FIX: Removed Prisma selection of `submodules` (not in your schema).
-// • Sanity path still supports nested submodules and flattens them.
-// • Body normalization to Portable Text blocks (PT) so images/rich content
-//   pass through from Sanity, and plain strings (from Prisma) are coerced
-//   to a valid PT paragraph for consistent rendering.
-// • Module-level video/content are wrapped as a single "lesson" if needed.
-//
 // Design Pillars
 // ---------------
-// ✅ Efficiency  – Small queries + minimal, localized transformations
-// ✅ Robustness  – Sanity errors auto-fallback to Prisma
-// ✅ Simplicity  – One consistent DTO shape for your front-end
-// ✅ Security    – Drafts only with draftMode + preview flag
-// ✅ Ease of management – Clear helpers + comments
+// ✅ Efficiency  – Minimal shape transformations; single pass flatten.
+// ✅ Robustness  – Automatic fallback from Sanity to Prisma.
+// ✅ Simplicity  – One consistent DTO shape for the frontend.
+// ✅ Security    – Draft data gated by Next.js draftMode.
+// ✅ Ease of management – Clean helpers + clear comments.
 //
 // ============================================================
 
@@ -31,115 +22,140 @@ import { draftMode } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { fetchSanity } from "@/lib/sanity/client";
 
-export const dynamic = "force-dynamic"; // keep this endpoint live/fresh
+export const dynamic = "force-dynamic"; // live (no static cache)
 
 // ------------------------------------------------------------
-// Helper: Make a stable ID when none is provided (rare)
+// Helper: Safe ID (works in all runtimes)
 // ------------------------------------------------------------
-function safeId(fallbackHint: string) {
-  // crypto.randomUUID is available in modern runtimes.
-  // If not, fall back to a quick pseudo-unique id.
+// • Uses Web Crypto randomUUID when available (Next.js Edge/Node supports it).
+// • Falls back to time + random if crypto is missing (very rare).
+function safeId() {
   try {
-    return crypto.randomUUID();
-  } catch {
-    return `gen_${fallbackHint}_${Math.random().toString(36).slice(2)}`;
-  }
+    // @ts-ignore - Web Crypto exists in Next runtimes
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {}
+  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 // ------------------------------------------------------------
-// Helper: Normalize "body" into Portable Text blocks (PT)
+// Helper: stable sort by optional numeric `order`, preserving array order
 // ------------------------------------------------------------
-// Why? So <PortableTextRenderer /> can always render the content.
-// - If Sanity gives us PT blocks, return as-is.
-// - If Prisma gives us a plain string (markdown/plaintext), coerce to a
-//   single PT paragraph block to keep the UI consistent.
-function toPortableTextBlocks(body: unknown): any[] | undefined {
-  if (!body) return undefined;
-
-  // Sanity portable text is already an array of typed blocks
-  if (Array.isArray(body)) return body;
-
-  // Prisma "content" might be a plain string → coerce to one PT paragraph
-  if (typeof body === "string") {
-    return [
-      {
-        _type: "block",
-        style: "normal",
-        markDefs: [],
-        children: [{ _type: "span", text: body }],
-      },
-    ];
-  }
-
-  // Unknown shapes are ignored (defensive)
-  return undefined;
+// • We accept/return any[] on purpose to avoid TypeScript narrowing the items
+//   to only `{ order?: number }` and stripping other properties.
+// • Sorting key: place undefined orders at the end (`Infinity`), otherwise ASC.
+function sortByOrderAny(arr: any[]): any[] {
+  return [...(arr || [])].sort((a, b) => {
+    const ao =
+      typeof a?.order === "number" && Number.isFinite(a.order)
+        ? a.order
+        : Number.POSITIVE_INFINITY;
+    const bo =
+      typeof b?.order === "number" && Number.isFinite(b.order)
+        ? b.order
+        : Number.POSITIVE_INFINITY;
+    return ao - bo;
+  });
 }
 
 // ------------------------------------------------------------
-// Helper: Recursively FLATTEN Sanity modules/submodules/lessons
+// Helper: Recursively flatten modules/submodules/lessons
 // ------------------------------------------------------------
-//
-// Sanity can store nested submodules. Your front-end expects a flat list of
-// modules each with a lessons[] array. We flatten everything so your UI
-// doesn’t have to change.
-//
-function flattenSanityModules(modules: any[]): any[] {
+// • Sanity structure: Module → (Lessons + Submodules[Module → Lessons])
+// • We flatten to a 1-level modules[] array so your UI stays unchanged.
+// • We preserve order (array order first, numeric `order` as a hint).
+function flattenModules(modules: any[]): any[] {
   const result: any[] = [];
 
-  for (const m of modules ?? []) {
-    const base = {
-      id: m._id ?? m.id ?? safeId("module"),
-      title: m.title ?? "Untitled Module",
-      description: m.description ?? undefined,
-    };
+  // Top-level modules in stable order
+  const top = sortByOrderAny(modules);
 
-    // Case 1: Direct lessons on this module
-    if (Array.isArray(m.lessons) && m.lessons.length > 0) {
-      const mappedLessons = m.lessons.map((l: any) => ({
-        id: l._id ?? safeId("lesson"),
-        title: l.title ?? "Lesson",
-        videoUrl: l.videoUrl ?? "",
-        // IMPORTANT: keep Portable Text blocks as-is so images and rich content
-        // render in your <PortableTextRenderer />. If a plain string sneaks in,
-        // coerce to PT blocks for safety.
-        body: toPortableTextBlocks(l.body ?? l.content),
-        quiz: l.quiz
+  for (const m of top) {
+    const baseId = m?._id ?? m?.id ?? safeId();
+    const baseTitle = m?.title ?? "Untitled Module";
+    const baseDesc = m?.description ?? undefined;
+
+    // Gather current module's lessons (ordered)
+    if (Array.isArray(m?.lessons) && m.lessons.length > 0) {
+      const mappedLessons = sortByOrderAny(m.lessons).map((l: any) => ({
+        id: l?._id ?? safeId(),
+        title: l?.title ?? "Lesson",
+        videoUrl: l?.videoUrl ?? "",
+        // `body` can be Portable Text (array) or string; your page normalizes it to PT
+        body: l?.body ?? l?.content ?? undefined,
+        quiz: l?.quiz
           ? {
               title: l.quiz.title ?? undefined,
-              questions: Array.isArray(l.quiz.questions)
-                ? l.quiz.questions
-                : [],
+              questions: Array.isArray(l.quiz.questions) ? l.quiz.questions : [],
               passingScore: l.quiz.passingScore ?? undefined,
             }
           : undefined,
       }));
 
-      result.push({ ...base, lessons: mappedLessons });
+      result.push({
+        id: baseId,
+        title: baseTitle,
+        description: baseDesc,
+        lessons: mappedLessons,
+      });
     }
 
-    // Case 2: Nested submodules → recursively flatten
-    if (Array.isArray(m.submodules) && m.submodules.length > 0) {
-      const flattenedSubs = flattenSanityModules(m.submodules).map((sm) => ({
-        ...sm,
-        // Hierarchical context in the title helps authors and learners
-        title: `${base.title} — ${sm.title}`,
-      }));
-      result.push(...flattenedSubs);
+    // Flatten submodules (ordered)
+    if (Array.isArray(m?.submodules) && m.submodules.length > 0) {
+      for (const sm of sortByOrderAny(m.submodules)) {
+        const subId = sm?._id ?? sm?.id ?? safeId();
+        const subTitle = sm?.title ?? "Untitled Submodule";
+        const subDesc = sm?.description ?? undefined;
+
+        const subLessons: any[] = Array.isArray(sm?.lessons) && sm.lessons.length > 0
+          ? sortByOrderAny(sm.lessons).map((sl: any) => ({
+              id: sl?._id ?? safeId(),
+              title: sl?.title ?? "Lesson",
+              videoUrl: sl?.videoUrl ?? "",
+              body: sl?.body ?? sl?.content ?? undefined,
+              quiz: sl?.quiz
+                ? {
+                    title: sl.quiz.title ?? undefined,
+                    questions: Array.isArray(sl.quiz.questions) ? sl.quiz.questions : [],
+                    passingScore: sl.quiz.passingScore ?? undefined,
+                  }
+                : undefined,
+            }))
+          : [
+              // Fallback: treat submodule itself as a single-lesson container
+              {
+                id: `${subId}-lesson`,
+                title: subTitle,
+                videoUrl: sm?.videoUrl ?? "",
+                body: sm?.content ?? undefined,
+                quiz: undefined,
+              },
+            ];
+
+        // Push a flattened module entry with hierarchical title for context
+        result.push({
+          id: subId,
+          title: `${baseTitle} — ${subTitle}`,
+          description: subDesc,
+          lessons: subLessons,
+        });
+      }
     }
 
-    // Case 3: No lessons/submodules → treat module content as single lesson
+    // If neither lessons nor submodules exist → single-content module fallback
     if (
-      (!Array.isArray(m.lessons) || m.lessons.length === 0) &&
-      (!Array.isArray(m.submodules) || m.submodules.length === 0)
+      (!Array.isArray(m?.lessons) || m.lessons.length === 0) &&
+      (!Array.isArray(m?.submodules) || m.submodules.length === 0)
     ) {
       result.push({
-        ...base,
+        id: baseId,
+        title: baseTitle,
+        description: baseDesc,
         lessons: [
           {
-            id: `${base.id}-lesson`,
-            title: base.title,
-            videoUrl: m.videoUrl ?? "",
-            body: toPortableTextBlocks(m.content),
+            id: `${baseId}-lesson`,
+            title: baseTitle,
+            videoUrl: m?.videoUrl ?? "",
+            body: m?.content ?? undefined,
             quiz: undefined,
           },
         ],
@@ -161,54 +177,32 @@ export async function GET(
     const { searchParams } = new URL(req.url);
     const previewFlag = searchParams.get("preview") === "true";
 
-    // In Next 15+, draftMode() is async – you must await it
+    // Next 15: draftMode() is async
     const { isEnabled: draftEnabled } = await draftMode();
     const slug = params.slug;
 
-    // --------------------------------------------------------
-    // 1) PREVIEW path — Sanity (includes drafts)
-    // --------------------------------------------------------
-    // We dereference modules, optional submodules, and lessons,
-    // and then flatten everything into your front-end shape.
+    // 1) Preview (Sanity — drafts visible)
     if (previewFlag && draftEnabled) {
       try {
+        // Pull fully nested shape (modules + submodules + lessons)
         const query = /* groq */ `
           *[_type == "course" && slug.current == $slug][0]{
             _id,
             "slug": slug.current,
             title,
             summary,
-            // If you store image objects, you can project URL or keep object.
-            // Here we keep the URL if available to keep it simple.
             "coverImage": select(defined(coverImage.asset->url) => coverImage.asset->url, null),
 
-            // Nested structure: modules → submodules → lessons
             modules[]->{
-              _id,
-              title,
-              description,
-              videoUrl,
-              content,
-              // Lessons can contain Portable Text (including image blocks)
+              _id, title, description, order, videoUrl, content,
               lessons[]->{
-                _id,
-                title,
-                videoUrl,
-                body,
+                _id, title, order, videoUrl, body,
                 quiz->{ title, questions, passingScore }
               },
-              // Optional nested submodules
               submodules[]->{
-                _id,
-                title,
-                description,
-                videoUrl,
-                content,
+                _id, title, description, order, videoUrl, content,
                 lessons[]->{
-                  _id,
-                  title,
-                  videoUrl,
-                  body,
+                  _id, title, order, videoUrl, body,
                   quiz->{ title, questions, passingScore }
                 }
               }
@@ -223,32 +217,27 @@ export async function GET(
         );
 
         if (doc) {
-          const courseDto = {
-            id: doc._id,
-            slug: doc.slug,
-            title: doc.title,
-            summary: doc.summary ?? null,
-            coverImage: doc.coverImage ?? null,
-            modules:
-              Array.isArray(doc.modules) && doc.modules.length > 0
-                ? flattenSanityModules(doc.modules)
-                : [],
-          };
-
-          return NextResponse.json({ course: courseDto });
+          return NextResponse.json({
+            course: {
+              id: doc._id,
+              slug: doc.slug,
+              title: doc.title,
+              summary: doc.summary ?? null,
+              coverImage: doc.coverImage ?? null,
+              // ✅ flattened + ordered
+              modules: flattenModules(doc.modules || []),
+            },
+          });
         }
       } catch (e) {
-        // If Sanity preview fails for any reason, fall back to Prisma below
         console.warn(
-          `[/api/courses/${slug}] Sanity preview fetch failed; using Prisma fallback:`,
+          `[/api/courses/${slug}] Sanity preview failed; using Prisma fallback:`,
           e
         );
       }
     }
 
-    // --------------------------------------------------------
-    // 2) DEFAULT path — Prisma (published only)
-    // --------------------------------------------------------
+    // 2) Default (Prisma — published only)
     const course = await prisma.course.findFirst({
       where: { slug, isPublished: true },
       select: {
@@ -264,11 +253,7 @@ export async function GET(
       return NextResponse.json({ error: "Course not found" }, { status: 404 });
     }
 
-    // NOTE:
-    // Your Prisma schema does NOT contain a `submodules` relation on CourseModule.
-    // So we only query top-level modules and normalize each as a single-lesson module,
-    // using the module's videoUrl/content. If later you add nested tables, you can
-    // extend this section similarly to Sanity’s flattening.
+    // Your Prisma model has only modules (no nested submodules). Keep it simple.
     const modules = await prisma.courseModule.findMany({
       where: { courseId: course.id, isPublished: true },
       orderBy: { order: "asc" },
@@ -281,12 +266,9 @@ export async function GET(
         quiz: {
           select: { id: true, title: true, questions: true, passingScore: true },
         },
-        // ❌ DO NOT SELECT `submodules`: it's not in your Prisma model.
       },
     });
 
-    // Map Prisma modules into the same DTO shape. Each module becomes a
-    // single-lesson module (unless you later extend your relational model).
     const mappedModules = modules.map((m) => ({
       id: m.id,
       title: m.title,
@@ -296,10 +278,8 @@ export async function GET(
           id: `${m.id}-lesson`,
           title: m.title,
           videoUrl: m.videoUrl ?? "",
-          // Normalize Prisma plain string to PT paragraph for consistent rendering
-          body: toPortableTextBlocks(
-            typeof m.content === "string" ? m.content : undefined
-          ),
+          // Prisma stores lesson-like content in `content` (string). Page will normalize to PT.
+          body: typeof m.content === "string" ? m.content : undefined,
           quiz:
             Array.isArray(m.quiz?.questions) && m.quiz.questions.length
               ? { questions: m.quiz.questions }
@@ -308,10 +288,17 @@ export async function GET(
       ],
     }));
 
-    const dto = { ...course, modules: mappedModules };
-    return NextResponse.json({ course: dto });
+    return NextResponse.json({
+      course: {
+        ...course,
+        modules: mappedModules,
+      },
+    });
   } catch (err) {
     console.error("[GET /api/courses/[slug]] Error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }

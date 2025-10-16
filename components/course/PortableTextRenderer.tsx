@@ -67,15 +67,15 @@ const components: PortableTextComponents = {
   marks: {
     link: ({ children, value }) => {
       const href = typeof value?.href === "string" ? value.href : "#";
-      const isExternal = href?.startsWith("http");
+      const isHttp = /^https?:\/\//i.test(href); // robust check
       return (
         <a
-          href={href}
-          rel={isExternal ? "noopener noreferrer" : undefined}
-          target={isExternal ? "_blank" : undefined}
-          className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
+        href={href}
+        rel={isHttp ? "noopener noreferrer" : undefined}
+        target={isHttp ? "_blank" : undefined}
+        className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
         >
-          {children}
+        {children}
         </a>
       );
     },

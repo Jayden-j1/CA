@@ -4,17 +4,25 @@
 // -------
 // A single lesson with:
 //  • title (required)
-//  • order (optional numeric sorting helper)
-//  • videoUrl (optional; top-of-lesson video, played by <VideoPlayer />)
-//  • body (Portable Text) – supports rich text, images, inline videoEmbed, callout, code
+//  • videoUrl (optional; rendered by your <VideoPlayer /> above the body)
+//  • body (Portable Text) – supports rich text, images (with alt/caption),
+//    and inline video embeds (videoEmbed object)
 //  • quiz (optional)
+//  • order (optional) – numeric helper (0..9999) if you want to sort inside modules
 //
-// Notes
-// -----
-// • `image` block includes author-facing `alt` + `caption` fields (accessibility-first).
-// • `videoEmbed` is a simple object with a URL and caption (defined below in /objects).
-// • `callout` is a lightweight annotation object for tips/warnings (also in /objects).
-// • You can always add more block/object types later as your content grows.
+// Rendering
+// ---------
+// <PortableTextRenderer /> will render:
+//  • blocks (headings/paragraphs/lists)
+//  • images (via @sanity/image-url → urlFor())
+//  • inline videoEmbed objects (via <VideoPlayer />)
+//  • code/callouts if you add them later.
+//
+// Pillars
+// -------
+// • Robustness: validation + strong defaults
+// • Simplicity: one place to set body structure
+// • Ease of management: optional `order` to sort when needed
 
 import { defineType, defineField } from "sanity";
 
@@ -30,7 +38,7 @@ export const lesson = defineType({
     }),
     defineField({
       name: "order",
-      title: "Order",
+      title: "Order (optional)",
       type: "number",
       description:
         "Optional ordering helper (0..9999). If omitted, parent array order is used.",
@@ -47,38 +55,32 @@ export const lesson = defineType({
       name: "body",
       title: "Lesson Body",
       type: "array",
-      // ✅ Portable Text can mix blocks + custom objects.
-      // We allow:
-      //  - block (headings/paragraphs/lists)
-      //  - image (with hotspot + fields)
-      //  - videoEmbed (custom object)
-      //  - callout (custom object)
-      //  - code (block type)
+      // Allow blocks + images + custom videoEmbed objects
       of: [
         { type: "block" },
         {
           type: "image",
           options: { hotspot: true },
           fields: [
-            {
+            // ALT text for accessibility
+            defineField({
               name: "alt",
+              title: "Alt text",
               type: "string",
-              title: "Alternative text",
               description:
-                "Describe the image for screen readers and SEO. Leave empty only if decorative.",
-              validation: (rule) => rule.max(180),
-            },
-            {
+                "Describe the image for screen readers and SEO. Keep it concise.",
+              validation: (rule) => rule.max(160),
+            }),
+            // Optional caption shown under the image
+            defineField({
               name: "caption",
-              type: "string",
               title: "Caption",
-              validation: (rule) => rule.max(180),
-            },
+              type: "string",
+              validation: (rule) => rule.max(200),
+            }),
           ],
         },
-        { type: "videoEmbed" }, // defined in /objects/videoEmbed.ts
-        { type: "callout" },    // defined in /objects/callout.ts
-        { type: "code" },       // built-in Sanity code block
+        { type: "videoEmbed" }, // inline video objects
       ],
       validation: (rule) => rule.required().min(1),
     }),

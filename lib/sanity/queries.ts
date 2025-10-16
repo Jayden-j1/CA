@@ -2,20 +2,24 @@
 //
 // Purpose
 // -------
-// Centralize GROQ queries that project Sanity docs into the
-// structure your app expects. Supports nested sub-modules and
-// rich Portable Text (with images + video embeds).
+// Define GROQ queries in a single place for reusability and consistency.
+// These queries feed your API routes and server actions.
 //
-// Notes
-// -----
-// • Arrays preserve author order. We also expose numeric `order`
-//   for future merging/sorting logic if needed.
-// • Lessons return full PT arrays so the client can render images
-//   and embedded videos using <PortableTextRenderer />.
+// Design Pillars
+// --------------
+// ✅ Efficiency  – Only query necessary fields.
+// ✅ Robustness  – Use coalesce() to normalize missing fields.
+// ✅ Simplicity  – Avoid over-nesting or inline JS interpolation.
+// ✅ Ease of management  – Central file for all Sanity data shapes.
+// ✅ Security  – Strictly controlled data exposure (no wildcards).
 
 import { groq } from "next-sanity";
 
-// Minimal list (id/slug/title) – expand as needed for cards
+// ------------------------------------------------------------
+// COURSE LIST QUERY
+// ------------------------------------------------------------
+// Minimal query used by `/api/courses` for dashboard lists.
+// Returns id, slug, and title only.
 export const COURSE_LIST_QUERY = groq`
   *[_type == "course" && defined(slug.current)] | order(title asc) {
     "id": _id,
@@ -24,68 +28,86 @@ export const COURSE_LIST_QUERY = groq`
   }
 `;
 
-// Full course by slug
-// - modules[] are dereferenced in order
-// - subModules[] are dereferenced one level deep (recursive expansion
-//   beyond this is possible but usually unnecessary for authoring)
+// ------------------------------------------------------------
+// COURSE DETAIL QUERY (WITH HIERARCHICAL MODULES + LESSONS)
+// ------------------------------------------------------------
+// Returns the full course structure for `/api/courses/[slug]`.
+// This includes modules, submodules, lessons, and Portable Text bodies.
+//
+// Key Notes:
+//  • Never interpolate variables via ${...}, only pass parameters (e.g. $slug).
+//  • Keep all field keys quoted to prevent TypeScript/GROQ parsing errors.
+//  • The query below is static — no TypeScript will be inferred from its content.
+//  • Portable Text arrays are fetched as-is for rendering in the frontend.
 export const COURSE_DETAIL_BY_SLUG = groq`
-*[_type == "course" && slug.current == $slug][0]{
-  "id": _id,
-  "slug": slug.current,
-  title,
-  "summary": coalesce(summary, null),
-  "coverImage": coalesce(coverImage, null),
-
-  // Top-level modules in author-defined order
-  "modules": coalesce(modules[]->{
+  *[_type == "course" && slug.current == $slug][0]{
+    // Core fields
     "id": _id,
+    "slug": slug.current,
     title,
-    "description": coalesce(description, null),
-    "order": select(defined(order) => order, null),
+    "summary": coalesce(summary, null),
+    "coverImage": coalesce(coverImage, null),
 
-    // Ordered lessons
-    "lessons": coalesce(lessons[]->{
-      "id": _id,
-      title,
-      "order": select(defined(order) => order, null),
-      "videoUrl": coalesce(videoUrl, null),
-
-      // IMPORTANT: Portable Text (blocks + images + videoEmbed objects)
-      "body": coalesce(body, []),
-
-      // Structured quiz (if present)
-      "quiz": coalesce(quiz{
-        "questions": questions[] {
-          "id": coalesce(id, _key),
-          "question": question,
-          "options": options[],
-          "correctIndex": correctIndex
-        }
-      }, null)
-    }, []),
-
-    // One level of nested sub-modules (also ordered)
-    "subModules": coalesce(subModules[]->{
-      "id": _id,
-      title,
-      "description": coalesce(description, null),
-      "order": select(defined(order) => order, null),
-      "lessons": coalesce(lessons[]->{
-        "id": _id,
+    // Ordered modules (array of references)
+    "modules": coalesce(
+      modules[]->{
+        _id,
         title,
+        "description": coalesce(description, null),
         "order": select(defined(order) => order, null),
-        "videoUrl": coalesce(videoUrl, null),
-        "body": coalesce(body, []),
-        "quiz": coalesce(quiz{
-          "questions": questions[] {
-            "id": coalesce(id, _key),
-            "question": question,
-            "options": options[],
-            "correctIndex": correctIndex
-          }
-        }, null)
-      }, [])
-    }, [])
-  }, [])
-}
+
+        // Lessons within each module
+        "lessons": coalesce(
+          lessons[]->{
+            _id,
+            title,
+            "order": select(defined(order) => order, null),
+            "videoUrl": coalesce(videoUrl, null),
+            "body": coalesce(body, []),
+            "quiz": coalesce(quiz{
+              "passingScore": passingScore,
+              "questions": questions[]{
+                "id": coalesce(id, _key),
+                "question": question,
+                "options": options[],
+                "correctIndex": correctIndex
+              }
+            }, null)
+          },
+          []
+        ),
+
+        // Optional nested submodules (same shape)
+        "submodules": coalesce(
+          submodules[]->{
+            _id,
+            title,
+            "description": coalesce(description, null),
+            "order": select(defined(order) => order, null),
+            "lessons": coalesce(
+              lessons[]->{
+                _id,
+                title,
+                "order": select(defined(order) => order, null),
+                "videoUrl": coalesce(videoUrl, null),
+                "body": coalesce(body, []),
+                "quiz": coalesce(quiz{
+                  "passingScore": passingScore,
+                  "questions": questions[]{
+                    "id": coalesce(id, _key),
+                    "question": question,
+                    "options": options[],
+                    "correctIndex": correctIndex
+                  }
+                }, null)
+              },
+              []
+            )
+          },
+          []
+        )
+      },
+      []
+    )
+  }
 `;
