@@ -1,32 +1,17 @@
 // app/dashboard/course/page.tsx
 //
 // ============================================================
-// Course Page — Robust access gating + full UI restored
+/* Course Page — Robust access gating + Preview-safe client wiring
+   + Portable Text type fix (string → blocks[] wrapper) */
 // ============================================================
-//
-// What this file ensures:
-// - ✅ No “blank page”: we always render a user-friendly fallback instead of `return null`
-// - ✅ Null-safe useSearchParams(): `(searchParams?.get(...) ?? "")` avoids CI type errors
-// - ✅ Abort-safe fetch: ignores expected aborts/unmounts (No noisy console errors)
-// - ✅ Polling after Stripe success: briefly re-check access so UI flips quickly
-// - ✅ Keyboard navigation: ← → switches lessons
-// - ✅ Progress persistence: stored in localStorage
-// - ✅ Your full UI restored: sticky header, ModuleList, VideoPlayer, QuizCard, certificate button
-//
-// Pillars: efficiency, robustness, simplicity, ease of management, security
-// - Efficiency: only minimal polling on `?success=true`, quick bailouts on abort
-// - Robustness: defensive guards, never `return null` for primary states
-// - Simplicity: single file concentrates page behavior; comments explain critical parts
-// - Ease of management: predictable state flow; safe cleanup on unmount
-// - Security: access is determined server-side (/api/payments/check); UI follows
 
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-
-// ✅ Framer Motion for lightweight animation
+import { PortableText } from "@portabletext/react";
+import type { TypedObject } from "@portabletext/types"; // ✅ for safe PT typing
 import { motion, AnimatePresence } from "framer-motion";
 
 import ModuleList from "@/components/course/ModuleList";
@@ -115,14 +100,15 @@ export default function CoursePageWrapper() {
 function CoursePageInner() {
   const router = useRouter();
 
-  // ⚠️ Build fix:
-  // `useSearchParams()` can be typed as possibly `null` in some setups.
-  // We make it null-safe using optional chaining and a default fallback string.
+  // null-safe params (build-friendly)
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
-  // ✅ Null-safe query param access
   const justSucceeded = (searchParams?.get("success") ?? "") === "true";
+
+  // ✅ Client-side preview flag; server APIs decide draft vs published
+  const isPreview = (searchParams?.get("preview") ?? "") === "true";
+  const requestedSlug = searchParams?.get("slug") ?? "";
 
   // ---------- Access & Course State ----------
   const [loading, setLoading] = useState(true);
@@ -155,9 +141,7 @@ function CoursePageInner() {
           answers: parsed.answers ?? {},
         };
       }
-    } catch {
-      // ignore JSON parse / access errors
-    }
+    } catch {}
     return { currentModuleIndex: 0, currentLessonIndex: 0, answers: {} };
   }, []);
 
@@ -172,7 +156,7 @@ function CoursePageInner() {
   );
 
   // ------------------------------------------------------------
-  // 🛡 Authoritative Access Check (abort-safe + post-payment polling)
+  // Authoritative Access Check (abort-safe + post-payment polling)
   // ------------------------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
@@ -187,7 +171,6 @@ function CoursePageInner() {
         const data: PaymentCheckResponse = await res.json();
         return { ok: res.ok, data };
       } catch (err: any) {
-        // 🧹 Swallow expected aborts (strict mode remounts, nav changes, etc.)
         if (
           err?.name === "AbortError" ||
           err === "component-unmounted" ||
@@ -198,7 +181,7 @@ function CoursePageInner() {
             data: { hasAccess: false, packageType: null, latestPayment: null },
           };
         }
-        throw err; // real errors propagate
+        throw err;
       }
     };
 
@@ -206,10 +189,8 @@ function CoursePageInner() {
       if (status === "loading") return;
 
       try {
-        // Trust session for immediate UX
         if (session?.user?.hasPaid) setHasAccess(true);
 
-        // First authoritative probe
         const first = await checkOnce();
         if (unmounted || ac.signal.aborted) return;
 
@@ -218,7 +199,6 @@ function CoursePageInner() {
           setPackageType(first.data.packageType);
           setLatestPayment(first.data.latestPayment);
         } else if (justSucceeded) {
-          // After redirect from Stripe, poll briefly while webhook lands
           for (let i = 0; i < 8; i++) {
             if (unmounted || ac.signal.aborted) break;
             await new Promise((r) => setTimeout(r, 1500));
@@ -232,13 +212,11 @@ function CoursePageInner() {
           }
         }
 
-        // If still no access → redirect to Upgrade (once)
         if (!hasAccess && !session?.user?.hasPaid && !didRedirect.current) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
         }
       } catch (err: any) {
-        // Only log real unexpected errors (ignore controlled aborts)
         if (
           err?.name !== "AbortError" &&
           err !== "component-unmounted" &&
@@ -256,34 +234,43 @@ function CoursePageInner() {
     };
 
     run();
-
-    // ✅ Cleanup: abort fetch with *reason* to silence devtools error noise
     return () => {
       unmounted = true;
       if (!ac.signal.aborted) ac.abort("component-unmounted");
     };
-
-    // Keep deps minimal; don't include `hasAccess` or we'll re-run unnecessarily
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, session?.user?.hasPaid, router, justSucceeded]);
 
   // ------------------------------------------------------------
-  // Load Course Data (with fallback)
+  // Load Course Data (with preview pass-through + fallback)
   // ------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
+
     const load = async () => {
       try {
-        const listRes = await fetch("/api/courses", { cache: "no-store" });
+        const listUrl = isPreview
+          ? "/api/courses?preview=true"
+          : "/api/courses";
+
+        const listRes = await fetch(listUrl, { cache: "no-store" });
         const listJson = await listRes.json();
-        const first = Array.isArray(listJson?.courses) ? listJson.courses[0] : null;
-        if (!first?.slug) {
+
+        const slugToLoad =
+          requestedSlug ||
+          (Array.isArray(listJson?.courses) && listJson.courses[0]?.slug) ||
+          "";
+
+        if (!slugToLoad) {
           if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
           return;
         }
-        const detailRes = await fetch(`/api/courses/${first.slug}`, {
-          cache: "no-store",
-        });
+
+        const detailUrl = isPreview
+          ? `/api/courses/${encodeURIComponent(slugToLoad)}?preview=true`
+          : `/api/courses/${encodeURIComponent(slugToLoad)}`;
+
+        const detailRes = await fetch(detailUrl, { cache: "no-store" });
         if (!detailRes.ok) {
           if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
           return;
@@ -294,11 +281,12 @@ function CoursePageInner() {
         if (!cancelled) setCourse(LOCAL_PLACEHOLDER);
       }
     };
+
     load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isPreview, requestedSlug]);
 
   // ------------------------------------------------------------
   // Keyboard Navigation (← →)
@@ -310,8 +298,7 @@ function CoursePageInner() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-    // no deps → re-register only on mount/unmount
-  }, [currentLessonIndex, currentModuleIndex]); // (optional) include to keep arrows responsive after state changes
+  }, [currentLessonIndex, currentModuleIndex]);
 
   // ------------------------------------------------------------
   // Persist progress to localStorage
@@ -320,9 +307,7 @@ function CoursePageInner() {
     try {
       const payload = { currentModuleIndex, currentLessonIndex, answers };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore quota / storage access errors
-    }
+    } catch {}
   }, [currentModuleIndex, currentLessonIndex, answers]);
 
   // ------------------------------------------------------------
@@ -402,8 +387,25 @@ function CoursePageInner() {
       </section>
     );
 
+  // ✅ Helper: Normalize body for PortableText (string → blocks[])
+  const toPortableText = (body?: unknown): TypedObject[] | undefined => {
+    if (!body) return undefined;
+    if (Array.isArray(body)) return body as TypedObject[];
+    if (typeof body === "string") {
+      return [
+        {
+          _type: "block",
+          style: "normal",
+          markDefs: [],
+          children: [{ _type: "span", text: body }],
+        } as unknown as TypedObject,
+      ];
+    }
+    return undefined;
+  };
+
   // ------------------------------------------------------------
-  // Main JSX (FULL UI RESTORED)
+  // Main JSX (FULL UI + Portable Text + Preview badge)
   // ------------------------------------------------------------
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
@@ -417,9 +419,16 @@ function CoursePageInner() {
             >
               ← Back to Dashboard
             </button>
-            <h1 className="text-white font-extrabold text-3xl sm:text-4xl tracking-tight">
-              {course.title}
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-white font-extrabold text-3xl sm:text-4xl tracking-tight">
+                {course.title}
+              </h1>
+              {isPreview && (
+                <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded bg-yellow-300 text-yellow-900">
+                  Preview
+                </span>
+              )}
+            </div>
             {course.summary && (
               <p className="text-blue-100 mt-1">{course.summary}</p>
             )}
@@ -450,7 +459,7 @@ function CoursePageInner() {
           <div className="lg:col-span-8">
             <AnimatePresence mode="wait">
               <motion.div
-                key={`${currentModuleIndex}-${currentLessonIndex}`} // ✅ correct template literal
+                key={`${currentModuleIndex}-${currentLessonIndex}`}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
@@ -513,14 +522,37 @@ function CoursePageInner() {
                   </div>
                 )}
 
-                {currentLesson?.body && (
+                {/* Portable Text (rich content) */}
+                {toPortableText(currentLesson?.body) && (
                   <div className="prose prose-blue max-w-none">
-                    <p className="text-gray-800 leading-relaxed">
-                      {currentLesson.body}
-                    </p>
+                    <PortableText
+                      value={toPortableText(currentLesson.body)!}
+                      components={{
+                        block: {
+                          h2: ({ children }) => (
+                            <h2 className="text-xl font-bold text-blue-800 my-4">
+                              {children}
+                            </h2>
+                          ),
+                          normal: ({ children }) => (
+                            <p className="text-gray-800 leading-relaxed mb-3">
+                              {children}
+                            </p>
+                          ),
+                        },
+                        list: {
+                          bullet: ({ children }) => (
+                            <ul className="list-disc ml-6 text-gray-800">
+                              {children}
+                            </ul>
+                          ),
+                        },
+                      }}
+                    />
                   </div>
                 )}
 
+                {/* Quiz */}
                 {currentLesson?.quiz && (
                   <QuizCard
                     quiz={currentLesson.quiz}
@@ -535,7 +567,7 @@ function CoursePageInner() {
                   />
                 )}
 
-                {/* Certificate Button (animated) */}
+                {/* Certificate Button */}
                 {progressPercent === 100 && (
                   <div className="pt-3 mt-2 border-t border-gray-200">
                     <motion.button

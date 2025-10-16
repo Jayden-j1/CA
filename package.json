@@ -40,6 +40,7 @@
     "@vis.gl/react-google-maps": "^1.5.5",
     "bcryptjs": "^3.0.2",
     "framer-motion": "^12.23.12",
+    "groq": "^3.49.0",
     "gsap": "^3.13.0",
     "mux": "^0.0.2",
     "next": "^15.5.4",
@@ -54,8 +55,7 @@
     "sanity": "^4.10.2",
     "sanity-plugin-mux-input": "^2.9.0",
     "stripe": "^18.5.0",
-    "styled-components": "^6.1.19",
-    "groq": "^3.49.0"
+    "styled-components": "^6.1.19"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.1",
