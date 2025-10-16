@@ -35,7 +35,7 @@ export const quiz = defineType({
               title: "Question ID",
               type: "string",
               description:
-                "Stable ID for this question (e.g., m1q1). If blank, we auto-generate it in the API.",
+                "Stable ID for this question (e.g., m1q1). If blank, the API/query will auto-generate one based on the array key.",
             }),
             defineField({
               name: "question",

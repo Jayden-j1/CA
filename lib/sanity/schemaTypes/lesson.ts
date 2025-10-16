@@ -4,14 +4,18 @@
 // -------
 // A single lesson with:
 //  • title (required)
-//  • videoUrl (optional string or URL)
-//  • body (rich text — portable text)
-//  • quiz (optional; structured via `quiz` object)
+//  • videoUrl (optional; used by your <VideoPlayer /> at the top)
+//  • body (Portable Text) – supports rich text, images, and inline video embeds
+//  • quiz (optional)
+//  • order (optional) – if you ever sort lessons outside of array order
 //
-// Notes
-// -----
-// • Lessons are **referred to** by modules (reference array).
-// • Preview shows the title for easy navigation.
+// Rendering
+// ---------
+// <PortableTextRenderer /> will render:
+//  • blocks (headings/paragraphs/lists)
+//  • images (via @sanity/image-url)
+//  • inline videoEmbed objects (via your <VideoPlayer />)
+//  • anything else you add later.
 
 import { defineType, defineField } from "sanity";
 
@@ -26,18 +30,26 @@ export const lesson = defineType({
       validation: (rule) => rule.required().min(3).max(120),
     }),
     defineField({
+      name: "order",
+      title: "Order",
+      type: "number",
+      description:
+        "Optional ordering helper (0..9999). If omitted, parent array order is used.",
+      validation: (rule) => rule.min(0).max(9999),
+    }),
+    defineField({
       name: "videoUrl",
-      title: "Video URL",
+      title: "Top-level Video URL (optional)",
       type: "url",
       description:
-        "URL to your hosted video (YouTube, Vimeo, Mux, etc.). Can also be a plain string if needed.",
-      // URL type already validates, keep it optional
+        "Shown above the body by the page (YouTube, Vimeo, Mux, etc.). You can ALSO embed videos inline inside the body using the Video Embed block.",
     }),
     defineField({
       name: "body",
       title: "Lesson Body",
       type: "array",
-      of: [{ type: "block" }],
+      // Allow blocks + images + custom videoEmbed objects
+      of: [{ type: "block" }, { type: "image", options: { hotspot: true } }, { type: "videoEmbed" }],
       validation: (rule) => rule.required().min(1),
     }),
     defineField({
@@ -47,6 +59,10 @@ export const lesson = defineType({
     }),
   ],
   preview: {
-    select: { title: "title" },
+    select: { title: "title", order: "order" },
+    prepare: ({ title, order }) => ({
+      title: title || "Untitled Lesson",
+      subtitle: typeof order === "number" ? `#${order}` : undefined,
+    }),
   },
 });

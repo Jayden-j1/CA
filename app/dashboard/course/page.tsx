@@ -18,6 +18,7 @@ import ModuleList from "@/components/course/ModuleList";
 import VideoPlayer from "@/components/course/VideoPlayer";
 import QuizCard from "@/components/course/QuizCard";
 import type { CourseDetail, CourseModule } from "@/types/course";
+import PortableTextRenderer from "@/components/course/PortableTextRenderer";
 
 // ------------------------------------------------------------
 // Access check response type

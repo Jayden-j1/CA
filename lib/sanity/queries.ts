@@ -2,70 +2,89 @@
 //
 // Purpose
 // -------
-// Centralized GROQ queries that project Sanity docs into the exact
-// shape your frontend expects. We do the “shape work” here so API
-// routes can stay small and your React components remain stable.
+// Centralize GROQ queries that project Sanity docs into the
+// structure your app expects. Supports nested sub-modules and
+// rich Portable Text (with images + video embeds).
 //
-// Frontend expects (per your page):
-//  - CourseDetail {
-//      id, slug, title, summary, coverImage, modules: CourseModule[]
-//    }
-//  - CourseModule {
-//      id, title, description?, lessons: {
-//        id, title, videoUrl?, body(string), quiz?: { questions: [...] }
-//      }[]
-//    }
-//
-// Implementation details
-// ----------------------
-//  • We dereference with `->` to materialize nested refs.
-//  • We convert Portable Text blocks to plain text for `body` using
-//    Sanity's `pt::text(...)` projection function to keep it simple.
-//  • We ensure null/[] defaults to keep UI predictable.
-//  • We auto-generate question `id` if author leaves it empty.
+// Notes
+// -----
+// • Arrays preserve author order. We also expose numeric `order`
+//   for future merging/sorting logic if needed.
+// • Lessons return full PT arrays so the client can render images
+//   and embedded videos using <PortableTextRenderer />.
 
 import { groq } from "next-sanity";
 
-// --- List minimal course info (for your list endpoint) ---
+// Minimal list (id/slug/title) – expand as needed for cards
 export const COURSE_LIST_QUERY = groq`
-*[_type == "course"] | order(title asc) {
-  "slug": slug.current
-}
+  *[_type == "course" && defined(slug.current)] | order(title asc) {
+    "id": _id,
+    "slug": slug.current,
+    title
+  }
 `;
 
-// --- Full course by slug, fully dereferenced to the shape your UI expects ---
+// Full course by slug
+// - modules[] are dereferenced in order
+// - subModules[] are dereferenced one level deep (recursive expansion
+//   beyond this is possible but usually unnecessary for authoring)
 export const COURSE_DETAIL_BY_SLUG = groq`
 *[_type == "course" && slug.current == $slug][0]{
   "id": _id,
   "slug": slug.current,
   title,
-  // Short text summary; default to null
   "summary": coalesce(summary, null),
-  // Pass-through the raw image object (your app might not use this yet)
   "coverImage": coalesce(coverImage, null),
-  // Deref modules and their lessons in order
+
+  // Top-level modules in author-defined order
   "modules": coalesce(modules[]->{
     "id": _id,
     title,
     "description": coalesce(description, null),
-    // Lessons in the order they appear in the array
+    "order": select(defined(order) => order, null),
+
+    // Ordered lessons
     "lessons": coalesce(lessons[]->{
       "id": _id,
       title,
-      // Use the raw URL (or null)
+      "order": select(defined(order) => order, null),
       "videoUrl": coalesce(videoUrl, null),
-      // Convert portable text blocks to a single plain text string
-      "body": pt::text(body),
-      // Structured quiz
+
+      // IMPORTANT: Portable Text (blocks + images + videoEmbed objects)
+      "body": coalesce(body, []),
+
+      // Structured quiz (if present)
       "quiz": coalesce(quiz{
-        "questions": questions[]{
-          // Auto-generate id if missing: <docId>_q_<index>
-          "id": coalesce(id, string(^._id) + "_q_" + string(@.index)),
+        "questions": questions[] {
+          "id": coalesce(id, _key),
           "question": question,
           "options": options[],
           "correctIndex": correctIndex
         }
       }, null)
+    }, []),
+
+    // One level of nested sub-modules (also ordered)
+    "subModules": coalesce(subModules[]->{
+      "id": _id,
+      title,
+      "description": coalesce(description, null),
+      "order": select(defined(order) => order, null),
+      "lessons": coalesce(lessons[]->{
+        "id": _id,
+        title,
+        "order": select(defined(order) => order, null),
+        "videoUrl": coalesce(videoUrl, null),
+        "body": coalesce(body, []),
+        "quiz": coalesce(quiz{
+          "questions": questions[] {
+            "id": coalesce(id, _key),
+            "question": question,
+            "options": options[],
+            "correctIndex": correctIndex
+          }
+        }, null)
+      }, [])
     }, [])
   }, [])
 }

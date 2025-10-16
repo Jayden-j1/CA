@@ -42,11 +42,13 @@ export const course = defineType({
       name: "summary",
       type: "text",
       rows: 3,
+      description: "Short description shown in lists/headers.",
     }),
     defineField({
       name: "coverImage",
       type: "image",
       options: { hotspot: true },
+      description: "Optional hero/cover image for the course.",
     }),
     defineField({
       name: "modules",
