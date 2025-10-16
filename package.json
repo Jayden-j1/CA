@@ -54,7 +54,8 @@
     "sanity": "^4.10.2",
     "sanity-plugin-mux-input": "^2.9.0",
     "stripe": "^18.5.0",
-    "styled-components": "^6.1.19"
+    "styled-components": "^6.1.19",
+    "groq": "^3.49.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.1",
