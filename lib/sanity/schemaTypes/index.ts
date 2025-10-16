@@ -3,25 +3,34 @@
 // Purpose
 // -------
 // Aggregate schema types for Sanity Studio (v3).
-// Now includes:
-//  • course           – top-level course with ordered modules (refs)
-//  • courseModule     – supports lessons *and* nested subModules (refs)
-//  • lesson           – rich body (Portable Text) + optional quiz
-//  • quiz             – structured quiz object (embedded in lesson)
-//  • videoEmbed       – custom PT object for inline video by URL
+// We import the object + document types and export them in `types`.
 //
 // Notes
 // -----
-// You can add more object types (callouts, code blocks, etc.) later.
+// • The order does not matter.
+// • Add more types here later if needed.
 
 import { type SchemaTypeDefinition } from "sanity";
+
 import { quiz } from "./quiz";
 import { lesson } from "./lesson";
 import { courseModule } from "./module";
 import { course } from "./course";
+
+// 👇 New object types
 import { videoEmbed } from "./objects/videoEmbed";
+import { callout } from "./objects/callout";
 
 export const schema: { types: SchemaTypeDefinition[] } = {
-  // Order does not matter; documents can reference objects defined anywhere
-  types: [quiz, videoEmbed, lesson, courseModule, course],
+  types: [
+    // Objects first (convention only)
+    videoEmbed,
+    callout,
+
+    // Documents
+    quiz,
+    lesson,
+    courseModule,
+    course,
+  ],
 };

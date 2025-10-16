@@ -4,18 +4,17 @@
 // -------
 // A single lesson with:
 //  • title (required)
-//  • videoUrl (optional; used by your <VideoPlayer /> at the top)
-//  • body (Portable Text) – supports rich text, images, and inline video embeds
+//  • order (optional numeric sorting helper)
+//  • videoUrl (optional; top-of-lesson video, played by <VideoPlayer />)
+//  • body (Portable Text) – supports rich text, images, inline videoEmbed, callout, code
 //  • quiz (optional)
-//  • order (optional) – if you ever sort lessons outside of array order
 //
-// Rendering
-// ---------
-// <PortableTextRenderer /> will render:
-//  • blocks (headings/paragraphs/lists)
-//  • images (via @sanity/image-url)
-//  • inline videoEmbed objects (via your <VideoPlayer />)
-//  • anything else you add later.
+// Notes
+// -----
+// • `image` block includes author-facing `alt` + `caption` fields (accessibility-first).
+// • `videoEmbed` is a simple object with a URL and caption (defined below in /objects).
+// • `callout` is a lightweight annotation object for tips/warnings (also in /objects).
+// • You can always add more block/object types later as your content grows.
 
 import { defineType, defineField } from "sanity";
 
@@ -48,8 +47,39 @@ export const lesson = defineType({
       name: "body",
       title: "Lesson Body",
       type: "array",
-      // Allow blocks + images + custom videoEmbed objects
-      of: [{ type: "block" }, { type: "image", options: { hotspot: true } }, { type: "videoEmbed" }],
+      // ✅ Portable Text can mix blocks + custom objects.
+      // We allow:
+      //  - block (headings/paragraphs/lists)
+      //  - image (with hotspot + fields)
+      //  - videoEmbed (custom object)
+      //  - callout (custom object)
+      //  - code (block type)
+      of: [
+        { type: "block" },
+        {
+          type: "image",
+          options: { hotspot: true },
+          fields: [
+            {
+              name: "alt",
+              type: "string",
+              title: "Alternative text",
+              description:
+                "Describe the image for screen readers and SEO. Leave empty only if decorative.",
+              validation: (rule) => rule.max(180),
+            },
+            {
+              name: "caption",
+              type: "string",
+              title: "Caption",
+              validation: (rule) => rule.max(180),
+            },
+          ],
+        },
+        { type: "videoEmbed" }, // defined in /objects/videoEmbed.ts
+        { type: "callout" },    // defined in /objects/callout.ts
+        { type: "code" },       // built-in Sanity code block
+      ],
       validation: (rule) => rule.required().min(1),
     }),
     defineField({
