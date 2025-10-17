@@ -4,21 +4,28 @@
 // Purpose
 // --------
 // Fetch and normalize a single course by its slug.
-// - Preview (draftMode + ?preview=true): from Sanity (includes drafts)
-// - Otherwise: from Prisma (published data only)
+// • Preview (?preview=true & draftMode): from Sanity (includes drafts)
+// • Otherwise: from Prisma (published data only)
 //
-// What’s fixed here
-// -----------------
-// • Next 15 ParamCheck error -> explicit RouteContext typing for the handler.
-// • Retains your flattening (Module -> Submodule -> Lessons) + ordering.
-// • Keeps Prisma fallback and identical DTO to the front-end.
+// What’s fixed here (Next.js 15 change)
+// -------------------------------------
+// • The App Router’s typed routes now expect the SECOND ARGUMENT to have
+//   `params` as a Promise. So the handler signature is:
+//
+//   export async function GET(
+//     req: Request,
+//     ctx: { params: Promise<{ slug: string }> }
+//   )
+//
+//   We then `await` ctx.params at the very top.
+//   This satisfies the ParamCheck that Vercel/Next performs at build time.
 //
 // Pillars
 // -------
 // ✅ Efficiency  – minimal transformations; single pass flatten.
-// ✅ Robustness  – Sanity→Prisma fallback; guards around optional fields.
-// ✅ Simplicity  – one consistent DTO shape for the UI.
-// ✅ Security    – draft content gated by Next.js draftMode.
+// ✅ Robustness  – Sanity→Prisma fallback; guards on optionals.
+// ✅ Simplicity  – single consistent DTO shape for UI.
+// ✅ Security    – draft content gated by draftMode.
 // ✅ Ease of mgmt – small helpers, thorough comments.
 //
 // ============================================================
@@ -29,13 +36,6 @@ import { prisma } from "@/lib/prisma";
 import { fetchSanity } from "@/lib/sanity/client";
 
 export const dynamic = "force-dynamic"; // live responses (no static cache)
-
-// ----------------------------------------------
-// Next.js 15: make handler params explicitly typed
-// ----------------------------------------------
-interface RouteContext {
-  params: { slug: string };
-}
 
 // ----------------------------------------------
 // Helper: generate a safe id (Node/Edge/browser)
@@ -73,7 +73,7 @@ function sortByOrderAny(arr: any[]): any[] {
 // ---------------------------------------------------------------------
 // • Keeps your front-end UI unchanged (flat `modules[]` each with `lessons[]`).
 // • Preserves human-friendly context in titles for submodules:
-//    "Parent Module — Child Submodule"
+//   "Parent Module — Child Submodule"
 // • Accepts loose `any` to avoid TS narrowing away known fields.
 function flattenModules(modules: any[]): any[] {
   const result: any[] = [];
@@ -184,8 +184,13 @@ function flattenModules(modules: any[]): any[] {
 // ------------------------------------------------------------
 // Route Handler: GET /api/courses/[slug]
 // ------------------------------------------------------------
-export async function GET(req: Request, context: RouteContext) {
-  const { slug } = context.params; // ✅ typed from RouteContext
+// ⚠️ IMPORTANT: Next.js 15 typed routes expect `params` to be a Promise.
+// We await it immediately to obtain the slug.
+export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await ctx.params; // ✅ satisfies ParamCheck
   const { searchParams } = new URL(req.url);
   const previewFlag = searchParams.get("preview") === "true";
   const { isEnabled: draftEnabled } = await draftMode(); // Next 15: async
