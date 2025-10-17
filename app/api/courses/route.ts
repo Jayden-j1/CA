@@ -1,58 +1,52 @@
 // app/api/courses/route.ts
 //
 // ============================================================
+// Course List (Sanity → Published Only)
+// ------------------------------------------------------------
 // Purpose
-// -------
-// List courses for the UI to pick a slug to load.
-// - Preview (draftMode + ?preview=true): from Sanity (includes drafts)
-// - Otherwise: from Prisma (published only)
+//   Small, fast list for dashboard pickers and defaults.
+//   Always reads from Sanity (published only) — no Prisma here.
 //
-// Shape returned:
-//   { courses: Array<{ id: string; slug: string; title: string }> }
+// Why this design
+//   • Production-ready: cached for 60s (ISR) with SWR fallback
+//   • Simplicity: one query (COURSE_LIST_QUERY)
+//   • Security: exposes only minimal metadata
 //
 // Pillars
-// -------
-// ✅ Efficiency  – minimal fields only
-// ✅ Robustness  – preview vs published paths
-// ✅ Simplicity  – small handler; one query per path
-// ✅ Security    – no wildcard data exposure
+//   ✅ Efficiency   – minimal fields, CDN + ISR cache
+//   ✅ Robustness   – no Prisma dependency; clear error handling
+//   ✅ Simplicity   – tiny DTO for list UIs
+//   ✅ Security     – published content only
+//   ✅ Ease of mgmt – single GROQ query used everywhere
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { draftMode } from "next/headers";
-import { prisma } from "@/lib/prisma";
 import { fetchSanity } from "@/lib/sanity/client";
 import { COURSE_LIST_QUERY } from "@/lib/sanity/queries";
 
-export const dynamic = "force-dynamic"; // always live
+// Route segment caching (Next.js Data Cache)
+// • Revalidate this route’s response every 60s.
+// • Also set an explicit Cache-Control for proxies/CDN.
+export const revalidate = 60;
 
-export async function GET(req: Request) {
+// Note: route handlers do not require the "promisified params" signature;
+// that's for *pages*. Keeping standard (req: Request) form here.
+export async function GET() {
   try {
-    const { searchParams } = new URL(req.url);
-    const previewFlag = searchParams.get("preview") === "true";
-    const { isEnabled: draftEnabled } = await draftMode();
+    // 👇 We request published content (default perspective) — no drafts.
+    //    No query interpolation: parameters are passed (none here).
+    const courses = await fetchSanity(COURSE_LIST_QUERY);
 
-    // 1) Preview path → Sanity (drafts included)
-    if (previewFlag && draftEnabled) {
-      try {
-        const docs = await fetchSanity<any[]>(COURSE_LIST_QUERY, {});
-        // GROQ already returns {id, slug, title}
-        return NextResponse.json({ courses: docs ?? [] });
-      } catch (e) {
-        console.warn("[/api/courses] Sanity list failed, falling back to Prisma:", e);
-      }
-    }
+    // Add explicit cache headers for proxies and browsers.
+    const headers = {
+      // 60s fresh in edge/CDN; allow 5min SWR
+      "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+    };
 
-    // 2) Default path → Prisma (published only)
-    const rows = await prisma.course.findMany({
-      where: { isPublished: true },
-      orderBy: { title: "asc" },
-      select: { id: true, slug: true, title: true },
-    });
-
-    return NextResponse.json({ courses: rows });
+    return NextResponse.json({ courses }, { headers });
   } catch (err) {
     console.error("[GET /api/courses] Error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    // No internals leaked; caller can decide fallback (e.g., local placeholder)
+    return NextResponse.json({ courses: [] }, { status: 200 });
   }
 }
