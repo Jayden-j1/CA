@@ -5,13 +5,12 @@
 // Secure endpoint to complete a password reset. Accepts JSON:
 //   { token: string, password: string }
 //
-// What we fixed
-// -------------
-// • TypeScript error: your generated Prisma type only includes `expiresAt`,
-//   so accessing `record.expires` raised a TS error. We now intentionally
-//   widen the fetched record to `any` (docstring explains why) so we can
-//   safely read either `expiresAt` (canonical) or legacy `expires` without
-//   fighting Prisma’s generated types.
+// What changed in this patch
+// --------------------------
+// • We **removed** all references to legacy `expires` and now rely solely on
+//   the canonical `expiresAt` field (Date).
+// • We also **type-narrow** the Prisma query via `select` so TypeScript knows
+//   exactly what fields are present (no `any`, no widening).
 //
 // Security
 // --------
@@ -21,11 +20,11 @@
 //
 // Pillars
 // -------
-// ✅ Efficiency   – single DB fetch + single user update + single cleanup
-// ✅ Robustness   – supports legacy `expires` or canonical `expiresAt`
-// ✅ Simplicity   – straightforward, self-contained logic
-// ✅ Security     – defense-in-depth validations; minimal leakage
-// ✅ Ease of mgmt – Prisma-based; clear comments and guards
+// ✅ Efficiency   – 1 DB read, 1 update, 1 cleanup
+// ✅ Robustness   – strict typing; consistent `expiresAt` only
+// ✅ Simplicity   – no legacy branches
+// ✅ Security     – defense-in-depth, minimal leakage
+// ✅ Ease of mgmt – Prisma-based; small, clear code
 
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
@@ -34,7 +33,7 @@ import { isStrongPassword } from "@/lib/validator";
 
 export async function POST(req: Request) {
   try {
-    // 1) Parse and validate body
+    // 1) Parse and validate body (shape-safe)
     const { token, password } = (await req.json()) as {
       token?: string;
       password?: string;
@@ -47,7 +46,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) Enforce strong password server-side (defense-in-depth)
+    // 2) Enforce strong password rules (defense-in-depth)
     if (!isStrongPassword(password)) {
       return NextResponse.json(
         {
@@ -58,13 +57,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // 3) Look up the token record.
+    // 3) Retrieve the token record (canonical fields only)
     //
-    // IMPORTANT: We deliberately annotate as `any` so we can read either
-    // `expiresAt` (canonical in your current Prisma schema) or legacy `expires`
-    // if old rows/columns exist. Without widening, TypeScript rejects `expires`.
-    const record: any = await prisma.passwordResetToken.findUnique({
+    // NOTE:
+    //  - We select only what we need for both performance and type safety.
+    //  - This route no longer supports legacy `expires`; only `expiresAt`.
+    const record = await prisma.passwordResetToken.findUnique({
       where: { token },
+      select: {
+        userId: true,
+        token: true,
+        expiresAt: true,
+      },
     });
 
     if (!record) {
@@ -75,34 +79,21 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4) Resolve expiration using either field
-    const expiresValue: Date | null =
-      record.expiresAt instanceof Date
-        ? record.expiresAt
-        : record.expires instanceof Date
-        ? record.expires
-        : null;
-
-    if (!expiresValue) {
-      // No expiry present → treat as invalid and remove token defensively
-      await prisma.passwordResetToken.delete({ where: { token } });
-      return NextResponse.json({ error: "Invalid token" }, { status: 400 });
-    }
-
-    // 5) Expired?
-    if (expiresValue <= new Date()) {
+    // 4) Validate expiration via canonical expiresAt
+    if (!(record.expiresAt instanceof Date) || record.expiresAt <= new Date()) {
+      // Either missing/invalid or expired → delete token defensively
       await prisma.passwordResetToken.delete({ where: { token } });
       return NextResponse.json({ error: "Token expired" }, { status: 400 });
     }
 
-    // 6) Hash and update password
+    // 5) Hash and update password
     const hashedPassword = await bcrypt.hash(password, 10);
     await prisma.user.update({
       where: { id: record.userId },
       data: { hashedPassword },
     });
 
-    // 7) Invalidate ALL reset tokens for this user (prevent reuse)
+    // 6) Invalidate ALL reset tokens for this user (prevent reuse)
     await prisma.passwordResetToken.deleteMany({
       where: { userId: record.userId },
     });

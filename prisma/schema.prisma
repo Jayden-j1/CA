@@ -1,43 +1,37 @@
 // prisma/schema.prisma
 //
-// Purpose:
-// - Existing auth/billing models remain unchanged.
-// - ADD course delivery models (Course, CourseModule, Quiz) and progress tracking
-//   (UserCourseProgress, UserModuleProgress) with clear, minimal relations.
-// - Keep it simple, scalable, and easy to extend later.
-// - ✅ Updated to use Prisma Data Proxy engine to avoid binary .dll locks on Windows.
+// Purpose
+// -------
+// • Auth + billing + course delivery + progress models.
+// • Strong ordering guarantees for modules (unique per course).
+// • Canonical password-reset token with `expiresAt` only (no legacy `expires`).
 //
-// Design notes:
-// - Module-level videoUrl covers your initial video needs (hosted on your CDN/Vimeo/Wistia).
-// - Quiz questions stored as JSON to ship fast now; easy to migrate to relational later.
-// - Course progress tracked at BOTH module level (granular, quizScore) and course level
-//   (completedModuleIds[], percent). This gives flexible, cheap reads for dashboards.
-// - Stable ordering via CourseModule.order with unique constraint per course.
+// Windows-friendly note
+// ---------------------
+// • Using the Data Proxy engine avoids local native .dll locks on Windows.
+// • You can toggle this off if you prefer the default binary engine on CI/Linux.
 //
-// Pillars:
-// - Efficiency: indices/uniques on hot paths (slug, (courseId, order), (userId, moduleId)).
-// - Robustness: explicit relations, unique constraints to avoid duplicates.
-// - Simplicity: JSON for questions, a single progress upsert path.
-// - Ease of management: comments + obvious fields; minimal surprises.
-// - Security: no PII added, all access enforced in API.
+// Pillars
+// -------
+// ✅ Efficiency    – hot-path indexes (slug, (courseId, order), (userId, moduleId), etc.)
+// ✅ Robustness    – explicit relations w/ `onDelete` where it helps data hygiene
+// ✅ Simplicity    – JSON questions, simple progress models, single `expiresAt`
+// ✅ Ease of mgmt  – clear comments + obvious schema
+// ✅ Security      – no extra PII; auth models as expected
 
 // -------------------------
-// ⚙️ Generator Configuration
+// ⚙️ Generator
 // -------------------------
-// Using Data Proxy engine avoids native binary locks on Windows (no .dlls).
-// Set PRISMA_CLIENT_ENGINE_TYPE=dataproxy in .env to activate this mode.
+// Pure JS client engine (no native binaries) – helpful on Windows.
+// If you later prefer native binaries (e.g., CI on Linux), remove `engineType = "dataproxy"`
+// and ensure you *don't* set PRISMA_CLIENT_ENGINE_TYPE=dataproxy in .env.
 generator client {
   provider   = "prisma-client-js"
-
-  // ✅ To avoid Windows .dll lock errors, we switch to the Data Proxy engine.
-  // This engine is pure JS (no native binaries).
-  // You can toggle back to binary mode by changing this to "binary" if needed on Linux/CI.
   engineType = "dataproxy"
 }
 
-
 // -------------------------
-// 🔗 Database Connection
+// 🔗 Datasource
 // -------------------------
 datasource db {
   provider = "postgresql"
@@ -45,9 +39,8 @@ datasource db {
 }
 
 // -------------------------
-// EXISTING MODELS (unchanged)
+// 👤 Auth models (standard)
 // -------------------------
-
 model User {
   id             String    @id @default(cuid())
   name           String?
@@ -58,7 +51,7 @@ model User {
   // 🔐 Bcrypt-hashed password (NEVER plaintext)
   hashedPassword String?   @map("password")
 
-  // Role: USER | BUSINESS_OWNER | ADMIN
+  // Role: USER | BUSINESS_OWNER | ADMIN (string for flexibility)
   role           String    @default("USER")
 
   businessId     String?
@@ -76,10 +69,10 @@ model User {
   ownedBusiness  Business? @relation("BusinessOwner")
   payments       Payment[]
   sessions       Session[]
-  business       Business? @relation(fields: [businessId], references: [id])
+  business       Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
   passwordResetTokens PasswordResetToken[]
 
-  // NEW relations
+  // Course relations
   courseProgress  UserCourseProgress[]
   moduleProgress  UserModuleProgress[]
 }
@@ -92,8 +85,10 @@ model Business {
   createdAt DateTime @default(now())
 
   // 🔗 Relations
-  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   users     User[]
+
+  @@index([domain])
 }
 
 model Payment {
@@ -109,7 +104,9 @@ model Payment {
   purpose     PaymentPurpose @default(PACKAGE)
 
   // 🔗 Relations
-  user        User           @relation(fields: [userId], references: [id])
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model Account {
@@ -127,9 +124,10 @@ model Account {
   session_state     String?
 
   // 🔗 Relations
-  user              User    @relation(fields: [userId], references: [id])
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -139,7 +137,10 @@ model Session {
   expires      DateTime
 
   // 🔗 Relations
-  user         User     @relation(fields: [userId], references: [id])
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expires])
 }
 
 model VerificationToken {
@@ -148,20 +149,22 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+  @@index([expires])
 }
 
-// ✅ Token model for forgot-password flow
+// ✅ Token model for forgot-password flow (canonical: expiresAt only)
 model PasswordResetToken {
   id        String   @id @default(cuid())
-  token     String   @unique        // random, unguessable
-  userId    String                   // FK → User
-  expiresAt DateTime                 // when the token expires
+  token     String   @unique           // random, unguessable
+  userId    String                      // FK → User
+  expiresAt DateTime                    // when the token expires
   createdAt DateTime @default(now())
 
   // 🔗 Relations
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([expiresAt])
 }
 
 enum PaymentPurpose {
@@ -170,12 +173,11 @@ enum PaymentPurpose {
 }
 
 // -------------------------
-// NEW COURSE MODELS
+// 📚 Course delivery models
 // -------------------------
-
 model Course {
   id          String         @id @default(cuid())
-  slug        String         @unique              // human-friendly stable identifier, e.g. "cultural-awareness-basics"
+  slug        String         @unique            // e.g. "cultural-awareness"
   title       String
   summary     String?
   coverImage  String?
@@ -186,43 +188,46 @@ model Course {
   // Relations
   modules     CourseModule[]
   progress    UserCourseProgress[]
+
+  @@index([isPublished, updatedAt])          // list published courses quickly
 }
 
 model CourseModule {
   id              String     @id @default(cuid())
   courseId        String
-  order           Int                                // stable ordering within a course, starts at 1
+  order           Int                              // stable ordering within a course, starts at 1
   title           String
   description     String?
-  videoUrl        String?                            // your hosted video (Vercel Blob, Vimeo, Wistia, S3)
+  videoUrl        String?                          // hosted video (Vercel Blob, Vimeo, Wistia, S3, etc.)
   durationSeconds Int?
   isPublished     Boolean    @default(false)
-  content         Json?                              // optional rich text/markdown AST, future-friendly
+  content         Json?                            // optional rich text/markdown AST or Portable Text
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
   // Relations
-  course          Course     @relation(fields: [courseId], references: [id])
+  course          Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
   quiz            Quiz?
   userProgress    UserModuleProgress[]
 
   @@index([courseId, order])
-  @@unique([courseId, order])                        // enforce unique order per course
+  @@unique([courseId, order])                      // enforce unique order per course
+  @@index([courseId, isPublished, order])          // render modules in order for a published course
 }
 
 model Quiz {
   id           String        @id @default(cuid())
-  moduleId     String        @unique                 // 1:1 with module (simple)
+  moduleId     String        @unique               // 1:1 with module (simple)
   title        String?
-  questions    Json                                    // quiz stored as JSON for simplicity
-  passingScore Int?                                   // optional min % or min correct for pass
+  questions    Json                                // quiz stored as JSON for simplicity (array of Qs)
+  passingScore Int?                                 // optional min % or min correct to pass
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  module       CourseModule  @relation(fields: [moduleId], references: [id])
+  module       CourseModule  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 }
 
-// Per-user course summary progress (fast to read for dashboards)
+// Per-user course summary progress (fast to read on dashboards)
 model UserCourseProgress {
   id                 String     @id @default(cuid())
   userId             String
@@ -234,11 +239,12 @@ model UserCourseProgress {
   updatedAt          DateTime   @updatedAt
 
   // Relations
-  user               User       @relation(fields: [userId], references: [id])
-  course             Course     @relation(fields: [courseId], references: [id])
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course             Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
   @@unique([userId, courseId])
   @@index([courseId])
+  @@index([userId, updatedAt])
 }
 
 // Per-user per-module progress (granular)
@@ -246,15 +252,16 @@ model UserModuleProgress {
   id         String       @id @default(cuid())
   userId     String
   moduleId   String
-  completed  Boolean      @default(false)          // completed the module (watch + quiz pass if required)
+  completed  Boolean      @default(false)          // watched + (quiz pass if required)
   quizScore  Int?                                  // last score (0..100) if a quiz exists
   updatedAt  DateTime     @updatedAt
   createdAt  DateTime     @default(now())
 
   // Relations
-  user       User         @relation(fields: [userId], references: [id])
-  module     CourseModule @relation(fields: [moduleId], references: [id])
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module     CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, moduleId])
   @@index([moduleId])
+  @@index([userId, updatedAt])
 }
