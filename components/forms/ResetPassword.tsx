@@ -1,9 +1,14 @@
 // components/forms/ResetPasswordForm.tsx
 //
-// Purpose:
+// Purpose
+// -------
 // - Render two password fields (new + confirm) and submit to /api/auth/reset-password.
 // - Enforces strong password on the client (same rule as server).
 // - Shows toast + redirects to /login on success.
+//
+// Notes
+// -----
+// - UI/logic unchanged; added minor comments for maintainability.
 
 "use client";
 
@@ -23,7 +28,7 @@ export default function ResetPasswordForm({ token }: { token: string }) {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
 
-    // Quick client-side checks for better UX (server will re-validate)
+    // Client-side checks for UX (server re-validates)
     if (pw1 !== pw2) {
       toast.error("Passwords do not match.");
       return;
@@ -40,6 +45,7 @@ export default function ResetPasswordForm({ token }: { token: string }) {
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // Token travels only in the request body; keep it off the URL.
         body: JSON.stringify({ token, password: pw1 }),
       });
 
@@ -48,9 +54,12 @@ export default function ResetPasswordForm({ token }: { token: string }) {
       if (!res.ok) {
         toast.error(data.error || "Token expired or invalid.");
         return;
+        // (Optional) You could clear the form / provide a link to request again.
       }
 
-      toast.success("Password reset successful. Please log in.", { duration: 3000 });
+      toast.success("Password reset successful. Please log in.", {
+        duration: 3000,
+      });
       setTimeout(() => router.push("/login"), 800);
     } catch (err) {
       console.error("[ResetPasswordForm] Error:", err);
