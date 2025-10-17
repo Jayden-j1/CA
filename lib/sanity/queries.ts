@@ -2,24 +2,21 @@
 //
 // Purpose
 // -------
-// Define GROQ queries in a single place for reusability and consistency.
-// These queries feed your API routes and server actions.
+// Centralized GROQ queries for reusability + consistency.
+// These feed your API routes and server components.
 //
-// Design Pillars
-// --------------
-// ✅ Efficiency  – Only query necessary fields.
-// ✅ Robustness  – Use coalesce() to normalize missing fields.
-// ✅ Simplicity  – Avoid over-nesting or inline JS interpolation.
-// ✅ Ease of management  – Central file for all Sanity data shapes.
-// ✅ Security  – Strictly controlled data exposure (no wildcards).
-
+// Pillars
+// -------
+// ✅ Efficiency  – Only fetch what the UI needs
+// ✅ Robustness  – coalesce() for predictable shapes
+// ✅ Simplicity  – All queries in one place, no inline string builds
+// ✅ Security    – No wildcards that leak data
+//
 import { groq } from "next-sanity";
 
 // ------------------------------------------------------------
-// COURSE LIST QUERY
+// COURSE LIST QUERY (lightweight lists / selectors)
 // ------------------------------------------------------------
-// Minimal query used by `/api/courses` for dashboard lists.
-// Returns id, slug, and title only.
 export const COURSE_LIST_QUERY = groq`
   *[_type == "course" && defined(slug.current)] | order(title asc) {
     "id": _id,
@@ -29,36 +26,35 @@ export const COURSE_LIST_QUERY = groq`
 `;
 
 // ------------------------------------------------------------
-// COURSE DETAIL QUERY (WITH HIERARCHICAL MODULES + LESSONS)
+// COURSE DETAIL BY SLUG (with modules → lessons → submodules)
 // ------------------------------------------------------------
-// Returns the full course structure for `/api/courses/[slug]`.
-// This includes modules, submodules, lessons, and Portable Text bodies.
+// 👉 Important ordering rules:
+//   • We respect *array order* in the Course's "modules" field (drag/drop).
+//   • We also support each Module/Lesson "order" field if you use it.
+//   • The pipes `| order(order asc)` are applied after dereferencing `->`.
 //
-// Key Notes:
-//  • Never interpolate variables via ${...}, only pass parameters (e.g. $slug).
-//  • Keep all field keys quoted to prevent TypeScript/GROQ parsing errors.
-//  • The query below is static — no TypeScript will be inferred from its content.
-//  • Portable Text arrays are fetched as-is for rendering in the frontend.
+// 👉 Result shape is stable and UI-ready, with all optional fields normalized.
+//
 export const COURSE_DETAIL_BY_SLUG = groq`
   *[_type == "course" && slug.current == $slug][0]{
-    // Core fields
+    // Core course fields
     "id": _id,
     "slug": slug.current,
     title,
     "summary": coalesce(summary, null),
     "coverImage": coalesce(coverImage, null),
 
-    // Ordered modules (array of references)
+    // Course → Modules (respect array order first, then module.order as a hint)
     "modules": coalesce(
-      modules[]->{
+      modules[]-> | order(order asc){
         _id,
         title,
         "description": coalesce(description, null),
         "order": select(defined(order) => order, null),
 
-        // Lessons within each module
+        // Lessons (respect embedded array order, then lesson.order)
         "lessons": coalesce(
-          lessons[]->{
+          lessons[]-> | order(order asc){
             _id,
             title,
             "order": select(defined(order) => order, null),
@@ -66,7 +62,7 @@ export const COURSE_DETAIL_BY_SLUG = groq`
             "body": coalesce(body, []),
             "quiz": coalesce(quiz{
               "passingScore": passingScore,
-              "questions": questions[]{
+              "questions": questions[] {
                 "id": coalesce(id, _key),
                 "question": question,
                 "options": options[],
@@ -77,15 +73,16 @@ export const COURSE_DETAIL_BY_SLUG = groq`
           []
         ),
 
-        // Optional nested submodules (same shape)
+        // Optional submodules (same rules + same shape as modules)
         "submodules": coalesce(
-          submodules[]->{
+          submodules[]-> | order(order asc){
             _id,
             title,
             "description": coalesce(description, null),
             "order": select(defined(order) => order, null),
+
             "lessons": coalesce(
-              lessons[]->{
+              lessons[]-> | order(order asc){
                 _id,
                 title,
                 "order": select(defined(order) => order, null),
@@ -93,7 +90,7 @@ export const COURSE_DETAIL_BY_SLUG = groq`
                 "body": coalesce(body, []),
                 "quiz": coalesce(quiz{
                   "passingScore": passingScore,
-                  "questions": questions[]{
+                  "questions": questions[] {
                     "id": coalesce(id, _key),
                     "question": question,
                     "options": options[],
