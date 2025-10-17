@@ -2,36 +2,51 @@
 //
 // Purpose
 // -------
-// Central configuration for your Sanity Studio at /cms.
+// Central configuration for Sanity Studio at /cms.
 //
-// Problem Fixed
-// --------------
-// TypeScript complained: Type 'string | undefined' is not assignable to type 'string'.
-// This happens because environment variables are optional by type.
-// We fix it by adding explicit fallback logic and narrowing types
-// using the nullish coalescing operator (??) and a runtime guard.
+// Problems solved
+// ---------------
+// 1) "Type 'string | undefined' is not assignable to type 'string'":
+//    -> We narrow env vars with nullish coalescing + runtime guard.
+// 2) "process.cwd is not a function" when running `npx sanity dev`:
+//    -> We only load dotenv in Node (server) environments.
+//       Sanity Studio (Vite) executes part of this in the browser,
+//       so we must not call Node APIs there.
 //
 // Pillars
-// --------
-// ✅ Simplicity – no external type hacks.
-// ✅ Robustness – fails loudly if missing projectId.
-// ✅ Ease of management – works for both Next.js & Vite Studio.
-// ✅ Security – values always read from .env.
+// -------
+// ✅ Simplicity  – small, self-contained file.
+// ✅ Robustness  – Node-only dotenv, graceful fallbacks.
+// ✅ Security    – values come from .env/.env.local only.
+// ✅ Ease of mgmt – consistent across Next build + Studio dev.
 
 import { defineConfig } from "sanity";
 import { deskTool } from "sanity/desk";
 import { visionTool } from "@sanity/vision";
 import { schema as schemaBundle } from "./lib/sanity/schemaTypes";
-import dotenv from "dotenv";
-
-// ✅ Load .env for local dev (Vite / npx sanity dev)
-dotenv.config();
 
 // ---------------------------------------------------------------------------
-// 1️⃣ Resolve and Narrow Environment Variables
+// 1) Load .env only in Node (prevents Vite/browser crashes in Studio)
 // ---------------------------------------------------------------------------
-// Use nullish coalescing (??) to guarantee a final string value
-// while keeping TS aware that projectId/dataset are strings.
+// - Vite may evaluate this file in a browser-like context (no process.cwd).
+// - Guard ensures we only import and run dotenv in Node.
+// - This still allows `npx sanity dev` to use your .env locally.
+if (typeof process !== "undefined" && typeof process.cwd === "function") {
+  try {
+    // Dynamic import avoids bundling dotenv into browser chunks.
+    const dotenv = await import("dotenv");
+    dotenv.config();
+  } catch {
+    // Non-fatal in the browser; Next/Sanity also inject envs via other means.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2) Resolve & narrow env variables to concrete strings
+// ---------------------------------------------------------------------------
+// We coalesce through both NEXT_PUBLIC_* and SANITY_STUDIO_* to support
+// either naming convention. Final fallback: "" (empty string) which
+// triggers a fail-fast error below for projectId.
 const projectId = (
   process.env.NEXT_PUBLIC_SANITY_PROJECT_ID ??
   process.env.SANITY_STUDIO_PROJECT_ID ??
@@ -44,20 +59,17 @@ const dataset = (
   "production"
 ).trim();
 
-// ---------------------------------------------------------------------------
-// 2️⃣ Fail Fast (Optional Safety Guard)
-// ---------------------------------------------------------------------------
-// If projectId is still empty, throw a descriptive error at startup
+// Fail fast if projectId is missing – keeps Studio state obvious.
 if (!projectId) {
   throw new Error(
-    "❌ Sanity projectId is missing. Please define NEXT_PUBLIC_SANITY_PROJECT_ID in your .env or .env.local file."
+    "❌ Missing Sanity `projectId`. Define NEXT_PUBLIC_SANITY_PROJECT_ID (or SANITY_STUDIO_PROJECT_ID) in your .env/.env.local."
   );
 }
 
 // ---------------------------------------------------------------------------
-// 3️⃣ Define Sanity Config
+// 3) Export Studio configuration
 // ---------------------------------------------------------------------------
-// TypeScript now sees projectId/dataset as guaranteed strings.
+// TypeScript now sees projectId/dataset as plain strings (no union w/ undefined).
 export default defineConfig({
   name: "default",
   title: "Cultural Awareness CMS",
@@ -65,10 +77,13 @@ export default defineConfig({
   projectId,
   dataset,
 
+  // Your Studio is mounted at /cms inside the Next.js app
   basePath: "/cms",
 
+  // Core Studio tools
   plugins: [deskTool(), visionTool()],
 
+  // Pull in your schema bundle (documents + objects)
   schema: {
     types: schemaBundle.types,
   },

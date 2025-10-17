@@ -7,13 +7,19 @@
 // - Preview (draftMode + ?preview=true): from Sanity (includes drafts)
 // - Otherwise: from Prisma (published data only)
 //
-// Design Pillars
-// ---------------
-// ✅ Efficiency  – Minimal shape transformations; single pass flatten.
-// ✅ Robustness  – Automatic fallback from Sanity to Prisma.
-// ✅ Simplicity  – One consistent DTO shape for the frontend.
-// ✅ Security    – Draft data gated by Next.js draftMode.
-// ✅ Ease of management – Clean helpers + clear comments.
+// What’s fixed here
+// -----------------
+// • Next 15 ParamCheck error -> explicit RouteContext typing for the handler.
+// • Retains your flattening (Module -> Submodule -> Lessons) + ordering.
+// • Keeps Prisma fallback and identical DTO to the front-end.
+//
+// Pillars
+// -------
+// ✅ Efficiency  – minimal transformations; single pass flatten.
+// ✅ Robustness  – Sanity→Prisma fallback; guards around optional fields.
+// ✅ Simplicity  – one consistent DTO shape for the UI.
+// ✅ Security    – draft content gated by Next.js draftMode.
+// ✅ Ease of mgmt – small helpers, thorough comments.
 //
 // ============================================================
 
@@ -22,27 +28,32 @@ import { draftMode } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { fetchSanity } from "@/lib/sanity/client";
 
-export const dynamic = "force-dynamic"; // live (no static cache)
+export const dynamic = "force-dynamic"; // live responses (no static cache)
 
-// ------------------------------------------------------------
-// Helper: Safe ID (works in all runtimes)
-// ------------------------------------------------------------
-// • Uses Web Crypto randomUUID when available (Next.js Edge/Node supports it).
-// • Falls back to time + random if crypto is missing (very rare).
-function safeId() {
-  try {
-    // @ts-ignore - Web Crypto exists in Next runtimes
-    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  } catch {}
-  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+// ----------------------------------------------
+// Next.js 15: make handler params explicitly typed
+// ----------------------------------------------
+interface RouteContext {
+  params: { slug: string };
 }
 
-// ------------------------------------------------------------
-// Helper: stable sort by optional numeric `order`, preserving array order
-// ------------------------------------------------------------
-// • We accept/return any[] on purpose to avoid TypeScript narrowing the items
-//   to only `{ order?: number }` and stripping other properties.
-// • Sorting key: place undefined orders at the end (`Infinity`), otherwise ASC.
+// ----------------------------------------------
+// Helper: generate a safe id (Node/Edge/browser)
+// ----------------------------------------------
+function safeId(): string {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {}
+  return `id_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+// ----------------------------------------------
+// Helper: stable sort by optional numeric `order`
+// ----------------------------------------------
+// - If `order` is not a finite number, push to the end.
+// - Keeps array order stable (copy + sort).
 function sortByOrderAny(arr: any[]): any[] {
   return [...(arr || [])].sort((a, b) => {
     const ao =
@@ -57,16 +68,15 @@ function sortByOrderAny(arr: any[]): any[] {
   });
 }
 
-// ------------------------------------------------------------
-// Helper: Recursively flatten modules/submodules/lessons
-// ------------------------------------------------------------
-// • Sanity structure: Module → (Lessons + Submodules[Module → Lessons])
-// • We flatten to a 1-level modules[] array so your UI stays unchanged.
-// • We preserve order (array order first, numeric `order` as a hint).
+// ---------------------------------------------------------------------
+// Helper: recursively flatten modules → submodules → lessons to 1 level
+// ---------------------------------------------------------------------
+// • Keeps your front-end UI unchanged (flat `modules[]` each with `lessons[]`).
+// • Preserves human-friendly context in titles for submodules:
+//    "Parent Module — Child Submodule"
+// • Accepts loose `any` to avoid TS narrowing away known fields.
 function flattenModules(modules: any[]): any[] {
   const result: any[] = [];
-
-  // Top-level modules in stable order
   const top = sortByOrderAny(modules);
 
   for (const m of top) {
@@ -74,18 +84,20 @@ function flattenModules(modules: any[]): any[] {
     const baseTitle = m?.title ?? "Untitled Module";
     const baseDesc = m?.description ?? undefined;
 
-    // Gather current module's lessons (ordered)
+    // ---- Case A: Module has its own lessons
     if (Array.isArray(m?.lessons) && m.lessons.length > 0) {
       const mappedLessons = sortByOrderAny(m.lessons).map((l: any) => ({
         id: l?._id ?? safeId(),
         title: l?.title ?? "Lesson",
         videoUrl: l?.videoUrl ?? "",
-        // `body` can be Portable Text (array) or string; your page normalizes it to PT
+        // `body` can be Portable Text (array) or string; page will normalize to PT blocks.
         body: l?.body ?? l?.content ?? undefined,
         quiz: l?.quiz
           ? {
               title: l.quiz.title ?? undefined,
-              questions: Array.isArray(l.quiz.questions) ? l.quiz.questions : [],
+              questions: Array.isArray(l.quiz.questions)
+                ? l.quiz.questions
+                : [],
               passingScore: l.quiz.passingScore ?? undefined,
             }
           : undefined,
@@ -99,39 +111,42 @@ function flattenModules(modules: any[]): any[] {
       });
     }
 
-    // Flatten submodules (ordered)
+    // ---- Case B: Flatten submodules
     if (Array.isArray(m?.submodules) && m.submodules.length > 0) {
       for (const sm of sortByOrderAny(m.submodules)) {
         const subId = sm?._id ?? sm?.id ?? safeId();
         const subTitle = sm?.title ?? "Untitled Submodule";
         const subDesc = sm?.description ?? undefined;
 
-        const subLessons: any[] = Array.isArray(sm?.lessons) && sm.lessons.length > 0
-          ? sortByOrderAny(sm.lessons).map((sl: any) => ({
-              id: sl?._id ?? safeId(),
-              title: sl?.title ?? "Lesson",
-              videoUrl: sl?.videoUrl ?? "",
-              body: sl?.body ?? sl?.content ?? undefined,
-              quiz: sl?.quiz
-                ? {
-                    title: sl.quiz.title ?? undefined,
-                    questions: Array.isArray(sl.quiz.questions) ? sl.quiz.questions : [],
-                    passingScore: sl.quiz.passingScore ?? undefined,
-                  }
-                : undefined,
-            }))
-          : [
-              // Fallback: treat submodule itself as a single-lesson container
-              {
-                id: `${subId}-lesson`,
-                title: subTitle,
-                videoUrl: sm?.videoUrl ?? "",
-                body: sm?.content ?? undefined,
-                quiz: undefined,
-              },
-            ];
+        const subLessons: any[] =
+          Array.isArray(sm?.lessons) && sm.lessons.length > 0
+            ? sortByOrderAny(sm.lessons).map((sl: any) => ({
+                id: sl?._id ?? safeId(),
+                title: sl?.title ?? "Lesson",
+                videoUrl: sl?.videoUrl ?? "",
+                body: sl?.body ?? sl?.content ?? undefined,
+                quiz: sl?.quiz
+                  ? {
+                      title: sl.quiz.title ?? undefined,
+                      questions: Array.isArray(sl.quiz.questions)
+                        ? sl.quiz.questions
+                        : [],
+                      passingScore: sl.quiz.passingScore ?? undefined,
+                    }
+                  : undefined,
+              }))
+            : [
+                // Fallback: treat submodule as a single-lesson container
+                {
+                  id: `${subId}-lesson`,
+                  title: subTitle,
+                  videoUrl: sm?.videoUrl ?? "",
+                  body: sm?.content ?? undefined,
+                  quiz: undefined,
+                },
+              ];
 
-        // Push a flattened module entry with hierarchical title for context
+        // Keep hierarchical name for context in the flat list
         result.push({
           id: subId,
           title: `${baseTitle} — ${subTitle}`,
@@ -141,7 +156,7 @@ function flattenModules(modules: any[]): any[] {
       }
     }
 
-    // If neither lessons nor submodules exist → single-content module fallback
+    // ---- Case C: Neither lessons nor submodules → single-content fallback
     if (
       (!Array.isArray(m?.lessons) || m.lessons.length === 0) &&
       (!Array.isArray(m?.submodules) || m.submodules.length === 0)
@@ -169,22 +184,16 @@ function flattenModules(modules: any[]): any[] {
 // ------------------------------------------------------------
 // Route Handler: GET /api/courses/[slug]
 // ------------------------------------------------------------
-export async function GET(
-  req: Request,
-  { params }: { params: { slug: string } }
-) {
+export async function GET(req: Request, context: RouteContext) {
+  const { slug } = context.params; // ✅ typed from RouteContext
+  const { searchParams } = new URL(req.url);
+  const previewFlag = searchParams.get("preview") === "true";
+  const { isEnabled: draftEnabled } = await draftMode(); // Next 15: async
+
   try {
-    const { searchParams } = new URL(req.url);
-    const previewFlag = searchParams.get("preview") === "true";
-
-    // Next 15: draftMode() is async
-    const { isEnabled: draftEnabled } = await draftMode();
-    const slug = params.slug;
-
-    // 1) Preview (Sanity — drafts visible)
+    // 1) Preview path → Sanity (drafts visible)
     if (previewFlag && draftEnabled) {
       try {
-        // Pull fully nested shape (modules + submodules + lessons)
         const query = /* groq */ `
           *[_type == "course" && slug.current == $slug][0]{
             _id,
@@ -193,6 +202,7 @@ export async function GET(
             summary,
             "coverImage": select(defined(coverImage.asset->url) => coverImage.asset->url, null),
 
+            // Nested data: modules → lessons + submodules → lessons
             modules[]->{
               _id, title, description, order, videoUrl, content,
               lessons[]->{
@@ -224,20 +234,20 @@ export async function GET(
               title: doc.title,
               summary: doc.summary ?? null,
               coverImage: doc.coverImage ?? null,
-              // ✅ flattened + ordered
+              // ✅ flatten nested modules for a stable, simple DTO
               modules: flattenModules(doc.modules || []),
             },
           });
         }
-      } catch (e) {
+      } catch (err) {
         console.warn(
-          `[/api/courses/${slug}] Sanity preview failed; using Prisma fallback:`,
-          e
+          `[/api/courses/${slug}] Sanity preview failed; falling back to Prisma:`,
+          err
         );
       }
     }
 
-    // 2) Default (Prisma — published only)
+    // 2) Default path → Prisma (published only)
     const course = await prisma.course.findFirst({
       where: { slug, isPublished: true },
       select: {
@@ -253,7 +263,7 @@ export async function GET(
       return NextResponse.json({ error: "Course not found" }, { status: 404 });
     }
 
-    // Your Prisma model has only modules (no nested submodules). Keep it simple.
+    // Prisma model is flat (no nested submodules) – keep mapping minimal.
     const modules = await prisma.courseModule.findMany({
       where: { courseId: course.id, isPublished: true },
       orderBy: { order: "asc" },
@@ -264,7 +274,12 @@ export async function GET(
         videoUrl: true,
         content: true,
         quiz: {
-          select: { id: true, title: true, questions: true, passingScore: true },
+          select: {
+            id: true,
+            title: true,
+            questions: true,
+            passingScore: true,
+          },
         },
       },
     });
@@ -278,10 +293,10 @@ export async function GET(
           id: `${m.id}-lesson`,
           title: m.title,
           videoUrl: m.videoUrl ?? "",
-          // Prisma stores lesson-like content in `content` (string). Page will normalize to PT.
+          // Prisma: lesson-like content stored as a string in `content`
           body: typeof m.content === "string" ? m.content : undefined,
           quiz:
-            Array.isArray(m.quiz?.questions) && m.quiz.questions.length
+            Array.isArray(m.quiz?.questions) && m.quiz.questions.length > 0
               ? { questions: m.quiz.questions }
               : undefined,
         },
@@ -289,16 +304,10 @@ export async function GET(
     }));
 
     return NextResponse.json({
-      course: {
-        ...course,
-        modules: mappedModules,
-      },
+      course: { ...course, modules: mappedModules },
     });
   } catch (err) {
     console.error("[GET /api/courses/[slug]] Error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
