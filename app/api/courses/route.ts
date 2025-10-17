@@ -1,104 +1,56 @@
 // app/api/courses/route.ts
 //
+// ============================================================
 // Purpose
 // -------
-// Returns a list of courses for the dashboard.
-// - If preview mode is active (draftMode + ?preview=true): fetch from Sanity (includes drafts).
-// - Otherwise: fetch from Prisma (published only).
+// List courses for the UI to pick a slug to load.
+// - Preview (draftMode + ?preview=true): from Sanity (includes drafts)
+// - Otherwise: from Prisma (published only)
 //
-// Design Pillars
-// --------------
-// ✅ Efficiency  – Select minimal fields; small normalized payload.
-// ✅ Robustness  – Graceful fallback if Sanity is unavailable or empty.
-// ✅ Simplicity  – Linear control flow and clear data mapping.
-// ✅ Ease of Management – Easily extendable for pagination/filtering.
-// ✅ Security    – Drafts only accessible when preview mode + secret enabled.
+// Shape returned:
+//   { courses: Array<{ id: string; slug: string; title: string }> }
 //
+// Pillars
+// -------
+// ✅ Efficiency  – minimal fields only
+// ✅ Robustness  – preview vs published paths
+// ✅ Simplicity  – small handler; one query per path
+// ✅ Security    – no wildcard data exposure
+// ============================================================
 
 import { NextResponse } from "next/server";
-import { draftMode } from "next/headers"; // Provides draft/preview mode state
-import { prisma } from "@/lib/prisma"; // Local Prisma client for database access
-import { fetchSanity } from "@/lib/sanity/client"; // Helper for GROQ queries
+import { draftMode } from "next/headers";
+import { prisma } from "@/lib/prisma";
+import { fetchSanity } from "@/lib/sanity/client";
+import { COURSE_LIST_QUERY } from "@/lib/sanity/queries";
 
-// Prevent route from being statically cached (always dynamic)
-export const dynamic = "force-dynamic";
+export const dynamic = "force-dynamic"; // always live
 
 export async function GET(req: Request) {
   try {
-    // Parse URL for query params (?preview=true, etc.)
     const { searchParams } = new URL(req.url);
     const previewFlag = searchParams.get("preview") === "true";
-
-    // 🧠 FIXED:
-    // draftMode() is async in Next.js 15 → must await
     const { isEnabled: draftEnabled } = await draftMode();
 
-    // ------------------------------
-    // Helper: normalize Sanity course
-    // ------------------------------
-    const mapSanityCourse = (c: any) => ({
-      id: c.id,
-      slug: c.slug,
-      title: c.title,
-      summary: c.summary ?? null,
-      coverImage: c.coverImage ?? null,
-      createdAt: c.createdAt ?? null,
-      moduleCount: c.moduleCount ?? 0,
-    });
-
-    // 1️⃣ Preview Mode → fetch from Sanity (drafts visible)
+    // 1) Preview path → Sanity (drafts included)
     if (previewFlag && draftEnabled) {
       try {
-        const query = /* groq */ `
-          *[_type == "course" && defined(slug.current)]{
-            "id": _id,
-            "slug": slug.current,
-            title,
-            summary,
-            "coverImage": select(defined(coverImage.asset->url) => coverImage.asset->url, null),
-            "createdAt": _createdAt,
-            "moduleCount": count(modules[])
-          } | order(_createdAt desc)
-        `;
-
-        const sanityCourses = await fetchSanity<any[]>(
-          query,
-          {},
-          { perspective: "previewDrafts" }
-        );
-
-        if (Array.isArray(sanityCourses) && sanityCourses.length > 0) {
-          return NextResponse.json({
-            courses: sanityCourses.map(mapSanityCourse),
-          });
-        }
+        const docs = await fetchSanity<any[]>(COURSE_LIST_QUERY, {});
+        // GROQ already returns {id, slug, title}
+        return NextResponse.json({ courses: docs ?? [] });
       } catch (e) {
-        console.warn("[/api/courses] Sanity preview fetch failed; falling back to Prisma:", e);
+        console.warn("[/api/courses] Sanity list failed, falling back to Prisma:", e);
       }
     }
 
-    // 2️⃣ Default Path → Prisma (published-only)
-    const courses = await prisma.course.findMany({
+    // 2) Default path → Prisma (published only)
+    const rows = await prisma.course.findMany({
       where: { isPublished: true },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        summary: true,
-        coverImage: true,
-        createdAt: true,
-        modules: { where: { isPublished: true }, select: { id: true } },
-      },
-      orderBy: { createdAt: "desc" },
+      orderBy: { title: "asc" },
+      select: { id: true, slug: true, title: true },
     });
 
-    // Normalize Prisma response to match the frontend DTO
-    const data = courses.map((c) => ({
-      ...c,
-      moduleCount: c.modules.length,
-    }));
-
-    return NextResponse.json({ courses: data });
+    return NextResponse.json({ courses: rows });
   } catch (err) {
     console.error("[GET /api/courses] Error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

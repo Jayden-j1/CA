@@ -5,11 +5,12 @@
 // Reusable TypeScript interfaces that describe your course DTOs
 // exactly as returned by /api/courses/[slug].
 //
-// Pillars
-// -------
-// - Simplicity: clear and minimal.
-// - Robustness: optional fields where appropriate.
-// - Ease of management: central definitions used across pages/APIs.
+// Notes
+// -----
+// • body can be string OR Portable Text array. We reflect that in types.
+// • quiz fields remain minimal to match your current API.
+
+import type { TypedObject } from "@portabletext/types";
 
 export interface CourseQuizQuestion {
   id: string;
@@ -26,7 +27,8 @@ export interface CourseLesson {
   id: string;
   title: string;
   videoUrl: string;
-  body?: string;
+  // Portable Text array OR plain string (normalized by the renderer helper)
+  body?: string | TypedObject[];
   quiz?: CourseQuiz;
 }
 
@@ -46,11 +48,6 @@ export interface CourseDetail {
   modules: CourseModule[];
 }
 
-/**
- * Optional read-only progress metadata returned by /api/courses/progress (GET).
- * This is *separate* from the granular client-side indices & answers.
- * Keep it minimal and schema-aligned.
- */
 export interface UserCourseProgressDTO {
   completedModuleIds: string[];
   lastModuleId: string | null;
