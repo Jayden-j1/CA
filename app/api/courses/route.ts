@@ -1,52 +1,42 @@
 // app/api/courses/route.ts
 //
-// ============================================================
-// Course List (Sanity → Published Only)
-// ------------------------------------------------------------
 // Purpose
-//   Small, fast list for dashboard pickers and defaults.
-//   Always reads from Sanity (published only) — no Prisma here.
+// -------
+// Return a minimal list of courses for dashboards.
+// Now with Next.js cache tags for instant ODR via /api/revalidate.
 //
-// Why this design
-//   • Production-ready: cached for 60s (ISR) with SWR fallback
-//   • Simplicity: one query (COURSE_LIST_QUERY)
-//   • Security: exposes only minimal metadata
+// Tags used
+// ---------
+// - "courses:list" (the canonical tag for the list)
+//   Revalidated by /api/revalidate on any course/module/lesson publish.
 //
-// Pillars
-//   ✅ Efficiency   – minimal fields, CDN + ISR cache
-//   ✅ Robustness   – no Prisma dependency; clear error handling
-//   ✅ Simplicity   – tiny DTO for list UIs
-//   ✅ Security     – published content only
-//   ✅ Ease of mgmt – single GROQ query used everywhere
-// ============================================================
+// Notes
+// -----
+// - Uses Sanity-only (published) reads.
+// - If you want preview, you can add a ?preview=true param and set
+//   perspective: 'previewDrafts' (omitted here on purpose).
 
 import { NextResponse } from "next/server";
 import { fetchSanity } from "@/lib/sanity/client";
 import { COURSE_LIST_QUERY } from "@/lib/sanity/queries";
 
-// Route segment caching (Next.js Data Cache)
-// • Revalidate this route’s response every 60s.
-// • Also set an explicit Cache-Control for proxies/CDN.
-export const revalidate = 60;
+export const revalidate = 60; // ISR (optional). You can remove if you prefer full-cache + ODR only.
 
-// Note: route handlers do not require the "promisified params" signature;
-// that's for *pages*. Keeping standard (req: Request) form here.
 export async function GET() {
   try {
-    // 👇 We request published content (default perspective) — no drafts.
-    //    No query interpolation: parameters are passed (none here).
-    const courses = await fetchSanity(COURSE_LIST_QUERY);
+    const courses = await fetchSanity<
+      { id: string; slug: string; title: string }[]
+    >(COURSE_LIST_QUERY, undefined, {
+      // ✅ Attach a stable tag so we can revalidate from the webhook
+      next: { tags: ["courses:list"] },
+      // optional: revalidate at most every minute (hybrid ISR + ODR)
+      revalidate,
+      perspective: "published",
+    });
 
-    // Add explicit cache headers for proxies and browsers.
-    const headers = {
-      // 60s fresh in edge/CDN; allow 5min SWR
-      "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
-    };
-
-    return NextResponse.json({ courses }, { headers });
+    return NextResponse.json({ courses });
   } catch (err) {
     console.error("[GET /api/courses] Error:", err);
-    // No internals leaked; caller can decide fallback (e.g., local placeholder)
-    return NextResponse.json({ courses: [] }, { status: 200 });
+    return NextResponse.json({ error: "Failed to load courses" }, { status: 500 });
   }
 }
