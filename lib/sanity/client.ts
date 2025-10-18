@@ -1,41 +1,29 @@
 // lib/sanity/client.ts
 //
 // ============================================================
-// Sanity client (read-optimized for Next.js caching + tags)
+// Sanity client (read-optimized for Next.js caching + ODR tags)
 // ------------------------------------------------------------
 // Why this file?
-//  - Next.js caching (ISR / full-cache) + on-demand revalidation works
-//    with the built-in `fetch` API. The Sanity JS client uses its
-//    own HTTP stack, which doesn't accept Next's `next:{tags}`.
-//  - So for READS, we call Sanity's HTTP Query endpoint using `fetch`
-//    and forward any Next.js cache options from callers.
-//  - For images, we expose `urlFor()`.
-//  - If you ever need mutations, we also export a `sanityClient`
-//    (the official JS SDK).
+//  - To fetch Sanity data using Next.js native `fetch` API so we can use:
+//      • next: { tags: [...] } → for granular cache invalidation
+//      • revalidate: seconds   → for ISR fallback
+//  - Official @sanity/client doesn't support Next's cache options.
+//  - This helper bridges that gap while remaining lightweight.
+// ------------------------------------------------------------
 //
 // Pillars
-//  - Efficiency: only what you need; small helper
-//  - Robustness: strict env reading + helpful errors in dev
-//  - Simplicity: one function to fetch with cache tags
-//  - Security: reads use the public CDN endpoint (no tokens)
-//
-// Usage
-//  const data = await fetchSanity<MyType>(GROQ, { slug }, {
-//    // Next.js cache options (optional):
-//    next: { tags: ['course:my-slug', 'courses:list'] },
-//    revalidate: 60, // or 'force-cache' / 'no-store'
-//    // Sanity read options (optional):
-//    perspective: 'published', // or 'previewDrafts'
-//  })
-//
+//  - Efficiency: minimal overhead; all fetches via CDN endpoint.
+//  - Robustness: strict envs; defensive defaults.
+//  - Simplicity: one function to handle cache + tags + perspective.
+//  - Security: public read-only queries via CDN (no tokens).
 // ============================================================
 
 import { createClient } from "@sanity/client";
 import imageUrlBuilder from "@sanity/image-url";
 
-// -------------------------
-// Env resolution (strict)
-// -------------------------
+// ------------------------------
+// ⚙️ Environment resolution
+// ------------------------------
 const projectId =
   process.env.NEXT_PUBLIC_SANITY_PROJECT_ID ||
   process.env.SANITY_STUDIO_PROJECT_ID ||
@@ -46,69 +34,80 @@ const dataset =
   process.env.SANITY_STUDIO_DATASET ||
   "production";
 
-// Fail early in dev to avoid head-scratching later
+const apiVersion = "2023-10-10"; // pin for stability
+const BASE_QUERY_URL = `https://${projectId}.apicdn.sanity.io/v${apiVersion}/data/query/${dataset}`;
+
 if (!projectId) {
-  // eslint-disable-next-line no-console
   console.warn(
-    "[sanity/client] Missing projectId. Set NEXT_PUBLIC_SANITY_PROJECT_ID in your env."
+    "[sanity/client] Missing projectId. Did you forget NEXT_PUBLIC_SANITY_PROJECT_ID?"
   );
 }
 
-// Sanity API version (pin for stability)
-const apiVersion = "2023-10-10";
-
-// Base HTTP Query API endpoint (uses CDN by default)
-const BASE_QUERY_URL = `https://${projectId}.apicdn.sanity.io/v${apiVersion}/data/query/${dataset}`;
-
-// -------------------------
-// Optional: official JS client (for mutations or non-tagged reads)
-// -------------------------
+// ------------------------------------------------------------
+// Optional: full JS client (for mutations, uploads, etc.)
+// ------------------------------------------------------------
 export const sanityClient = createClient({
   projectId,
   dataset,
   apiVersion,
-  useCdn: true, // cached, fast reads
+  useCdn: true,
 });
 
 // Image URL builder
-const builder = imageUrlBuilder({
-  projectId,
-  dataset,
-});
+const builder = imageUrlBuilder({ projectId, dataset });
 export const urlFor = (source: any) => builder.image(source);
 
-// -------------------------
-// Types for helper options
-// -------------------------
-type FetchInit = {
-  /** Next.js cache options */
-  cache?: RequestCache; // 'default' | 'force-cache' | 'no-store' ...
-  next?: { tags?: string[] };
-  /** ISR seconds (same as `revalidate` option on fetch) */
+// ------------------------------------------------------------
+// Helper types
+// ------------------------------------------------------------
+export interface FetchInit {
+  /**
+   * Next.js native revalidation time (ISR)
+   * e.g., 60 for 1 minute, false for no revalidate.
+   */
   revalidate?: number | false;
-  /** Sanity "perspective": published | previewDrafts */
+
+  /**
+   * Optional Next.js cache control
+   * e.g., "force-cache" | "no-store"
+   */
+  cache?: RequestCache;
+
+  /**
+   * Add cache tags for granular ODR revalidation.
+   * These will be mapped internally to next: { tags }.
+   */
+  tags?: string[];
+
+  /**
+   * Sanity read perspective
+   * - "published" (default)
+   * - "previewDrafts" (if using draftMode)
+   */
   perspective?: "published" | "previewDrafts";
-  /** Optional signal/headers if you need them */
+
+  /** Optional AbortSignal or headers (rarely needed). */
   signal?: AbortSignal;
   headers?: HeadersInit;
-};
+}
 
-// -------------------------
-// Utility: encode GROQ params for URL
-// -------------------------
-function encodeParams(params: Record<string, unknown> | undefined) {
+// ------------------------------------------------------------
+// Internal: safely encode params to URLSearchParams
+// ------------------------------------------------------------
+function encodeParams(params?: Record<string, unknown>) {
   const usp = new URLSearchParams();
   if (!params) return usp;
   for (const [key, value] of Object.entries(params)) {
-    // Sanity expects JSON-encoded parameters
     usp.set(`$${key}`, JSON.stringify(value));
   }
   return usp;
 }
 
-// -------------------------
-// Helper: fetchSanity<T>
-// -------------------------
+// ------------------------------------------------------------
+// 🧩 fetchSanity<T>
+// ------------------------------------------------------------
+// Unified Sanity fetch helper compatible with Next.js caching & ODR.
+// ------------------------------------------------------------
 export async function fetchSanity<T>(
   query: string,
   params?: Record<string, unknown>,
@@ -116,48 +115,37 @@ export async function fetchSanity<T>(
 ): Promise<T> {
   if (!projectId) {
     throw new Error(
-      "Sanity projectId is missing. Ensure NEXT_PUBLIC_SANITY_PROJECT_ID is set."
+      "Missing NEXT_PUBLIC_SANITY_PROJECT_ID. Please set it in your environment."
     );
   }
 
   const usp = encodeParams(params);
   usp.set("query", query);
+  usp.set("perspective", init?.perspective ?? "published");
 
-  // Sanity perspective (default: 'published')
-  const perspective = init?.perspective ?? "published";
-  usp.set("perspective", perspective);
-
-  // Compose final URL
   const url = `${BASE_QUERY_URL}?${usp.toString()}`;
 
-  // Build fetch init
-  // NOTE: We pass through Next.js options: next, cache, revalidate
   const fetchInit: RequestInit & {
     next?: { tags?: string[] };
     revalidate?: number | false;
   } = {
     method: "GET",
-    headers: {
-      ...(init?.headers || {}),
-      // No auth header: we’re using the public read CDN.
-    },
+    headers: init?.headers ?? {},
     cache: init?.cache,
-    next: init?.next,
-    // @ts-expect-error: Next extends RequestInit with `revalidate`
+    // 👇 Map your tags directly into Next’s fetch() options
+    next: init?.tags ? { tags: init.tags } : undefined,
+    
     revalidate: init?.revalidate,
     signal: init?.signal,
   };
 
   const res = await fetch(url, fetchInit);
 
-  // Sanity returns 200 with {result} or an error status with {error}
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(
-      `[fetchSanity] HTTP ${res.status} ${res.statusText}\n${text}`
-    );
+    throw new Error(`[fetchSanity] ${res.status} ${res.statusText}\n${text}`);
   }
 
-  const json = (await res.json()) as { result: T; ms?: number };
+  const json = (await res.json()) as { result: T };
   return json.result;
 }
