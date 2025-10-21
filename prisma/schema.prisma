@@ -47,6 +47,8 @@ model User {
   email          String    @unique
   emailVerified  DateTime?
   image          String?
+  hasPaid      Boolean   @default(false)
+  packageType  String?   @default("individual")
 
   // 🔐 Bcrypt-hashed password (NEVER plaintext)
   hashedPassword String?   @map("password")
