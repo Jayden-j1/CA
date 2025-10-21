@@ -8,11 +8,10 @@
 //  - options (array of strings; 2–8 choices)
 //  - correctIndex (number; points to an option)
 //
-// Notes
-// -----
-// • We keep this as a single object type the lesson can embed.
-// • Validation guards prevent half-filled quizzes.
-// • UI previews help authors understand what they’re editing.
+// Why these typing changes?
+// -------------------------
+// We annotate validation `rule` params and preview.prepare params as `any` to
+// avoid implicit-any errors in strict TS builds. No runtime behavior change.
 
 import { defineType, defineField } from "sanity";
 
@@ -41,14 +40,14 @@ export const quiz = defineType({
               name: "question",
               title: "Question Text",
               type: "string",
-              validation: (rule) => rule.required().min(5),
+              validation: (rule: any) => rule.required().min(5),
             }),
             defineField({
               name: "options",
               title: "Options",
               type: "array",
               of: [{ type: "string" }],
-              validation: (rule) => rule.required().min(2).max(8),
+              validation: (rule: any) => rule.required().min(2).max(8),
             }),
             defineField({
               name: "correctIndex",
@@ -56,24 +55,24 @@ export const quiz = defineType({
               type: "number",
               description:
                 "Zero-based index into the options array (0 for first option).",
-              validation: (rule) => rule.required().min(0),
+              validation: (rule: any) => rule.required().min(0),
             }),
           ],
           preview: {
             select: { title: "question" },
-            prepare: ({ title }) => ({
+            prepare: ({ title }: any) => ({
               title: title || "Untitled question",
               subtitle: "Quiz question",
             }),
           },
         },
       ],
-      validation: (rule) => rule.min(1).error("Add at least 1 question."),
+      validation: (rule: any) => rule.min(1).error("Add at least 1 question."),
     }),
   ],
   preview: {
     select: { questions: "questions" },
-    prepare: ({ questions }) => ({
+    prepare: ({ questions }: any) => ({
       title: `Quiz (${(questions || []).length} question${
         (questions || []).length === 1 ? "" : "s"
       })`,

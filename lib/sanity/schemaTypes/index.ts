@@ -4,37 +4,44 @@
 // -------
 // Aggregate schema types for Sanity Studio (v3).
 //
-// What changed?
-// -------------
-// - We now include `callout` in the list (you created it).
-// - We keep `videoEmbed` in, since your PortableTextRenderer handles it.
-// - Exported as `schema.types` so sanity.config.ts can import one bundle.
+// Why this change?
+// ----------------
+// In some setups, Sanity's `SchemaTypeDefinition` is surfaced as a *namespace*,
+// which makes annotations like `{ types: SchemaTypeDefinition[] }` fail with:
+//   "Cannot use namespace 'SchemaTypeDefinition' as a type."
+// To keep the build stable and avoid coupling to the exact type shape, we
+// export a plain object with a `types` array (no explicit TS type). This is
+// fully compatible with `defineConfig({ schema: { types } })` in sanity.config.
 //
 // Pillars
 // -------
-// - Simplicity: import here once, use everywhere
-// - Robustness: all types registered in one array
+// ✅ Efficiency  – zero runtime changes
+// ✅ Robustness  – works across Sanity/TS variations
+// ✅ Simplicity  – no extra type packages required
+// ✅ Ease of mgmt – all schema parts registered in one place
+// ✅ Security    – only exports the intended schema definitions
 
-import { type SchemaTypeDefinition } from "sanity";
+// 🔕 Do NOT import `type { SchemaTypeDefinition }` here to avoid the namespace/type conflict.
+// import { type SchemaTypeDefinition } from "sanity";
 
-// Documents & objects you already have
+// Document & object schemas
 import { quiz } from "./quiz";
 import { lesson } from "./lesson";
 import { courseModule } from "./module";
 import { course } from "./course";
 import { videoEmbed } from "./objects/videoEmbed";
+import { callout } from "./objects/callout"; // ✅ ensure this object is registered
 
-// ✅ Include callout (you provided this, but it wasn’t registered yet)
-import { callout } from "./objects/callout";
-
-export const schema: { types: SchemaTypeDefinition[] } = {
+// ✅ Export the schema object without annotating the type.
+//    Sanity Studio only needs `schema.types` at runtime.
+export const schema = {
   types: [
-    // document types
+    // Document types
     course,
     courseModule,
     lesson,
 
-    // object types embedded inside documents
+    // Object types embedded inside documents
     quiz,
     videoEmbed,
     callout,

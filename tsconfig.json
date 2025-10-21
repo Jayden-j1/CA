@@ -2,48 +2,61 @@
   "compilerOptions": {
     // --- Output / module resolution ---
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "preserve",
     "allowJs": false,
     "noEmit": true,
     "incremental": true,
+
     // --- Quality / DX ---
     "strict": true,
-    "skipLibCheck": true, // ✅ ignore node_modules type noise
-    "noUncheckedIndexedAccess": false, // you can enable later if you want
+    "skipLibCheck": true, // ✅ Ignore noisy node_modules types for faster, quieter builds
+    "noUncheckedIndexedAccess": false,
     "forceConsistentCasingInFileNames": true,
+
     // --- Path aliases ---
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"]
     },
+
     // --- Interop ---
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ]
-    // --- Important: DO NOT list missing type packages here ---
-    // "types": []  // ← Intentionally omitted to avoid “Cannot find type definition file for …”
+
+    // Next.js TS plugin for better hints
+    "plugins": [{ "name": "next" }]
+
+    // ⚠️ Intentionally do NOT add global "types": ["jest"] here.
+    // Keeping the app build free of test-only globals avoids peer dep conflicts
+    // and keeps production types tight.
   },
+
+  // Files we want the APP build to type-check
   "include": [
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts"
   ],
+
+  // 🚫 Exclude tests & mocks from the production TS program
+  // This prevents Next.js build from type-checking test files (which use Jest globals).
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Common test folders
+    "tests",
+    "__tests__",
+    // Common mock folders (you had both styles in history)
+    "__mocks__",
+    "__mock__",
+    // Safety: any test file pattern anywhere
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
   ]
 }

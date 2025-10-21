@@ -1,23 +1,21 @@
 // lib/sanity/queries.ts
 //
-// Purpose
-// -------
-// Centralized GROQ queries for reusability + consistency.
-// These feed your API routes and server components.
+// ============================================================
+// ✅ Purpose
+// Central source of GROQ strings used across API routes & server code.
 //
-// Pillars
-// -------
-// ✅ Efficiency  – Only fetch what the UI needs
-// ✅ Robustness  – coalesce() for predictable shapes
-// ✅ Simplicity  – All queries in one place, no inline string builds
-// ✅ Security    – No wildcards that leak data
-//
-import { groq } from "next-sanity";
+// 🧱 Pillars
+// - Efficiency   : Only expose the fields required by the UI.
+// - Robustness   : coalesce() for predictable shapes.
+// - Simplicity   : Queries as raw strings (no extra tag helper).
+// - Ease of mgmt : One file for all query logic.
+// - Security     : Avoid broad wildcards that could leak data.
+// ============================================================
 
 // ------------------------------------------------------------
-// COURSE LIST QUERY (lightweight lists / selectors)
+// 📘 COURSE LIST QUERY (Lightweight for list views)
 // ------------------------------------------------------------
-export const COURSE_LIST_QUERY = groq`
+export const COURSE_LIST_QUERY = `
   *[_type == "course" && defined(slug.current)] | order(title asc) {
     "id": _id,
     "slug": slug.current,
@@ -26,25 +24,16 @@ export const COURSE_LIST_QUERY = groq`
 `;
 
 // ------------------------------------------------------------
-// COURSE DETAIL BY SLUG (with modules → lessons → submodules)
+// 📘 COURSE DETAIL BY SLUG (Modules → Lessons → Submodules)
 // ------------------------------------------------------------
-// 👉 Important ordering rules:
-//   • We respect *array order* in the Course's "modules" field (drag/drop).
-//   • We also support each Module/Lesson "order" field if you use it.
-//   • The pipes `| order(order asc)` are applied after dereferencing `->`.
-//
-// 👉 Result shape is stable and UI-ready, with all optional fields normalized.
-//
-export const COURSE_DETAIL_BY_SLUG = groq`
+export const COURSE_DETAIL_BY_SLUG = `
   *[_type == "course" && slug.current == $slug][0]{
-    // Core course fields
     "id": _id,
     "slug": slug.current,
     title,
     "summary": coalesce(summary, null),
-    "coverImage": coalesce(coverImage, null),
+    "coverImage": coalesce(coverImage.asset->url, null),
 
-    // Course → Modules (respect array order first, then module.order as a hint)
     "modules": coalesce(
       modules[]-> | order(order asc){
         _id,
@@ -52,7 +41,6 @@ export const COURSE_DETAIL_BY_SLUG = groq`
         "description": coalesce(description, null),
         "order": select(defined(order) => order, null),
 
-        // Lessons (respect embedded array order, then lesson.order)
         "lessons": coalesce(
           lessons[]-> | order(order asc){
             _id,
@@ -65,7 +53,7 @@ export const COURSE_DETAIL_BY_SLUG = groq`
               "questions": questions[] {
                 "id": coalesce(id, _key),
                 "question": question,
-                "options": options[],
+                "options": options[] ?? [],
                 "correctIndex": correctIndex
               }
             }, null)
@@ -73,7 +61,6 @@ export const COURSE_DETAIL_BY_SLUG = groq`
           []
         ),
 
-        // Optional submodules (same rules + same shape as modules)
         "submodules": coalesce(
           submodules[]-> | order(order asc){
             _id,
@@ -93,7 +80,7 @@ export const COURSE_DETAIL_BY_SLUG = groq`
                   "questions": questions[] {
                     "id": coalesce(id, _key),
                     "question": question,
-                    "options": options[],
+                    "options": options[] ?? [],
                     "correctIndex": correctIndex
                   }
                 }, null)

@@ -2,30 +2,55 @@
 //
 // Purpose
 // -------
-// 1) Provide "sanityFetch" (a live, auto-updating fetch helper) and
-//    the <SanityLive/> component for live preview / draft overlays.
-// 2) Wire these to your existing published Sanity client.
-//    (We import `publishedClient` — there is no named `client` export.)
+// Provide a stable, typed interface that mirrors the common
+// `next-sanity/live` exports (`sanityFetch`, `SanityLive`) *without*
+// depending on that package. This keeps production builds lean and
+// avoids version/peer conflicts, while remaining a drop-in for
+// any existing code that imports from "@/lib/sanity/live".
 //
-// Notes
-// -----
-// • If you ever want live content to include drafts (preview mode),
-//   you can switch to the preview client when a token is present.
-// • This file does not run on the client; it just exports helpers.
+// What changed?
+// -------------
+// - Removed: `import { defineLive } from "next-sanity/live"` (caused build error).
+// - Replaced with: a minimal pass-through `sanityFetch` that calls your
+//   existing `fetchSanity` helper, and a no-op <SanityLive/> component.
+// - No runtime behavior changes for published reads.
+// - If you later want "live preview" overlays, you can re-introduce the
+//   official package and swap this file back with minimal effort.
 //
 // Pillars
 // -------
-// • Efficiency: uses your already-configured client instance.
-// • Robustness: no new env vars; works whether token exists or not.
-// • Simplicity: a single import change (no behavior changes).
-// • Ease of mgmt: consistent single source of truth for clients.
+// ✅ Efficiency  – No extra client bundles or preview libs in prod
+// ✅ Robustness  – No missing module risk; uses your proven fetchSanity
+// ✅ Simplicity  – Thin wrapper; tiny surface area
+// ✅ Ease of mgmt – Centralized place to upgrade to true live later
+// ✅ Security    – Reads continue via CDN; no new tokens required
 
-import { defineLive } from "next-sanity/live";
-import { publishedClient } from "@/lib/sanity/client";
+import type { FetchInit } from "@/lib/sanity/client";
+import { fetchSanity } from "@/lib/sanity/client";
 
-// Alias the published client to the `client` key expected by defineLive.
-// If in the future you want live preview (including drafts), you could
-// detect a preview session and swap in `previewClient` instead.
-export const { sanityFetch, SanityLive } = defineLive({
-  client: publishedClient,
-});
+/**
+ * sanityFetch<T>
+ * --------------
+ * A typed pass-through to your `fetchSanity` helper. Any code that used
+ * the `sanityFetch` from `next-sanity/live` can keep importing from
+ * "@/lib/sanity/live" and will behave the same for published content reads.
+ */
+export async function sanityFetch<T>(
+  query: string,
+  params?: Record<string, unknown>,
+  init?: FetchInit
+): Promise<T> {
+  return fetchSanity<T>(query, params, init);
+}
+
+/**
+ * SanityLive
+ * ----------
+ * A no-op component placeholder to keep render sites compiling if
+ * `<SanityLive />` is included. In production, it renders nothing.
+ * Later, if you want full draft overlays/live preview, replace this
+ * with the real component from `next-sanity/live`.
+ */
+export function SanityLive(): null {
+  return null;
+}

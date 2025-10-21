@@ -10,13 +10,11 @@
 //  • quiz (optional)
 //  • order (optional) – numeric helper (0..9999) if you want to sort inside modules
 //
-// Rendering
-// ---------
-// <PortableTextRenderer /> will render:
-//  • blocks (headings/paragraphs/lists)
-//  • images (via @sanity/image-url → urlFor())
-//  • inline videoEmbed objects (via <VideoPlayer />)
-//  • code/callouts if you add them later.
+// Why these typing changes?
+// -------------------------
+// In strict TS builds, Sanity's validation callback parameter (`rule`) and
+// preview.prepare destructuring can trigger implicit-any errors. We annotate
+// them as `any` to keep the build happy without adding extra type packages.
 //
 // Pillars
 // -------
@@ -34,7 +32,8 @@ export const lesson = defineType({
     defineField({
       name: "title",
       type: "string",
-      validation: (rule) => rule.required().min(3).max(120),
+      // ✅ Explicitly type rule as `any` to avoid implicit-any errors
+      validation: (rule: any) => rule.required().min(3).max(120),
     }),
     defineField({
       name: "order",
@@ -42,7 +41,7 @@ export const lesson = defineType({
       type: "number",
       description:
         "Optional ordering helper (0..9999). If omitted, parent array order is used.",
-      validation: (rule) => rule.min(0).max(9999),
+      validation: (rule: any) => rule.min(0).max(9999),
     }),
     defineField({
       name: "videoUrl",
@@ -55,34 +54,31 @@ export const lesson = defineType({
       name: "body",
       title: "Lesson Body",
       type: "array",
-      // Allow blocks + images + custom videoEmbed objects
       of: [
         { type: "block" },
         {
           type: "image",
           options: { hotspot: true },
           fields: [
-            // ALT text for accessibility
             defineField({
               name: "alt",
               title: "Alt text",
               type: "string",
               description:
                 "Describe the image for screen readers and SEO. Keep it concise.",
-              validation: (rule) => rule.max(160),
+              validation: (rule: any) => rule.max(160),
             }),
-            // Optional caption shown under the image
             defineField({
               name: "caption",
               title: "Caption",
               type: "string",
-              validation: (rule) => rule.max(200),
+              validation: (rule: any) => rule.max(200),
             }),
           ],
         },
         { type: "videoEmbed" }, // inline video objects
       ],
-      validation: (rule) => rule.required().min(1),
+      validation: (rule: any) => rule.required().min(1),
     }),
     defineField({
       name: "quiz",
@@ -92,7 +88,8 @@ export const lesson = defineType({
   ],
   preview: {
     select: { title: "title", order: "order" },
-    prepare: ({ title, order }) => ({
+    // ✅ Type parameter object as any to avoid implicit-any on destructuring
+    prepare: ({ title, order }: any) => ({
       title: title || "Untitled Lesson",
       subtitle: typeof order === "number" ? `#${order}` : undefined,
     }),

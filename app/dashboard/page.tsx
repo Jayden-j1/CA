@@ -7,14 +7,14 @@
 //     • Div 3: Progress Tracker (circular; placeholder value)
 //     • Div 4: Cultural Highlight (rotating quotes/facts)
 //
-// Key improvements:
-// - Fixed React hook order error by moving all hooks above conditional returns.
-// - Maintains clean structure and best practices.
+// Key improvements in this patch:
+// - Add explicit type annotation on setHighlightIndex callback to satisfy `strict` TS.
+// - Add an explicit React import (not required by Next 15, but helps certain editors/linters).
 //
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
@@ -78,19 +78,23 @@ export default function DashboardPage() {
   const highlights = useMemo(
     () => [
       {
-        quote: "When you know the Country, you know yourself. Everything is connected.",
+        quote:
+          "When you know the Country, you know yourself. Everything is connected.",
         author: "— Aunty Lorraine, Elder",
       },
       {
-        quote: "Country is identity, law, and responsibility — not just a place.",
+        quote:
+          "Country is identity, law, and responsibility — not just a place.",
         author: "— Community Teaching",
       },
       {
-        quote: "Listening deeply means listening with the heart, not just the ears.",
+        quote:
+          "Listening deeply means listening with the heart, not just the ears.",
         author: "— Cultural Protocols",
       },
       {
-        quote: "Reconciliation grows through respect, truth-telling, and action.",
+        quote:
+          "Reconciliation grows through respect, truth-telling, and action.",
         author: "— Community Reminder",
       },
     ],
@@ -100,14 +104,17 @@ export default function DashboardPage() {
   const [highlightIndex, setHighlightIndex] = useState(0);
   useEffect(() => {
     const id = setInterval(() => {
-      setHighlightIndex((i) => (i + 1) % highlights.length);
+      // ✅ Explicit type annotation avoids “implicit any” in strict mode
+      setHighlightIndex((i: number) => (i + 1) % highlights.length);
     }, 10000);
     return () => clearInterval(id);
   }, [highlights.length]);
+
   const currentHighlight = highlights[highlightIndex];
 
   // ---------------- Access Logic ----------------
-  const effectiveHasAccess = isOwnerOrAdmin || sessionHasPaid || serverHasAccess === true;
+  const effectiveHasAccess =
+    isOwnerOrAdmin || sessionHasPaid || serverHasAccess === true;
 
   // ---------------- Early Redirects ----------------
   useEffect(() => {
@@ -201,7 +208,9 @@ export default function DashboardPage() {
             transition
           "
         >
-          <h2 className="text-2xl font-bold text-blue-900 mb-4">Quick Actions</h2>
+          <h2 className="text-2xl font-bold text-blue-900 mb-4">
+            Quick Actions
+          </h2>
           <p className="text-sm text-gray-600 mb-6 text-center max-w-md">
             Continue your learning or explore key areas at your own pace.
           </p>
@@ -271,7 +280,9 @@ export default function DashboardPage() {
       {/* Div 3 — Progress Tracker */}
       <div className="col-span-1 md:col-span-3 row-span-3 row-start-auto md:row-start-3">
         <section className="h-full w-full flex flex-col items-center justify-center text-center bg-white/85 backdrop-blur-sm rounded-2xl shadow-lg p-6 sm:p-8">
-          <h2 className="text-2xl font-bold text-blue-900 mb-4">Your Progress</h2>
+          <h2 className="text-2xl font-bold text-blue-900 mb-4">
+            Your Progress
+          </h2>
 
           <div className="w-40 h-40 sm:w-48 sm:h-48">
             <CircularProgressbar
@@ -303,14 +314,18 @@ export default function DashboardPage() {
       {/* Div 4 — Cultural Highlight */}
       <div className="col-span-1 md:col-span-2 row-span-3 col-start-auto md:col-start-4 row-start-auto md:row-start-3">
         <section className="h-full w-full flex flex-col items-center justify-center text-center rounded-2xl shadow-lg p-6 sm:p-8 bg-gradient-to-br from-yellow-100 to-orange-100">
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Cultural Highlight</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">
+            Cultural Highlight
+          </h2>
           <p
             className="italic text-gray-700 leading-relaxed max-w-sm transition-opacity duration-500 ease-in-out"
             key={highlightIndex}
           >
             “{currentHighlight.quote}”
           </p>
-          <p className="text-sm text-gray-600 mt-3">{currentHighlight.author}</p>
+          <p className="text-sm text-gray-600 mt-3">
+            {currentHighlight.author}
+          </p>
           <a
             href={LINKS.resources}
             className="mt-5 inline-block text-gray-900 bg-yellow-300 hover:bg-yellow-200 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"

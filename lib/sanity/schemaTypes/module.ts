@@ -13,13 +13,11 @@
 //  • lessons     (array of references to `lesson`)
 //  • submodules  (array of references to *this* type `courseModule`) ← nested
 //
-// Notes
-// -----
-// • Your API will flatten nested submodules into a 1-level module list
-//   so your current UI does not change.
-// • Order precedence we’ll enforce later in query/flatten:
-//   - array position (drag/drop) as primary
-//   - numeric `order` as a secondary sort key if needed.
+// Why these typing changes?
+// -------------------------
+// Validation callbacks (`rule`) and `preview.prepare` destructuring can be
+// implicitly `any` in strict TS builds. We annotate them as `any` to avoid
+// type errors without bringing in additional @types packages.
 
 import { defineType, defineField } from "sanity";
 
@@ -31,7 +29,7 @@ export const courseModule = defineType({
     defineField({
       name: "title",
       type: "string",
-      validation: (rule) => rule.required().min(3).max(120),
+      validation: (rule: any) => rule.required().min(3).max(120),
     }),
     defineField({
       name: "description",
@@ -44,7 +42,7 @@ export const courseModule = defineType({
       type: "number",
       description:
         "Optional ordering helper. If omitted, parent array order is used.",
-      validation: (rule) => rule.min(0).max(9999),
+      validation: (rule: any) => rule.min(0).max(9999),
     }),
     defineField({
       name: "lessons",
@@ -63,7 +61,8 @@ export const courseModule = defineType({
   ],
   preview: {
     select: { title: "title", count: "lessons.length", order: "order" },
-    prepare: ({ title, count, order }) => ({
+    // ✅ Type as `any` so destructured props aren’t implicit-any
+    prepare: ({ title, count, order }: any) => ({
       title: title || "Untitled Module",
       subtitle: `${order != null ? `#${order} · ` : ""}${count || 0} lesson${
         (count || 0) === 1 ? "" : "s"
