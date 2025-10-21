@@ -18,6 +18,15 @@
 // ✅ Simplicity    – JSON questions, simple progress models, single `expiresAt`
 // ✅ Ease of mgmt  – clear comments + obvious schema
 // ✅ Security      – no extra PII; auth models as expected
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// SYNC NOTE (IMPORTANT):
+// Your application and Studio read `User.hasPaid`, `User.packageType`,
+// `User.isActive`, and `User.mustChangePassword`. This schema already
+// defines those fields correctly. If you see runtime errors like
+// “column `User.hasPaid` does not exist”, it means the DATABASE is
+// behind the schema. Fix by running a migration (see commands below).
+// ─────────────────────────────────────────────────────────────────────────────
 
 // -------------------------
 // ⚙️ Generator
@@ -42,41 +51,43 @@ datasource db {
 // 👤 Auth models (standard)
 // -------------------------
 model User {
-  id             String    @id @default(cuid())
-  name           String?
-  email          String    @unique
-  emailVerified  DateTime?
-  image          String?
-  hasPaid      Boolean   @default(false)
-  packageType  String?   @default("individual")
+  id                    String    @id @default(cuid())
+  name                  String?
+  email                 String    @unique
+  emailVerified         DateTime?
+  image                 String?
+
+  // Billing/plan fields used by UI + backend
+  hasPaid               Boolean   @default(false)
+  packageType           String?   @default("individual")
 
   // 🔐 Bcrypt-hashed password (NEVER plaintext)
-  hashedPassword String?   @map("password")
+  hashedPassword        String?   @map("password")
 
   // Role: USER | BUSINESS_OWNER | ADMIN (string for flexibility)
-  role           String    @default("USER")
+  role                  String    @default("USER")
 
-  businessId     String?
+  businessId            String?
 
   // ✅ Account flags
-  isActive           Boolean @default(true)   // soft-delete flag
-  mustChangePassword Boolean @default(false)  // force password update on first login
+  isActive              Boolean   @default(true)   // soft-delete flag
+  mustChangePassword    Boolean   @default(false)  // force password update on first login
 
   // 📅 Timestamps
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   // 🔗 Relations
-  accounts       Account[]
-  ownedBusiness  Business? @relation("BusinessOwner")
-  payments       Payment[]
-  sessions       Session[]
-  business       Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
-  passwordResetTokens PasswordResetToken[]
+  accounts              Account[]
+  ownedBusiness         Business? @relation("BusinessOwner")
+  payments              Payment[]
+  sessions              Session[]
+  business              Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  passwordResetTokens   PasswordResetToken[]
 
   // Course relations
-  courseProgress  UserCourseProgress[]
-  moduleProgress  UserModuleProgress[]
+  courseProgress        UserCourseProgress[]
+  moduleProgress        UserModuleProgress[]
 }
 
 model Business {
