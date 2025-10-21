@@ -227,7 +227,7 @@ export default function DashboardPage() {
                 href={LINKS.getAccess}
                 className="flex-1 text-center bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
               >
-                ⭐ Get Access
+                ☀️ Get Access
               </a>
             )}
           </div>
@@ -237,7 +237,7 @@ export default function DashboardPage() {
               href={LINKS.resources}
               className="block text-center bg-slate-800/90 hover:bg-slate-800 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
             >
-              📘 Cultural Protocols & Resources
+              👣 Cultural Protocols & Resources
             </a>
           </div>
 
@@ -247,7 +247,7 @@ export default function DashboardPage() {
                 href={LINKS.manageStaff}
                 className="text-center bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2 rounded-lg shadow transition-transform hover:scale-[1.02]"
               >
-                👥 Manage Staff
+                🧒🏿👩🏾 Manage Staff
               </a>
               <a
                 href={LINKS.billing}
