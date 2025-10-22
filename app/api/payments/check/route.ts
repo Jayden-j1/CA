@@ -1,25 +1,27 @@
 // app/api/payments/check/route.ts
 //
-// Purpose:
-// - Return { hasAccess: boolean } for the *current* user.
-// - This is a tiny, fast, reliable probe used by the navbar, dashboard,
-//   and now the billing page to eliminate timing races after Stripe returns.
+// Purpose
+// -------
+// Authoritatively tell the client whether the current user has access.
+// This endpoint is polled right after Stripe success to avoid UI flicker
+// and make the dashboard/nav update immediately.
 //
-// Rules:
-// - ADMIN → true
-// - BUSINESS_OWNER → true
-// - USER (individual; businessId == null) → user.hasPaid
-// - USER (staff; businessId != null) → whether the *owner* of that business has paid
+// Behavior
+// --------
+// - ADMIN / BUSINESS_OWNER → hasAccess = true.
+// - USER:
+//    • if user.hasPaid === true → hasAccess = true
+//    • else, if we find any Payment for this user, we *heal* the flag by
+//      setting user.hasPaid = true and return hasAccess = true
+//    • otherwise → false
 //
-// Why owner.hasPaid for staff?
-// - Staff access is a benefit of the business package, which the owner buys.
-// - We flip owner.hasPaid=true when the webhook sees a PACKAGE purchase (see webhook).
-//
-// Pillars:
-// - Efficiency  : one small query, sometimes two.
-// - Robustness  : handles every role.
-// - Simplicity  : a single boolean.
-// - Security    : requires authenticated session.
+// Pillars
+// -------
+// ✅ Efficiency: single light query, one-time self-heal write if needed.
+// ✅ Robustness: resilient to webhook/session timing.
+// ✅ Simplicity: clear control flow, minimal branching.
+// ✅ Ease of mgmt: concentrated logic used by Dashboard/Nav probes.
+// ✅ Security: session required; role respected.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -28,50 +30,43 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  const user = session?.user;
-
-  if (!user?.id) {
+  if (!session?.user?.id) {
     return NextResponse.json({ hasAccess: false }, { status: 401 });
   }
 
-  const role = user.role as "USER" | "BUSINESS_OWNER" | "ADMIN";
-  const businessId = user.businessId || null;
+  const userId = session.user.id;
+  const role = session.user.role || "USER";
 
-  // Admins always have access
-  if (role === "ADMIN") {
-    return NextResponse.json({ hasAccess: true });
+  // Owners/Admins always have portal access
+  if (role === "ADMIN" || role === "BUSINESS_OWNER") {
+    return NextResponse.json({ hasAccess: true }, { status: 200 });
   }
 
-  // Business owners always have access (they purchase the package for the business)
-  if (role === "BUSINESS_OWNER") {
-    return NextResponse.json({ hasAccess: true });
-  }
-
-  // From here on, role === "USER"
-  // Individuals (no business) → depend on their own hasPaid
-  if (!businessId) {
-    // Re-read from DB to be fully authoritative
-    const dbUser = await prisma.user.findUnique({
-      where: { id: user.id },
-      select: { hasPaid: true },
-    });
-    return NextResponse.json({ hasAccess: Boolean(dbUser?.hasPaid) });
-  }
-
-  // Staff seat (role USER + has businessId):
-  // Check if the *owner* of this business has paid.
-  const business = await prisma.business.findUnique({
-    where: { id: businessId },
-    select: { ownerId: true },
-  });
-  if (!business?.ownerId) {
-    return NextResponse.json({ hasAccess: false });
-  }
-
-  const owner = await prisma.user.findUnique({
-    where: { id: business.ownerId },
+  // Individuals: rely on DB truth (hasPaid); heal if we detect a Payment already present
+  const dbUser = await prisma.user.findUnique({
+    where: { id: userId },
     select: { hasPaid: true },
   });
 
-  return NextResponse.json({ hasAccess: Boolean(owner?.hasPaid) });
+  if (dbUser?.hasPaid) {
+    return NextResponse.json({ hasAccess: true }, { status: 200 });
+  }
+
+  // Self-heal: if a payment exists for this user (any purpose "PACKAGE"),
+  // flip user.hasPaid = true once and return positive. This closes timing gaps
+  // between webhook write and session refresh.
+  const anyPayment = await prisma.payment.findFirst({
+    where: { userId, purpose: "PACKAGE" },
+    select: { id: true },
+  });
+
+  if (anyPayment) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { hasPaid: true },
+    });
+    return NextResponse.json({ hasAccess: true, healed: true }, { status: 200 });
+  }
+
+  return NextResponse.json({ hasAccess: false }, { status: 200 });
 }

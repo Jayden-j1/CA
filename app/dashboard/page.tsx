@@ -132,13 +132,14 @@ export default function DashboardPage() {
 
   // ---------------- Links ----------------
   const LINKS = {
-    continueLearning: "/dashboard/course",
-    exploreMap: "/dashboard/map",
-    resources: "/dashboard/resources",
-    manageStaff: "/dashboard/staff",
-    billing: "/dashboard/billing",
-    adminPanel: "/dashboard/admin",
-    getAccess: "/pricing",
+  continueLearning: "/dashboard/course",
+  exploreMap: "/dashboard/map",
+  resources: "/dashboard/resources",
+  manageStaff: "/dashboard/staff",
+  billing: "/dashboard/billing",
+  adminPanel: "/dashboard/admin",
+  // ⛏️ FIX: was "/pricing" (404 for your app) → send users to your upgrade flow
+  getAccess: "/dashboard/upgrade",
   };
 
   // ---------------- Greeting ----------------
