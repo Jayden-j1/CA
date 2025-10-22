@@ -3,22 +3,14 @@
 // Purpose
 // -------
 // - Server component for the Signup page.
-// - Reads the `?package=` query (now delivered as a Promise in Next.js 15),
-//   normalizes it, and passes the chosen package to <SignupForm />.
+// - Reads the `?package=` query (delivered as a Promise in Next.js 15),
+//   normalizes it, and passes the chosen package + origin='signup' to the form.
 //
-// What changed (Next.js 15 typed routes)
-// -------------------------------------
-// • Server components now receive `searchParams` as a Promise.
-// • We mark the component `async` and `await` it at the top.
-// • We also guard against string[] and undefined to keep things robust.
-//
-// Pillars
-// -------
-// ✅ Efficiency  – zero extra fetches; only simple normalization
-// ✅ Robustness  – handles string | string[] | undefined; strict allow-list
-// ✅ Simplicity  – small, self-contained helper
-// ✅ Ease of mgmt – clear comments and types
-// ✅ Security     – ignores unexpected values; falls back to a safe default
+// Hydration safety
+// ----------------
+// - We pass `origin="signup"` so the client renders the same branch on hydration.
+// - We also set `postSignupBehavior="dashboard"` for extra clarity (though
+//   the form ignores it when origin='signup').
 
 import TopofPageContent from "../../components/topPage/topOfPageStyle";
 import SignupForm from "../../components/forms/signupForm";
@@ -62,11 +54,12 @@ export default async function SignupPage(props: {
           Sign Up
         </h2>
 
-        {/* We pass the normalized package so the form can create the correct Stripe Checkout */}
+        {/* Server-driven origin prevents hydration mismatches */}
         <SignupForm
-          redirectTo="/dashboard"           // fallback (usually not hit if checkout flow starts)
-          postSignupBehavior="checkout"     // after signup, go straight to Stripe Checkout
-          selectedPackage={selectedPackage} // "individual" | "business" | "staff_seat"
+          origin="signup"                    // ← SSR-safe: dashboard flow, no Stripe on /signup
+          redirectTo="/dashboard"            // Where to land after login on /signup
+          postSignupBehavior="dashboard"     // (ignored when origin='signup', kept for clarity)
+          selectedPackage={selectedPackage}  // still parsed; not used when origin='signup'
         />
       </section>
     </>

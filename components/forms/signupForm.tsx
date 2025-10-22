@@ -1,47 +1,55 @@
 'use client';
 
 /**
- * components/forms/signupForm.tsx
+ * components/forms/SignupForm.tsx
  *
  * Purpose
  * -------
  * A self-contained signup form that:
  *  1) Creates an account via /api/auth/signup
  *  2) Silently signs the user in (NextAuth credentials, no redirect)
- *  3) Optionally creates a Stripe Checkout Session (depending on page)
+ *  3) Optionally creates a Stripe Checkout Session (depending on origin/props)
  *  4) Redirects either to Stripe (checkout flow) or Dashboard
  *
- * What changed (fixes)
- * --------------------
- * • Prevent *Signup page* from sending users to Stripe automatically:
- *   - If this form is rendered on the /signup route, we always redirect to
- *     the dashboard after signup+login (no Stripe).
- *   - This preserves Services flow (which intentionally goes to checkout).
+ * Hydration fix
+ * -------------
+ * ❌ Old approach used `window.location.pathname` to detect /signup.
+ *    That produced different server vs client markup → hydration mismatch.
+ * ✅ New approach accepts a *server-decided* `origin` prop:
+ *    - origin === 'signup'   → dashboard after signup (no Stripe)
+ *    - origin === 'services' → go to Stripe Checkout
  *
  * Pillars
  * -------
- * ✅ Efficiency  – no extra round trips; minimal branching
- * ✅ Robustness  – source-aware behavior (signup vs services)
- * ✅ Simplicity  – one tiny guard, rest unchanged
- * ✅ Ease of mgmt – avoids changing every call site
- * ✅ Security    – server still validates amounts & passwords
+ * ✅ Efficiency  – no extra roundtrips; minimal branching
+ * ✅ Robustness  – server-decided branch => deterministic SSR markup
+ * ✅ Simplicity  – one prop controls all text/redirect behavior
+ * ✅ Ease of mgmt – no need to sprinkle `typeof window` checks
+ * ✅ Security    – server endpoints still validate data
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { signIn } from 'next-auth/react';
 
 /** Stripe package choices your project supports */
 export type PackageType = 'individual' | 'business' | 'staff_seat';
 
 /**
- * Props passed in by the signup page:
- * - redirectTo:      where to go if we’re NOT sending to checkout (fallback)
- * - postSignupBehavior:
- *      'checkout' → create Stripe session and redirect to Stripe
- *      'dashboard' → go straight to redirectTo (e.g., /dashboard)
- * - selectedPackage: package to purchase after signup (from /signup?package=…)
+ * Where this form is being rendered from.
+ * - 'signup'   → dashboard after signup (never Stripe here)
+ * - 'services' → Stripe checkout after signup (uses selectedPackage)
+ */
+export type SignupOrigin = 'signup' | 'services';
+
+/**
+ * Props:
+ * - origin:             server-driven source of the form (prevents hydration mismatches)
+ * - redirectTo:         where to go when not doing checkout (e.g. '/dashboard')
+ * - postSignupBehavior: if provided, used when origin='services'. Ignored on origin='signup'
+ * - selectedPackage:    package to purchase in checkout (services flow)
  */
 export interface SignupFormProps {
+  origin: SignupOrigin;
   redirectTo?: string;
   postSignupBehavior?: 'checkout' | 'dashboard';
   selectedPackage?: PackageType;
@@ -51,8 +59,9 @@ export interface SignupFormProps {
 type UserType = 'individual' | 'business';
 
 export default function SignupForm({
+  origin,
   redirectTo = '/dashboard',
-  postSignupBehavior = 'dashboard',
+  postSignupBehavior = 'checkout', // default behavior for non-signup pages
   selectedPackage = 'individual',
 }: SignupFormProps) {
   // --------------------------
@@ -73,18 +82,6 @@ export default function SignupForm({
   // --------------------------
   // Helpers
   // --------------------------
-
-  /**
-   * Source-aware behavior:
-   * • If the form is rendered under `/signup`, we *never* go to Stripe.
-   *   - This satisfies your requirement: individuals create an account first,
-   *     land on the dashboard, and can upgrade later.
-   * • For other pages (e.g., /services flow) we respect the given prop.
-   */
-  const isSignupPage = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    return window.location.pathname === '/signup';
-  }, []);
 
   /**
    * Decide which package we’ll actually purchase.
@@ -149,14 +146,15 @@ export default function SignupForm({
         );
       }
 
-      // 3) Routing logic:
-      // • If we're on the /signup page → ALWAYS go to dashboard (no Stripe).
-      // • Otherwise, respect the postSignupBehavior prop.
-      if (isSignupPage) {
+      // 3) Routing logic (server-driven by `origin`):
+      // • origin === 'signup'   → ALWAYS go to dashboard (no Stripe)
+      // • origin === 'services' → Respect `postSignupBehavior` (default 'checkout')
+      if (origin === 'signup') {
         window.location.href = redirectTo; // usually "/dashboard"
         return;
       }
 
+      // services flow
       if (postSignupBehavior === 'checkout') {
         const packageType = normalizePackage();
 
@@ -168,9 +166,7 @@ export default function SignupForm({
 
         if (!checkoutRes.ok) {
           const msg = await safeMessage(checkoutRes);
-          // Fallback: go to upgrade page in the dashboard so the user can try again
           console.error('[SignupForm] Checkout session creation failed:', msg);
-          // NOTE: We *do not* append ?canceled=true here unless a real cancellation happens.
           window.location.href = '/dashboard/upgrade';
           return;
         }
@@ -181,7 +177,6 @@ export default function SignupForm({
           return;
         }
 
-        // Extremely rare: server responded OK but didn’t return a URL
         console.error('[SignupForm] Missing Stripe checkout URL in response');
         window.location.href = '/dashboard/upgrade';
         return;
@@ -197,8 +192,10 @@ export default function SignupForm({
   };
 
   // --------------------------
-  // Render
+  // Render (SSR-stable: no window checks)
   // --------------------------
+  const isSignupOrigin = origin === 'signup';
+
   return (
     <form
       onSubmit={handleSubmit}
@@ -327,15 +324,15 @@ export default function SignupForm({
         {loading ? 'Creating account…' : 'Create account'}
       </button>
 
-      {/* Tiny footnote for clarity */}
+      {/* Tiny footnote for clarity (SSR-stable) */}
       <p className="text-xs text-gray-500 text-center">
-        {isSignupPage
-          ? (
-            <>After signup you’ll land on your dashboard (you can upgrade any time).</>
-          ) : (
-            <>After signup you’ll be taken to checkout for: <strong>{normalizePackage()}</strong></>
-          )
-        }
+        {isSignupOrigin ? (
+          <>After signup you’ll land on your dashboard (you can upgrade any time).</>
+        ) : (
+          <>
+            After signup you’ll be taken to checkout for: <strong>{normalizePackage()}</strong>
+          </>
+        )}
       </p>
     </form>
   );
