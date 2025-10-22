@@ -1,112 +1,77 @@
 // app/api/payments/check/route.ts
 //
 // Purpose:
-// - API endpoint for frontend gating (map, course, nav).
-// - Returns true if user has PACKAGE or STAFF_SEAT payment, but only if user isActive.
-// - Prevents soft-deleted (inactive) users from accessing content.
+// - Return { hasAccess: boolean } for the *current* user.
+// - This is a tiny, fast, reliable probe used by the navbar, dashboard,
+//   and now the billing page to eliminate timing races after Stripe returns.
 //
-// Behavior:
-// - PACKAGE → packageType = "individual" | "business"
-// - STAFF_SEAT → packageType = "business" (staff seats are business access)
-// - Inactive user → always hasAccess = false
-// - No payment → hasAccess = false
+// Rules:
+// - ADMIN → true
+// - BUSINESS_OWNER → true
+// - USER (individual; businessId == null) → user.hasPaid
+// - USER (staff; businessId != null) → whether the *owner* of that business has paid
 //
-// Response:
-// { hasAccess, packageType, latestPayment }
+// Why owner.hasPaid for staff?
+// - Staff access is a benefit of the business package, which the owner buys.
+// - We flip owner.hasPaid=true when the webhook sees a PACKAGE purchase (see webhook).
+//
+// Pillars:
+// - Efficiency  : one small query, sometimes two.
+// - Robustness  : handles every role.
+// - Simplicity  : a single boolean.
+// - Security    : requires authenticated session.
 
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  // ---------------------------
-  // 1) Validate session
-  // ---------------------------
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json(
-      { hasAccess: false, packageType: null, latestPayment: null },
-      { status: 401 }
-    );
+  const user = session?.user;
+
+  if (!user?.id) {
+    return NextResponse.json({ hasAccess: false }, { status: 401 });
   }
 
-  try {
-    // ---------------------------
-    // 2) Fetch user and check active status
-    // ---------------------------
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { isActive: true },
-    });
+  const role = user.role as "USER" | "BUSINESS_OWNER" | "ADMIN";
+  const businessId = user.businessId || null;
 
-    if (!user || user.isActive === false) {
-      // 🚩 If user is inactive, deny access regardless of payments
-      return NextResponse.json({
-        hasAccess: false,
-        packageType: null,
-        latestPayment: null,
-      });
-    }
-
-    // ---------------------------
-    // 3) PACKAGE check
-    // ---------------------------
-    const packagePayment = await prisma.payment.findFirst({
-      where: { userId: session.user.id, purpose: "PACKAGE" },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (packagePayment) {
-      let packageType: "individual" | "business" | null = null;
-      const desc = packagePayment.description.toLowerCase();
-      if (desc.includes("individual")) packageType = "individual";
-      else if (desc.includes("business")) packageType = "business";
-
-      return NextResponse.json({
-        hasAccess: true,
-        packageType,
-        latestPayment: {
-          id: packagePayment.id,
-          createdAt: packagePayment.createdAt,
-          amount: packagePayment.amount,
-        },
-      });
-    }
-
-    // ---------------------------
-    // 4) STAFF_SEAT check
-    // ---------------------------
-    const staffSeatPayment = await prisma.payment.findFirst({
-      where: { userId: session.user.id, purpose: "STAFF_SEAT" },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (staffSeatPayment) {
-      return NextResponse.json({
-        hasAccess: true,
-        packageType: "business",
-        latestPayment: {
-          id: staffSeatPayment.id,
-          createdAt: staffSeatPayment.createdAt,
-          amount: staffSeatPayment.amount,
-        },
-      });
-    }
-
-    // ---------------------------
-    // 5) No access
-    // ---------------------------
-    return NextResponse.json({
-      hasAccess: false,
-      packageType: null,
-      latestPayment: null,
-    });
-  } catch (err) {
-    console.error("[API] Payment check error:", err);
-    return NextResponse.json(
-      { hasAccess: false, packageType: null, latestPayment: null },
-      { status: 500 }
-    );
+  // Admins always have access
+  if (role === "ADMIN") {
+    return NextResponse.json({ hasAccess: true });
   }
+
+  // Business owners always have access (they purchase the package for the business)
+  if (role === "BUSINESS_OWNER") {
+    return NextResponse.json({ hasAccess: true });
+  }
+
+  // From here on, role === "USER"
+  // Individuals (no business) → depend on their own hasPaid
+  if (!businessId) {
+    // Re-read from DB to be fully authoritative
+    const dbUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { hasPaid: true },
+    });
+    return NextResponse.json({ hasAccess: Boolean(dbUser?.hasPaid) });
+  }
+
+  // Staff seat (role USER + has businessId):
+  // Check if the *owner* of this business has paid.
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: { ownerId: true },
+  });
+  if (!business?.ownerId) {
+    return NextResponse.json({ hasAccess: false });
+  }
+
+  const owner = await prisma.user.findUnique({
+    where: { id: business.ownerId },
+    select: { hasPaid: true },
+  });
+
+  return NextResponse.json({ hasAccess: Boolean(owner?.hasPaid) });
 }
