@@ -1,22 +1,28 @@
 // app/api/webhooks/stripe/route.ts
 //
 // Purpose:
-// - Verify Stripe event → persist a Payment row (idempotently) and
-//   update the user’s billing flags when appropriate.
+// - Verify Stripe event → persist a Payment row (idempotently).
+// - **NEW**: When the purchase is a PACKAGE (individual/business),
+//   also flip `User.hasPaid = true` and store `User.packageType`.
+//   This is the single source of truth your UI reads via NextAuth `session()`.
 //
 // Why this change?
-// - Previously we created the Payment but *did not* update `User.hasPaid` or
-//   `User.packageType`, so your app never unlocked access post-purchase.
-// - This version updates the user for PACKAGE purchases in the same transaction,
-//   while keeping STAFF_SEAT behavior isolated.
+// - Your UI/navigation/billing guards depend on `session.user.hasPaid`,
+//   and `lib/auth.ts` mirrors the DB on each request.
+// - If we never set `User.hasPaid = true`, the user looks unpaid forever,
+//   even though the Payment row exists.
 //
-// Pillars
-// -------
-// ✅ Efficiency  – single transaction; no redundant reads
-// ✅ Robustness  – idempotent upsert on stripeId; safe metadata parsing
-// ✅ Simplicity  – small, focused handler
-// ✅ Ease of mgmt – clear comments; minimal surface area
-// ✅ Security    – signature verification, no client-trusted data
+// Security/Robustness:
+// - We determine `purpose` from metadata (or infer), and only flip `hasPaid`
+//   for PACKAGE purchases (not STAFF_SEAT).
+// - We do all DB writes inside a transaction with idempotency (stripeId unique).
+//
+// Pillars:
+// - Efficiency: single transaction per webhook event.
+// - Robustness: idempotent creation + safe updates.
+// - Simplicity: centralize paid-state flip here.
+// - Ease of mgmt: no need to compute paid state elsewhere.
+// - Security: never trust client input; use webhook -> server truth.
 
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
@@ -38,7 +44,6 @@ export async function POST(req: Request) {
   let event: Stripe.Event;
 
   try {
-    // ⚠️ IMPORTANT: we must read the raw text body for Stripe signature verification
     const raw = await req.text();
     event = await stripe.webhooks.constructEventAsync(raw, sig, webhookSecret);
   } catch (err: any) {
@@ -58,41 +63,41 @@ export async function POST(req: Request) {
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
-  // Only process immediate payments (not subscriptions, invoices, etc.)
   if (session.mode !== "payment") return;
   if (session.payment_status !== "paid") return;
 
-  // 1) Extract and normalize metadata
+  // 1) Pull normalized metadata
   const md = (session.metadata || {}) as Record<string, string | undefined>;
 
   // Prefer `userId`; fall back to legacy `staffUserId` if present.
   let userId = md.userId || md.staffUserId;
 
-  // Purpose: explicit if provided, else infer from `staffUserId` presence.
+  // Purpose: from metadata if present; otherwise infer STAFF_SEAT if staffUserId exists.
   const purposeRaw = (md.purpose || "").toUpperCase();
-  const purpose: "PACKAGE" | "STAFF_SEAT" =
-    purposeRaw === "PACKAGE" || purposeRaw === "STAFF_SEAT"
-      ? (purposeRaw as "PACKAGE" | "STAFF_SEAT")
-      : md.staffUserId
-      ? "STAFF_SEAT"
-      : "PACKAGE";
+  let purpose: "PACKAGE" | "STAFF_SEAT";
+  if (purposeRaw === "PACKAGE" || purposeRaw === "STAFF_SEAT") {
+    purpose = purposeRaw as "PACKAGE" | "STAFF_SEAT";
+  } else {
+    purpose = md.staffUserId ? "STAFF_SEAT" : "PACKAGE";
+  }
 
-  // Package type normalization (only meaningful for PACKAGE purchases)
-  const pkgRaw = (md.packageType || "").toLowerCase();
-  const normalizedPackage: "individual" | "business" | "staff_seat" =
-    pkgRaw === "business" || pkgRaw === "staff_seat" ? (pkgRaw as any) : "individual";
+  // Optional package type for PACKAGE purchases: "individual" | "business" | "staff_seat"
+  // (We only store this on User for PACKAGE.)
+  const packageType = md.packageType && ["individual", "business", "staff_seat"].includes(md.packageType)
+    ? md.packageType
+    : undefined;
 
-  // Monetary info
+  // Convert cents → dollars; store lowercase currency to match your UI usage.
   const amountCents = session.amount_total || 0;
-  const amount = Math.round((amountCents / 100) * 100) / 100; // two decimals
+  const amount = Math.round((amountCents / 100) * 100) / 100;
   const currency = (session.currency || "aud").toLowerCase();
+  let description = md.description || "";
 
-  // 2) If userId isn’t in metadata, try to match by email
+  // 2) If userId not provided, fall back to email matching
   if (!userId) {
     const email =
       session.customer_details?.email ||
       (typeof session.customer_email === "string" ? session.customer_email : undefined);
-
     if (email) {
       const user = await prisma.user.findUnique({
         where: { email },
@@ -101,15 +106,12 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
       if (user) userId = user.id;
     }
   }
-
   if (!userId) {
-    // We can’t attach this payment. Log & exit quietly (Stripe will show the receipt).
     console.error("[Stripe Webhook] Could not determine userId for session:", session.id);
-    return;
+    return; // Cannot continue safely
   }
 
-  // 3) Try to enrich a human-friendly description from metadata or line item
-  let description = md.description || "";
+  // 3) Enrich description from first line item if still empty
   if (!description) {
     try {
       const full = await stripe.checkout.sessions.retrieve(session.id, {
@@ -124,14 +126,18 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     }
   }
 
-  // 4) Idempotently write the Payment and update the User when appropriate.
-  //    - The Payment is keyed by `stripeId` (session id).
-  //    - For PACKAGE purchases, we flip `hasPaid` and set `packageType`.
-  await prisma.$transaction([
-    prisma.payment.upsert({
+  // 4) Idempotency + state flip in one transaction
+  await prisma.$transaction(async (tx) => {
+    // (a) Idempotency: if Payment with this stripeId already exists, stop early
+    const existing = await tx.payment.findUnique({
       where: { stripeId: session.id },
-      update: {}, // nothing to change if it already exists
-      create: {
+      select: { id: true },
+    });
+    if (existing) return;
+
+    // (b) Create the Payment row
+    await tx.payment.create({
+      data: {
         stripeId: session.id,
         userId,
         amount,
@@ -139,20 +145,18 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
         description,
         purpose,
       },
-    }),
+    });
 
-    // Only update the user for actual package purchases. Staff seats shouldn’t
-    // mark the purchaser as “paid” unless your business logic demands it.
-    ...(purpose === "PACKAGE"
-      ? [
-          prisma.user.update({
-            where: { id: userId },
-            data: {
-              hasPaid: true,
-              packageType: normalizedPackage, // "individual" | "business" | "staff_seat"
-            },
-          }),
-        ]
-      : []),
-  ]);
+    // (c) Flip `user.hasPaid = true` for PACKAGE purchases (not for STAFF_SEAT).
+    //     Also set `packageType` when provided (individual/business).
+    if (purpose === "PACKAGE") {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          hasPaid: true,
+          ...(packageType && packageType !== "staff_seat" ? { packageType } : {}),
+        },
+      });
+    }
+  });
 }
