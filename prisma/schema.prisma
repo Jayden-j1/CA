@@ -61,12 +61,13 @@ model User {
   hasPaid               Boolean   @default(false)
   packageType           String?   @default("individual")
 
-  // 🔐 Bcrypt-hashed password (NEVER plaintext)
+  // 🔐 Bcrypt-hashed password (NEVER plaintext). Stored in DB column "password".
   hashedPassword        String?   @map("password")
 
   // Role: USER | BUSINESS_OWNER | ADMIN (string for flexibility)
   role                  String    @default("USER")
 
+  // If the user belongs to a Business (owner or staff), this is set.
   businessId            String?
 
   // ✅ Account flags
@@ -91,17 +92,29 @@ model User {
 }
 
 model Business {
-  id        String   @id @default(cuid())
-  name      String
-  domain    String   @unique
-  ownerId   String   @unique
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  name        String
+
+  // INTERNAL unique handle used by the system (slug + short suffix).
+  // Example: "acme-pty-ltd-a1b2c3". This must remain unique for routing/joins/etc.
+  domain      String   @unique
+
+  // NEW (display/enforcement only): the real email domain the org uses, e.g. "example.com".
+  // We do NOT force uniqueness here (two orgs could use the same public domain).
+  // The UI for "Add staff" should reference this field to render
+  // "Only emails from @${emailDomain} are allowed".
+  emailDomain String?
+
+  // Business owner userId must be unique: one business per owner.
+  ownerId     String   @unique
+  createdAt   DateTime @default(now())
 
   // 🔗 Relations
-  owner     User     @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  users     User[]
+  owner       User     @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  users       User[]
 
   @@index([domain])
+  @@index([emailDomain])
 }
 
 model Payment {

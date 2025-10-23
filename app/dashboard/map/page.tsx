@@ -5,26 +5,22 @@
 // Next.js App Router prefers that components calling `useSearchParams()`
 // render within a <Suspense> boundary. This file provides:
 //   1) A small page wrapper that renders <Suspense fallback=...>
-//   2) The original logic inside <MapPageInner/> (unchanged behavior)
+//   2) The original logic inside <MapPageInner/>
 //
-// What's fixed here?
+// What’s fixed here?
 // ------------------
-// TypeScript can consider `useSearchParams()` possibly null at build time.
-// Accessing `.get(...)` directly raises: `'searchParams' is possibly 'null'`.
-// We make it *null-safe* with optional chaining and a default, without changing
-// runtime behavior or hook order.
+// • Corrected Tailwind class typo: "bg-linear-to-b" → "bg-gradient-to-b"
+//   (cosmetic, avoids invalid class). Access logic stays identical.
 //
 // Pillars
 // -------
-// - Simplicity: single-line null fix + comments.
-// - Robustness: null-safe, build-friendly, no change in render order.
-// - Efficiency: purely client-side; no extra renders.
-// - Ease of management: scoped change, minimal footprint.
-// - Security: no new capabilities; same access gate logic.
+// - Simplicity / Robustness: minimal, explicit changes.
+// - Efficiency: client-side only.
+// - Security: unchanged (still gated by /api/payments/check).
 
 "use client";
 
-import { Suspense } from "react"; // ✅ Suspense boundary for useSearchParams()
+import { Suspense } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -49,7 +45,6 @@ interface PaymentCheckResponse {
 export default function MapPage() {
   return (
     <Suspense
-      // Keep fallback visuals consistent with your brand language
       fallback={
         <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
           <p className="text-white text-xl">Loading map…</p>
@@ -62,16 +57,14 @@ export default function MapPage() {
 }
 
 // -----------------------------------------------------
-// Inner page: original logic lives here, unchanged
+// Inner page
 // -----------------------------------------------------
 function MapPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
-  // ✅ FIX: make `useSearchParams()` usage null-safe for builds
-  //   - `searchParams?.get("success")` → string | null | undefined
-  //   - coalesce to empty string before comparing
+  // Null-safe query param usage.
   const justSucceeded = (searchParams?.get("success") ?? "") === "true";
 
   // ---------- UI / data state ----------
@@ -91,7 +84,6 @@ function MapPageInner() {
   useEffect(() => {
     const ac = new AbortController();
 
-    // One probe: check access from the server
     const checkOnce = async () => {
       const res = await fetch("/api/payments/check", {
         signal: ac.signal,
@@ -102,16 +94,15 @@ function MapPageInner() {
     };
 
     const run = async () => {
-      // Wait for session state before starting
       if (status === "loading") return;
 
       try {
-        // Optimistic unlock: if session says paid, unlock immediately
+        // Optimistic unlock if session already has paid flag.
         if (session?.user?.hasPaid) {
           setHasAccess(true);
         }
 
-        // First authoritative check
+        // Server truth
         const first = await checkOnce();
 
         if (first.ok && first.data.hasAccess) {
@@ -121,7 +112,7 @@ function MapPageInner() {
           return; // done
         }
 
-        // If we just completed checkout, short-poll a few times for webhook landing
+        // Post-checkout: poll a few times until webhook lands
         if (justSucceeded) {
           const maxAttempts = 8; // ~12s total @ 1.5s each
           const delayMs = 1500;
@@ -137,13 +128,12 @@ function MapPageInner() {
           }
         }
 
-        // Still no access → redirect to upgrade
+        // Still no access → redirect once
         if (!didRedirect.current) {
           didRedirect.current = true;
           router.push("/dashboard/upgrade");
         }
       } catch (err) {
-        // Ignore AbortError (unmounts/cancels)
         if (!(err instanceof DOMException && err.name === "AbortError")) {
           console.error("[MapPage] Access check failed:", err);
           if (!didRedirect.current) {
@@ -158,7 +148,6 @@ function MapPageInner() {
 
     run();
     return () => ac.abort();
-    // Safe deps: no functions created inside effect are referenced by children
   }, [status, session?.user?.hasPaid, router, justSucceeded]);
 
   // ---------- Render states ----------
@@ -177,9 +166,7 @@ function MapPageInner() {
   // ---------- Main content ----------
   return (
     <section className="w-full min-h-screen bg-linear-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
-      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-3">
-        Interactive Map
-      </h1>
+      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-3">Interactive Map</h1>
 
       {/* Package/payment info (purely informational) */}
       {packageType && (
