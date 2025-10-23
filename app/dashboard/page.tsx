@@ -161,7 +161,7 @@ export default function DashboardPage() {
         gap-6 sm:gap-8
         p-4 sm:p-6 lg:p-10
         min-h-screen
-        bg-gradient-to-br from-slate-900 via-blue-950 to-blue-900
+        bg-linear-to-br from-slate-900 via-blue-950 to-blue-900
       "
     >
       {/* Div 1 — Main Content */}
@@ -171,7 +171,7 @@ export default function DashboardPage() {
             w-full h-full
             flex flex-col items-center justify-center text-center
             rounded-2xl shadow-2xl
-            bg-gradient-to-b from-blue-700 to-blue-300
+            bg-linear-to-b from-blue-700 to-blue-300
             p-8 sm:p-10 lg:p-12
             text-white
             transition-all duration-500 ease-in-out
@@ -223,7 +223,7 @@ export default function DashboardPage() {
                   href={LINKS.continueLearning}
                   className="flex-1 text-center bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
                 >
-                  ▶ Continue Learning
+                  🏝️ Continue Learning
                 </a>
                 <a
                   href={LINKS.exploreMap}
@@ -247,7 +247,7 @@ export default function DashboardPage() {
               href={LINKS.resources}
               className="block text-center bg-slate-800/90 hover:bg-slate-800 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
             >
-              👣 Cultural Protocols & Resources
+              🪃 Cultural Protocols & Resources
             </a>
           </div>
 
@@ -314,7 +314,7 @@ export default function DashboardPage() {
 
       {/* Div 4 — Cultural Highlight */}
       <div className="col-span-1 md:col-span-2 row-span-3 col-start-auto md:col-start-4 row-start-auto md:row-start-3">
-        <section className="h-full w-full flex flex-col items-center justify-center text-center rounded-2xl shadow-lg p-6 sm:p-8 bg-gradient-to-br from-yellow-100 to-orange-100">
+        <section className="h-full w-full flex flex-col items-center justify-center text-center rounded-2xl shadow-lg p-6 sm:p-8 bg-linear-to-br from-yellow-100 to-orange-100">
           <h2 className="text-xl font-bold text-gray-800 mb-2">
             Cultural Highlight
           </h2>

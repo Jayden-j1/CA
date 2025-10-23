@@ -51,7 +51,7 @@ export default function MapPage() {
     <Suspense
       // Keep fallback visuals consistent with your brand language
       fallback={
-        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
           <p className="text-white text-xl">Loading map…</p>
         </section>
       }
@@ -164,7 +164,7 @@ function MapPageInner() {
   // ---------- Render states ----------
   if (loading) {
     return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+      <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">
           {justSucceeded ? "Finalizing your payment..." : "Checking map access..."}
         </p>
@@ -176,7 +176,7 @@ function MapPageInner() {
 
   // ---------- Main content ----------
   return (
-    <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
+    <section className="w-full min-h-screen bg-linear-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-3">
         Interactive Map
       </h1>

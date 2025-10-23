@@ -111,7 +111,7 @@ export default function CoursePageWrapper() {
   return (
     <Suspense
       fallback={
-        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
           <p className="text-white text-xl">Loading course…</p>
         </section>
       }
@@ -406,7 +406,7 @@ function CoursePageInner() {
   // ------------------------------------------------------------
   if (loading)
     return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+      <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">
           {justSucceeded ? "Finalizing your payment..." : "Checking course access..."}
         </p>
@@ -415,14 +415,14 @@ function CoursePageInner() {
 
   if (!hasAccess)
     return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+      <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">You don’t currently have access to this course.</p>
       </section>
     );
 
   if (!course)
     return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+      <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">Preparing your course…</p>
       </section>
     );
@@ -431,10 +431,10 @@ function CoursePageInner() {
   // Render
   // ============================================================
   return (
-    <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
+    <section className="w-full min-h-screen bg-linear-to-b from-blue-700 to-blue-300 py-10 sm:py-12 lg:py-16">
       <div className="mx-auto w-[92%] max-w-7xl">
         {/* Header */}
-        <div className="sticky top-0 z-20 bg-gradient-to-b from-blue-700 to-blue-500/90 backdrop-blur-sm mb-6 sm:mb-8 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 shadow-md">
+        <div className="sticky top-0 z-20 bg-linear-to-b from-blue-700 to-blue-500/90 backdrop-blur-sm mb-6 sm:mb-8 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 shadow-md">
           <div>
             <button
               onClick={() => router.push("/dashboard")}
