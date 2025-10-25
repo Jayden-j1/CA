@@ -1,26 +1,36 @@
 // components/pricingCards/pricingCards.tsx
 //
-// Purpose:
-// - Show pricing packages (Individual / Business).
-// - If logged in → checkout buttons.
-// - If guest → redirect to signup first.
+// Purpose
+// -------
+// Show pricing packages (Individual / Business).
+// • If a user is logged in → render a "Buy" button that goes straight to secure checkout.
+// • If a user is a guest → send them to /signup?from=services&package=<type>
+//   so they create an account first, then the form will route them to checkout.
 //
-// Changes in this patch:
-// ----------------------
-// 1) Center the pricing cards nicely for 1–2 columns:
-//    - Use a narrower container (max-w-5xl) and `justify-items-center` on the grid.
-//    - Give each card a fixed responsive width so two cards center symmetrically.
-// 2) When user is not logged-in and clicks "Sign Up First", we now send them to:
-//      /signup?from=services&package=<packageType>
-//    This tells the server to render the 'services' origin so the form will
-//    go straight to Stripe after account creation, preserving your intended flow.
+// What this update changes (safely):
+// ----------------------------------
+// 1) **Explicit, accessible links** for guests using Next.js <Link> to
+//    `/signup?from=services&package=...` (no brittle delegation).
+// 2) Fix Tailwind typo `bg-linear-to-b` → `bg-gradient-to-b`.
+// 3) Keep your centering and responsive layout; add minor a11y/data attributes.
+// 4) Preserve existing behavior for logged-in users: still uses <CheckoutButton />.
+//
+// Pillars
+// -------
+// ✅ Efficiency: no extra effects; SSR/CSR friendly.
+// ✅ Robustness: explicit URLs; no client-side delegation required.
+// ✅ Simplicity: one place to control CTAs.
+// ✅ Ease of mgmt: prices from env; rich comments.
+// ✅ Security: navigation only; server keeps all payment/account validation.
 
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { useSession } from "next-auth/react";
 import CheckoutButton from "@/components/payments/CheckoutButton";
 
+// Shape for each card
 interface PricingCardProps {
   name: string;
   price: string;
@@ -31,12 +41,13 @@ interface PricingCardProps {
 const PricingCardSection: React.FC = () => {
   const { data: session } = useSession();
 
-  // ✅ Read prices from env vars (client-side safe)
+  // Read display prices from public env vars (safe for client)
   const INDIVIDUAL_PRICE = process.env.NEXT_PUBLIC_INDIVIDUAL_PRICE || "50";
   const BUSINESS_PRICE = process.env.NEXT_PUBLIC_BUSINESS_PRICE || "150";
-  // Keeping staff seat var even if the card is commented out for now
+  // Keeping staff seat var even if the card is commented for now
   const STAFF_SEAT_PRICE = process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE || "20";
 
+  // Source of truth for card content
   const pricingCards: PricingCardProps[] = [
     {
       name: "Individual Package",
@@ -54,13 +65,13 @@ const PricingCardSection: React.FC = () => {
       price: `$${BUSINESS_PRICE}.00`,
       packageType: "business",
       services: [
-        "Deep dive into language",
-        "Elder interviews",
-        "Workshop resources",
-        "Interactive content",
+        "All Individual features",
+        "Org owner/admin privileges",
+        "Add staff seats (paid)",
+        "Billing dashboard",
       ],
     },
-    // 👇 Optionally show staff seat pricing here or only in dashboard
+    // Optional future staff seat plan (kept for reference)
     // {
     //   name: "Staff Seat (per user)",
     //   price: `$${STAFF_SEAT_PRICE}.00`,
@@ -77,7 +88,9 @@ const PricingCardSection: React.FC = () => {
     <section className="mt-40">
       <section
         id="pricing"
-        className="w-full bg-linear-to-b from-blue-700 to-blue-300 py-16 px-4"
+        // 🔧 Tailwind fix: bg-gradient-to-b (instead of the invalid bg-linear-to-b)
+        className="w-full bg-gradient-to-b from-blue-700 to-blue-300 py-16 px-4"
+        aria-label="Pricing"
       >
         {/* 
           Layout notes:
@@ -86,39 +99,65 @@ const PricingCardSection: React.FC = () => {
           - gap-8 for breathing room.
         */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl mx-auto justify-items-center">
-          {pricingCards.map(({ name, price, services, packageType }, index) => (
-            <div
-              key={index}
-              className="w-full sm:w-[380px] md:w-[420px] flex flex-col justify-between items-center gap-6 bg-blue-700 text-white rounded-xl p-8 shadow-xl transition-transform duration-300 hover:scale-105"
-            >
-              <h3 className="text-2xl font-extrabold tracking-wide text-center">
-                {name}
-              </h3>
-              <h4 className="text-xl font-bold tracking-wider">{price}</h4>
+          {pricingCards.map(({ name, price, services, packageType }, index) => {
+            const signupHref = `/signup?from=services&package=${encodeURIComponent(
+              packageType
+            )}`;
 
-              {session?.user ? (
-                <CheckoutButton
-                  packageType={packageType}
-                  label={`Buy ${name}`}
-                  className="bg-green-500 hover:bg-green-400 text-white font-semibold rounded-full"
-                />
-              ) : (
-                // 👇 Pass origin + package to signup so the flow returns to Stripe after account creation
-                <a
-                  href={`/signup?from=services&package=${encodeURIComponent(packageType)}`}
-                  className="px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300"
-                >
-                  Sign Up First
-                </a>
-              )}
+            return (
+              <article
+                key={index}
+                className="w-full sm:w-[380px] md:w-[420px] flex flex-col justify-between items-center gap-6 bg-blue-700 text-white rounded-xl p-8 shadow-xl transition-transform duration-300 hover:scale-105"
+                data-card
+                data-package={packageType}
+                aria-label={`${name} card`}
+              >
+                {/* Title + Price */}
+                <div className="w-full text-center">
+                  <h3 className="text-2xl font-extrabold tracking-wide">
+                    {name}
+                  </h3>
+                  <p className="mt-2 text-xl font-bold tracking-wider">
+                    {price}
+                  </p>
+                </div>
 
-              <ul className="list-disc pl-5 space-y-2 text-sm font-medium">
-                {services.map((service, idx) => (
-                  <li key={idx}>{service}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
+                {/* CTA:
+                    - Logged-in → CheckoutButton (unchanged behavior).
+                    - Guest     → Link to /signup?from=services&package=<type>
+                */}
+                <div className="w-full">
+                  {session?.user ? (
+                    <CheckoutButton
+                      packageType={packageType}
+                      label={`Buy ${name}`}
+                      className="w-full bg-green-500 hover:bg-green-400 text-white font-semibold rounded-full"
+                      aria-label={`Proceed to checkout for ${name}`}
+                    />
+                  ) : (
+                    <Link
+                      href={signupHref}
+                      prefetch
+                      // Clear CTA styling; matches your brand style
+                      className="inline-flex w-full items-center justify-center px-6 py-3 bg-green-500 text-white font-semibold rounded-full hover:bg-green-400 transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white/80"
+                      aria-label={`Sign up to purchase ${name}`}
+                      data-cta="signup-first"
+                      data-package={packageType}
+                    >
+                      Sign Up First
+                    </Link>
+                  )}
+                </div>
+
+                {/* Feature list */}
+                <ul className="list-disc pl-5 space-y-2 text-sm font-medium self-start">
+                  {services.map((service, idx) => (
+                    <li key={idx}>{service}</li>
+                  ))}
+                </ul>
+              </article>
+            );
+          })}
         </div>
       </section>
     </section>
