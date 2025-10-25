@@ -5,63 +5,39 @@
  *
  * Purpose
  * -------
- * A self-contained signup form that:
- *  1) Creates an account via /api/auth/signup
- *  2) Silently signs the user in (NextAuth credentials, no redirect)
- *  3) Optionally creates a Stripe Checkout Session (depending on origin/props)
- *  4) Redirects either to Stripe (checkout flow) or Dashboard
+ * Self-contained signup form that ensures the correct branching:
+ *  1) Creates account via /api/auth/signup
+ *  2) Silently signs in (NextAuth) so we have a session
+ *  3) If origin === 'services' → create Stripe checkout and redirect to Stripe
+ *     else → go straight to /dashboard
  *
- * Hydration fix
- * -------------
- * ❌ Old approach used `window.location.pathname` to detect /signup.
- *    That produced different server vs client markup → hydration mismatch.
- * ✅ New approach accepts a *server-decided* `origin` prop:
- *    - origin === 'signup'   → dashboard after signup (no Stripe)
- *    - origin === 'services' → go to Stripe Checkout
- *
- * Pillars
- * -------
- * ✅ Efficiency  – no extra roundtrips; minimal branching
- * ✅ Robustness  – server-decided branch => deterministic SSR markup
- * ✅ Simplicity  – one prop controls all text/redirect behavior
- * ✅ Ease of mgmt – no need to sprinkle `typeof window` checks
- * ✅ Security    – server endpoints still validate data
+ * Notes
+ * -----
+ * - DO NOT read window / pathname to decide behavior; server sends `origin`.
+ * - Business users always normalize to the "business" package type.
+ * - We never trust client price; the server route resolves prices securely.
  */
 
 import React, { useState } from 'react';
 import { signIn } from 'next-auth/react';
 
-/** Stripe package choices your project supports */
 export type PackageType = 'individual' | 'business' | 'staff_seat';
-
-/**
- * Where this form is being rendered from.
- * - 'signup'   → dashboard after signup (never Stripe here)
- * - 'services' → Stripe checkout after signup (uses selectedPackage)
- */
 export type SignupOrigin = 'signup' | 'services';
 
-/**
- * Props:
- * - origin:             server-driven source of the form (prevents hydration mismatches)
- * - redirectTo:         where to go when not doing checkout (e.g. '/dashboard')
- * - postSignupBehavior: if provided, used when origin='services'. Ignored on origin='signup'
- * - selectedPackage:    package to purchase in checkout (services flow)
- */
 export interface SignupFormProps {
-  origin: SignupOrigin;
-  redirectTo?: string;
+  origin: SignupOrigin;                 // server-driven: 'signup' | 'services'
+  redirectTo?: string;                  // default: '/dashboard'
   postSignupBehavior?: 'checkout' | 'dashboard';
-  selectedPackage?: PackageType;
+  selectedPackage?: PackageType;        // used when origin === 'services'
 }
 
-/** Internal type for the form’s “account type” radio control */
+// Internal UI radio
 type UserType = 'individual' | 'business';
 
 export default function SignupForm({
   origin,
   redirectTo = '/dashboard',
-  postSignupBehavior = 'checkout', // default behavior for non-signup pages
+  postSignupBehavior = 'checkout',
   selectedPackage = 'individual',
 }: SignupFormProps) {
   // --------------------------
@@ -85,8 +61,8 @@ export default function SignupForm({
 
   /**
    * Decide which package we’ll actually purchase.
-   * Business accounts must use the "business" package regardless of the query param.
-   * Individuals follow whatever was passed from /signup?package=… (default to "individual").
+   * - Business accounts always purchase the "business" package.
+   * - Individuals use selectedPackage (fallback to 'individual').
    */
   const normalizePackage = (): PackageType => {
     if (userType === 'business') return 'business';
@@ -115,7 +91,7 @@ export default function SignupForm({
     setLoading(true);
 
     try {
-      // 1) Create the user account
+      // 1) Create user
       const signupRes = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,7 +99,7 @@ export default function SignupForm({
           name,
           email,
           password,
-          userType, // 'individual' | 'business' → API maps to role & packageType
+          userType, // 'individual' | 'business'
           businessName: userType === 'business' ? businessName : undefined,
         }),
       });
@@ -133,28 +109,26 @@ export default function SignupForm({
         throw new Error(msg || 'Failed to create account');
       }
 
-      // 2) Silent sign-in (so session exists for Stripe metadata.userId, gating, etc.)
+      // 2) Silent sign-in (for Stripe metadata.userId and gating)
       const signInRes = await signIn('credentials', {
         email,
         password,
-        redirect: false, // we control the redirect below
+        redirect: false,
       });
-
       if (!signInRes || signInRes.error) {
         throw new Error(
           signInRes?.error || 'Account created, but login failed. Please log in and try again.'
         );
       }
 
-      // 3) Routing logic (server-driven by `origin`):
-      // • origin === 'signup'   → ALWAYS go to dashboard (no Stripe)
-      // • origin === 'services' → Respect `postSignupBehavior` (default 'checkout')
+      // 3) Branch by origin:
       if (origin === 'signup') {
-        window.location.href = redirectTo; // usually "/dashboard"
+        // Direct to dashboard (user can upgrade later)
+        window.location.href = redirectTo;
         return;
       }
 
-      // services flow
+      // origin === 'services'
       if (postSignupBehavior === 'checkout') {
         const packageType = normalizePackage();
 
@@ -167,22 +141,23 @@ export default function SignupForm({
         if (!checkoutRes.ok) {
           const msg = await safeMessage(checkoutRes);
           console.error('[SignupForm] Checkout session creation failed:', msg);
-          window.location.href = '/dashboard/upgrade';
+          // If checkout fails for any reason, land on Upgrade page (still logged in)
+          window.location.href = '/dashboard/upgrade?error=checkout';
           return;
         }
 
         const { url } = (await checkoutRes.json()) as { url?: string };
         if (url) {
-          window.location.href = url; // Hard redirect to Stripe
+          window.location.href = url; // hard redirect to Stripe
           return;
         }
 
         console.error('[SignupForm] Missing Stripe checkout URL in response');
-        window.location.href = '/dashboard/upgrade';
+        window.location.href = '/dashboard/upgrade?error=no_url';
         return;
       }
 
-      // 4) Alternate path: go straight to dashboard
+      // Alternate path: go straight to dashboard
       window.location.href = redirectTo;
     } catch (err: any) {
       console.error('[SignupForm] Error:', err);
@@ -191,9 +166,6 @@ export default function SignupForm({
     }
   };
 
-  // --------------------------
-  // Render (SSR-stable: no window checks)
-  // --------------------------
   const isSignupOrigin = origin === 'signup';
 
   return (
@@ -206,19 +178,14 @@ export default function SignupForm({
     >
       {/* Error banner */}
       {error && (
-        <div
-          role="alert"
-          className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm"
-        >
+        <div role="alert" className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm">
           {error}
         </div>
       )}
 
       {/* Name */}
       <div>
-        <label htmlFor="name" className="block text-sm font-medium mb-1">
-          Full name
-        </label>
+        <label htmlFor="name" className="block text-sm font-medium mb-1">Full name</label>
         <input
           id="name"
           type="text"
@@ -233,9 +200,7 @@ export default function SignupForm({
 
       {/* Email */}
       <div>
-        <label htmlFor="email" className="block text-sm font-medium mb-1">
-          Email
-        </label>
+        <label htmlFor="email" className="block text-sm font-medium mb-1">Email</label>
         <input
           id="email"
           type="email"
@@ -250,9 +215,7 @@ export default function SignupForm({
 
       {/* Password */}
       <div>
-        <label htmlFor="password" className="block text-sm font-medium mb-1">
-          Password
-        </label>
+        <label htmlFor="password" className="block text-sm font-medium mb-1">Password</label>
         <input
           id="password"
           type="password"
@@ -297,12 +260,10 @@ export default function SignupForm({
         </div>
       </fieldset>
 
-      {/* Business name (only when account type is business) */}
+      {/* Business name (only for business) */}
       {userType === 'business' && (
         <div>
-          <label htmlFor="businessName" className="block text-sm font-medium mb-1">
-            Business name
-          </label>
+          <label htmlFor="businessName" className="block text-sm font-medium mb-1">Business name</label>
           <input
             id="businessName"
             type="text"
@@ -324,14 +285,12 @@ export default function SignupForm({
         {loading ? 'Creating account…' : 'Create account'}
       </button>
 
-      {/* Tiny footnote for clarity (SSR-stable) */}
+      {/* Footnote (SSR-stable) */}
       <p className="text-xs text-gray-500 text-center">
         {isSignupOrigin ? (
           <>After signup you’ll land on your dashboard (you can upgrade any time).</>
         ) : (
-          <>
-            After signup you’ll be taken to checkout for: <strong>{normalizePackage()}</strong>
-          </>
+          <>After signup you’ll be taken to checkout for: <strong>{normalizePackage()}</strong></>
         )}
       </p>
     </form>

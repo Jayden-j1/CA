@@ -1,55 +1,20 @@
 // prisma/schema.prisma
 //
-// Purpose
-// -------
-// • Auth + billing + course delivery + progress models.
-// • Strong ordering guarantees for modules (unique per course).
-// • Canonical password-reset token with `expiresAt` only (no legacy `expires`).
-//
-// Windows-friendly note
-// ---------------------
-// • Using the Data Proxy engine avoids local native .dll locks on Windows.
-// • You can toggle this off if you prefer the default binary engine on CI/Linux.
-//
-// Pillars
-// -------
-// ✅ Efficiency    – hot-path indexes (slug, (courseId, order), (userId, moduleId), etc.)
-// ✅ Robustness    – explicit relations w/ `onDelete` where it helps data hygiene
-// ✅ Simplicity    – JSON questions, simple progress models, single `expiresAt`
-// ✅ Ease of mgmt  – clear comments + obvious schema
-// ✅ Security      – no extra PII; auth models as expected
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// SYNC NOTE (IMPORTANT):
-// Your application and Studio read `User.hasPaid`, `User.packageType`,
-// `User.isActive`, and `User.mustChangePassword`. This schema already
-// defines those fields correctly. If you see runtime errors like
-// “column `User.hasPaid` does not exist”, it means the DATABASE is
-// behind the schema. Fix by running a migration (see commands below).
-// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTANT
+// ---------
+// Your Business model includes `emailDomain String?`.
+// If your DB is missing this column, run a migration (commands at bottom).
 
-// -------------------------
-// ⚙️ Generator
-// -------------------------
-// Pure JS client engine (no native binaries) – helpful on Windows.
-// If you later prefer native binaries (e.g., CI on Linux), remove `engineType = "dataproxy"`
-// and ensure you *don't* set PRISMA_CLIENT_ENGINE_TYPE=dataproxy in .env.
 generator client {
   provider   = "prisma-client-js"
   engineType = "dataproxy"
 }
 
-// -------------------------
-// 🔗 Datasource
-// -------------------------
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// -------------------------
-// 👤 Auth models (standard)
-// -------------------------
 model User {
   id                    String    @id @default(cuid())
   name                  String?
@@ -57,28 +22,17 @@ model User {
   emailVerified         DateTime?
   image                 String?
 
-  // Billing/plan fields used by UI + backend
   hasPaid               Boolean   @default(false)
   packageType           String?   @default("individual")
-
-  // 🔐 Bcrypt-hashed password (NEVER plaintext). Stored in DB column "password".
   hashedPassword        String?   @map("password")
-
-  // Role: USER | BUSINESS_OWNER | ADMIN (string for flexibility)
   role                  String    @default("USER")
-
-  // If the user belongs to a Business (owner or staff), this is set.
   businessId            String?
+  isActive              Boolean   @default(true)
+  mustChangePassword    Boolean   @default(false)
 
-  // ✅ Account flags
-  isActive              Boolean   @default(true)   // soft-delete flag
-  mustChangePassword    Boolean   @default(false)  // force password update on first login
-
-  // 📅 Timestamps
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  // 🔗 Relations
   accounts              Account[]
   ownedBusiness         Business? @relation("BusinessOwner")
   payments              Payment[]
@@ -86,7 +40,6 @@ model User {
   business              Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
   passwordResetTokens   PasswordResetToken[]
 
-  // Course relations
   courseProgress        UserCourseProgress[]
   moduleProgress        UserModuleProgress[]
 }
@@ -95,21 +48,15 @@ model Business {
   id          String   @id @default(cuid())
   name        String
 
-  // INTERNAL unique handle used by the system (slug + short suffix).
-  // Example: "acme-pty-ltd-a1b2c3". This must remain unique for routing/joins/etc.
+  // INTERNAL unique handle (slug + suffix), used by the app.
   domain      String   @unique
 
-  // NEW (display/enforcement only): the real email domain the org uses, e.g. "example.com".
-  // We do NOT force uniqueness here (two orgs could use the same public domain).
-  // The UI for "Add staff" should reference this field to render
-  // "Only emails from @${emailDomain} are allowed".
+  // Human-visible org email domain (e.g. "example.com")
   emailDomain String?
 
-  // Business owner userId must be unique: one business per owner.
   ownerId     String   @unique
   createdAt   DateTime @default(now())
 
-  // 🔗 Relations
   owner       User     @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   users       User[]
 
@@ -125,11 +72,8 @@ model Payment {
   stripeId    String         @unique
   description String
   createdAt   DateTime       @default(now())
-
-  // Strongly typed purpose field: PACKAGE vs STAFF_SEAT
   purpose     PaymentPurpose @default(PACKAGE)
 
-  // 🔗 Relations
   user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
@@ -149,7 +93,6 @@ model Account {
   id_token          String?
   session_state     String?
 
-  // 🔗 Relations
   user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
@@ -162,7 +105,6 @@ model Session {
   userId       String
   expires      DateTime
 
-  // 🔗 Relations
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -178,15 +120,13 @@ model VerificationToken {
   @@index([expires])
 }
 
-// ✅ Token model for forgot-password flow (canonical: expiresAt only)
 model PasswordResetToken {
   id        String   @id @default(cuid())
-  token     String   @unique           // random, unguessable
-  userId    String                      // FK → User
-  expiresAt DateTime                    // when the token expires
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
   createdAt DateTime @default(now())
 
-  // 🔗 Relations
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -198,12 +138,9 @@ enum PaymentPurpose {
   STAFF_SEAT
 }
 
-// -------------------------
-// 📚 Course delivery models
-// -------------------------
 model Course {
   id          String         @id @default(cuid())
-  slug        String         @unique            // e.g. "cultural-awareness"
+  slug        String         @unique
   title       String
   summary     String?
   coverImage  String?
@@ -211,60 +148,56 @@ model Course {
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
-  // Relations
   modules     CourseModule[]
   progress    UserCourseProgress[]
 
-  @@index([isPublished, updatedAt])          // list published courses quickly
+  @@index([isPublished, updatedAt])
 }
 
 model CourseModule {
   id              String     @id @default(cuid())
   courseId        String
-  order           Int                              // stable ordering within a course, starts at 1
+  order           Int
   title           String
   description     String?
-  videoUrl        String?                          // hosted video (Vercel Blob, Vimeo, Wistia, S3, etc.)
+  videoUrl        String?
   durationSeconds Int?
   isPublished     Boolean    @default(false)
-  content         Json?                            // optional rich text/markdown AST or Portable Text
+  content         Json?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  // Relations
   course          Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
   quiz            Quiz?
   userProgress    UserModuleProgress[]
 
   @@index([courseId, order])
-  @@unique([courseId, order])                      // enforce unique order per course
-  @@index([courseId, isPublished, order])          // render modules in order for a published course
+  @@unique([courseId, order])
+  @@index([courseId, isPublished, order])
 }
 
 model Quiz {
   id           String        @id @default(cuid())
-  moduleId     String        @unique               // 1:1 with module (simple)
+  moduleId     String        @unique
   title        String?
-  questions    Json                                // quiz stored as JSON for simplicity (array of Qs)
-  passingScore Int?                                 // optional min % or min correct to pass
+  questions    Json
+  passingScore Int?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   module       CourseModule  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 }
 
-// Per-user course summary progress (fast to read on dashboards)
 model UserCourseProgress {
   id                 String     @id @default(cuid())
   userId             String
   courseId           String
-  completedModuleIds String[]                        // Postgres text[]
+  completedModuleIds String[]
   lastModuleId       String?
-  percent            Int?                            // 0..100 (computed server-side, cached)
+  percent            Int?
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 
-  // Relations
   user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   course             Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
@@ -273,17 +206,15 @@ model UserCourseProgress {
   @@index([userId, updatedAt])
 }
 
-// Per-user per-module progress (granular)
 model UserModuleProgress {
   id         String       @id @default(cuid())
   userId     String
   moduleId   String
-  completed  Boolean      @default(false)          // watched + (quiz pass if required)
-  quizScore  Int?                                  // last score (0..100) if a quiz exists
+  completed  Boolean      @default(false)
+  quizScore  Int?
   updatedAt  DateTime     @updatedAt
   createdAt  DateTime     @default(now())
 
-  // Relations
   user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   module     CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 

@@ -2,36 +2,24 @@
 //
 // Purpose
 // -------
-// - Server component for the Signup page.
-// - Reads the `?package=` and optional `?from=` queries (delivered as a Promise in Next.js 15),
-//   normalizes them, and passes both the package and a *server-decided* origin to <SignupForm />.
-//
-// Hydration safety
-// ----------------
-// - We compute `origin` on the server (no window checks), so the server and client render the
-//   same branch and avoid hydration mismatches.
-//
-// Flow
-// ----
-// - If `from=services`, we pass origin="services" so the form will go straight to Stripe
-//   after account creation (using the selected package).
-// - Otherwise we pass origin="signup" (dashboard after signup; user can upgrade later).
+// Server component that reads `?package=` and `?from=`,
+// normalizes them, and passes a *server-decided* origin to <SignupForm />.
+// This prevents hydration mismatches and enforces the correct flow:
+// Services → Signup (create account) → Stripe Checkout → Dashboard.
 
 import TopofPageContent from "../../components/topPage/topOfPageStyle";
 import SignupForm, { type SignupOrigin } from "../../components/forms/signupForm";
 
-// Allowed package types for checkout
 type PackageType = "individual" | "business" | "staff_seat";
 
 export default async function SignupPage(props: {
-  // Next.js 15: searchParams arrives as a Promise
+  // Next.js 15: searchParams is a Promise
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const rawSearch = (await props.searchParams) ?? {};
   const rawPackage = rawSearch.package;
   const rawFrom = rawSearch.from;
 
-  // Normalize package (string | string[] | undefined → string)
   const packageParam =
     Array.isArray(rawPackage) ? (rawPackage[0] ?? "").toLowerCase() : (rawPackage ?? "").toLowerCase();
   const allowed: PackageType[] = ["individual", "business", "staff_seat"];
@@ -39,7 +27,6 @@ export default async function SignupPage(props: {
     ? (packageParam as PackageType)
     : "individual";
 
-  // Normalize origin: 'services' or 'signup' (default)
   const fromParam =
     Array.isArray(rawFrom) ? (rawFrom[0] ?? "").toLowerCase() : (rawFrom ?? "").toLowerCase();
   const origin: SignupOrigin = fromParam === "services" ? "services" : "signup";
@@ -60,11 +47,9 @@ export default async function SignupPage(props: {
           Sign Up
         </h2>
 
-        {/* Server-driven origin prevents hydration mismatches */}
         <SignupForm
-          origin={origin}                 // 'signup' → dashboard, 'services' → Stripe Checkout
+          origin={origin}                          // 'signup' → dashboard; 'services' → Stripe
           redirectTo="/dashboard"
-          // For origin='signup' this is ignored; for origin='services' it's the default behavior.
           postSignupBehavior={origin === "services" ? "checkout" : "dashboard"}
           selectedPackage={selectedPackage}
         />

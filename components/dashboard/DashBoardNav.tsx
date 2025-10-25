@@ -1,25 +1,17 @@
 // components/dashboard/DashboardNav.tsx
 //
-// Purpose:
-// - Config-driven dashboard navigation.
+// Purpose
+// -------
+// Config-driven dashboard nav that reacts quickly to Stripe success:
+// - Reads session.user.hasPaid
+// - Probes /api/payments/check after ?success=true to flip quickly
+// - Filters items via your existing filterDashboardNavigation()
+// - Hides "Upgrade" when access is granted
 //
-// Why these fixes?
-// - Next.js App Router + TypeScript can type `useSearchParams()` and `usePathname()`
-//   as possibly `null` during certain build/SSR phases.
-// - Making both calls null-safe removes Vercel build crashes while keeping
-//   your logic 100% unchanged.
-//
-// Behavior retained:
-// - Trusts a lightweight server probe `/api/payments/check` to flip the nav
-//   quickly after Stripe webhook (before the NextAuth token refresh).
-// - If landing with ?success=true, it polls a few times to reflect payment ASAP.
-// - Filters items via filterDashboardNavigation (role, businessId, paid state).
-//
-// Pillars:
-// - Efficiency: short polling window only on success; single probe otherwise.
-// - Robustness: null-safe URL hooks; no flicker while loading.
-// - Simplicity: original structure preserved; comments added.
-// - Security: no client mutations; server remains source of truth for access.
+// NOTE
+// ----
+// This file assumes you have filterDashboardNavigation() configured
+// to omit Upgrade for paid users and hide Staff/Billing from staff roles.
 
 "use client";
 
@@ -40,8 +32,7 @@ interface NavbarProps {
 const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
 
-  // ✅ Null-safe: `usePathname()` may be `null` during prerender/hydration.
-  // We coerce to empty string for stable comparisons.
+  // Null-safe pathname (prevents build-time null issues)
   const pathname = usePathname() ?? "";
 
   const { data: session, status } = useSession();
@@ -49,11 +40,9 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
   const businessId = session?.user?.businessId || null;
   const sessionHasPaid = Boolean(session?.user?.hasPaid);
 
-  // ---- Authoritative server truth (fast nav update after webhook)
+  // Server probe flips quickly after webhook → DB
   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
 
-  // ✅ Null-safe: `useSearchParams()` may be unavailable momentarily in some builds.
-  // Optional chaining + fallback prevents "possibly null" errors in CI/Vercel.
   const searchParams = useSearchParams();
   const justSucceeded = (searchParams?.get("success") ?? "") === "true";
 
@@ -63,9 +52,7 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    // If we return from Stripe with ?success=true, poll briefly so the nav
-    // flips from "Upgrade" → "Billing" as soon as the webhook lands.
-    const maxAttempts = justSucceeded ? 6 : 1; // ~9s window (6 * 1.5s) on success; single probe otherwise
+    const maxAttempts = justSucceeded ? 6 : 1; // brief polling window after success
     const intervalMs = 1500;
     let attempts = 0;
 
@@ -91,12 +78,10 @@ const DashboardNavbar: React.FC<NavbarProps> = ({ navigation }) => {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, justSucceeded]); // omit `serverHasAccess` to avoid re-arming the loop
+  }, [status, justSucceeded]);
 
-  // Effective paid state for nav decisions
   const effectiveHasPaid = sessionHasPaid || serverHasAccess === true;
 
-  // Hide sensitive links while session/probe are loading to avoid flicker
   const isLoading =
     status === "loading" ||
     (status === "authenticated" && serverHasAccess === null);

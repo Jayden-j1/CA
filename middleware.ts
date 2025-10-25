@@ -1,41 +1,36 @@
 // /middleware.ts
 //
-// ============================================================
-// ✅ Purpose
-// - Protects /dashboard routes for authenticated users.
-// - Restricts /cms (Sanity Studio) to ADMIN and BUSINESS_OWNER roles.
-// - Enforces mustChangePassword redirect for security.
+// Purpose
+// -------
+// - Protect /dashboard routes for authenticated users
+// - Restrict /cms to ADMIN and BUSINESS_OWNER
+// - Enforce mustChangePassword redirect
 //
-// 🧱 Pillars
-// - Efficiency  : Minimal checks, short-circuited conditions.
-// - Robustness  : Explicit fallbacks for unauthenticated users.
-// - Simplicity  : Centralized role logic.
-// - Ease of mgmt: Single source of truth for protected routes.
-// - Security    : Prevents unauthorized access to CMS and dashboard.
-// ============================================================
+// NOTE
+// ----
+// We do NOT block /dashboard/billing after purchase; access is based on auth,
+// and UI visibility of "Upgrade" vs "Billing" is handled via nav + session().
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
-// 🚧 Protected routes (dashboard)
 const protectedRoutes = ["/dashboard"];
 
-// 🔐 Role-based restrictions for subpaths
 const roleRestrictedRoutes: Record<string, string[]> = {
   "/dashboard/staff": ["BUSINESS_OWNER", "ADMIN"],
-  "/cms": ["ADMIN", "BUSINESS_OWNER"], // New: restrict CMS access
+  "/cms": ["ADMIN", "BUSINESS_OWNER"],
 };
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // 1️⃣ Enforce authentication for dashboard routes
+  // 1) Auth for dashboard
   if (protectedRoutes.some((route) => pathname.startsWith(route))) {
     const token = await getToken({ req });
     if (!token) return NextResponse.redirect(new URL("/login", req.url));
 
-    // 2️⃣ Role-based restrictions
+    // 2) Role restrictions
     const userRole = (token.role as string) ?? "";
     for (const [route, allowedRoles] of Object.entries(roleRestrictedRoutes)) {
       if (pathname.startsWith(route) && !allowedRoles.includes(userRole)) {
@@ -43,13 +38,13 @@ export async function middleware(req: NextRequest) {
       }
     }
 
-    // 3️⃣ Enforce password reset requirement
+    // 3) Must change password flow
     if (token.mustChangePassword === true && !pathname.startsWith("/change-password")) {
       return NextResponse.redirect(new URL("/change-password", req.url));
     }
   }
 
-  // 4️⃣ CMS protection even if user isn’t in dashboard routes
+  // 4) CMS protection even outside dashboard matcher
   if (pathname.startsWith("/cms")) {
     const token = await getToken({ req });
     if (!token) return NextResponse.redirect(new URL("/login", req.url));

@@ -5,6 +5,12 @@
 // Authoritatively determine whether the current user (of any role)
 // should have access to paid content (e.g., Map/Course pages).
 //
+// What’s improved here
+// --------------------
+// • Keeps your original rules and shape
+// • Returns 200 {hasAccess:false} for unauthenticated callers (cleaner client UX)
+// • Idempotent “self-heal” for individuals if a PACKAGE payment exists
+//
 // Key Rules
 // ----------
 // 1. ADMIN and BUSINESS_OWNER → always has access.
@@ -12,19 +18,13 @@
 // 3. INDIVIDUAL (role=USER + businessId=null) → must have hasPaid = true
 //    OR an existing PACKAGE Payment (self-heal case).
 //
-// Security
-// --------
-// - Uses server-side session verification (NextAuth).
-// - Never trusts client claims (e.g., hasPaid).
-// - Returns minimal surface info: only access-related fields.
-//
 // Pillars
 // --------
-// ✅ Efficiency: minimal queries, conditional joins.
-// ✅ Robustness: self-heals timing gaps, handles missing edge cases.
-// ✅ Simplicity: linear flow, clear hierarchy by role.
-// ✅ Ease of management: single endpoint for all paid access.
-// ✅ Security: safe read/update ops, no client trust.
+// ✅ Efficiency: minimal queries.
+// ✅ Robustness: self-heal + inherited access match webhook semantics.
+// ✅ Simplicity: linear control flow.
+// ✅ Ease of mgmt: single endpoint for all paid access.
+// ✅ Security: never trust client; read from DB.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -32,89 +32,67 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  // 1️⃣ Get the current user session
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    // No active session → deny access
-    return NextResponse.json({ hasAccess: false }, { status: 401 });
+  const userId = session?.user?.id;
+  const role = session?.user?.role || "USER";
+
+  // No session → treat as no access (200). Simpler client behavior.
+  if (!userId) {
+    return NextResponse.json({ hasAccess: false }, { status: 200 });
   }
 
-  const userId = session.user.id;
-  const role = session.user.role || "USER";
-
-  // 2️⃣ Admins and Business Owners always have access
+  // Admin & Owner: always allowed
   if (role === "ADMIN" || role === "BUSINESS_OWNER") {
     return NextResponse.json({ hasAccess: true }, { status: 200 });
   }
 
-  // 3️⃣ Fetch key data for regular users (may be staff or individuals)
+  // Staff or Individual
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      hasPaid: true,
-      businessId: true, // null for individuals
-    },
+    select: { hasPaid: true, businessId: true },
   });
 
   if (!user) {
-    return NextResponse.json({ hasAccess: false }, { status: 404 });
+    return NextResponse.json({ hasAccess: false }, { status: 200 });
   }
 
-  // -------------------------------------------------------------
-  // 🧩 Staff-seat logic (inherits access from business owner)
-  // -------------------------------------------------------------
+  // Staff-seat: inherit from owner (owner id stored in businessId)
   if (user.businessId) {
-    // Find parent business (BUSINESS_OWNER user)
-    const businessOwner = await prisma.user.findFirst({
-      where: {
-        id: user.businessId,
-        role: "BUSINESS_OWNER",
-      },
+    const owner = await prisma.user.findFirst({
+      where: { id: user.businessId, role: "BUSINESS_OWNER" },
       select: { hasPaid: true },
     });
 
-    // If the owner has paid, the staff inherits access
-    if (businessOwner?.hasPaid) {
+    if (owner?.hasPaid) {
       return NextResponse.json(
-        {
-          hasAccess: true,
-          inheritedFrom: "business",
-        },
+        { hasAccess: true, inheritedFrom: "business" },
         { status: 200 }
       );
     }
 
-    // If the business owner hasn't paid, no inherited access
     return NextResponse.json({ hasAccess: false }, { status: 200 });
   }
 
-  // -------------------------------------------------------------
-  // 🧩 Individual logic (independent users)
-  // -------------------------------------------------------------
+  // Individual: own hasPaid
   if (user.hasPaid) {
     return NextResponse.json({ hasAccess: true }, { status: 200 });
   }
 
-  // Self-heal path: user has at least one PACKAGE Payment in DB
-  const anyPayment = await prisma.payment.findFirst({
+  // Self-heal: if a PACKAGE payment exists, mark hasPaid=true
+  const anyPackagePayment = await prisma.payment.findFirst({
     where: { userId, purpose: "PACKAGE" },
     select: { id: true },
   });
 
-  if (anyPayment) {
+  if (anyPackagePayment) {
     await prisma.user.update({
       where: { id: userId },
       data: { hasPaid: true },
     });
 
-    return NextResponse.json(
-      { hasAccess: true, healed: true },
-      { status: 200 }
-    );
+    return NextResponse.json({ hasAccess: true, healed: true }, { status: 200 });
   }
 
-  // -------------------------------------------------------------
-  // 🚫 Default: no valid payment or inheritance detected
-  // -------------------------------------------------------------
+  // Default: no access
   return NextResponse.json({ hasAccess: false }, { status: 200 });
 }

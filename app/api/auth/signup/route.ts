@@ -1,44 +1,21 @@
 // app/api/auth/signup/route.ts
 //
-// ============================================================
 // Purpose
-// ============================================================
+// -------
 // Securely create a new user (individual or business owner),
 // hash their password, and optionally create a Business record.
+// Business path captures both an internal unique handle (domain)
+// and a human-display/enforcement domain (emailDomain).
 //
-// What’s new (surgical, backward-compatible):
-// ------------------------------------------
-// • We now capture *both*:
-//    - Business.domain      → INTERNAL unique handle (slug + suffix), used by the app
-//    - Business.emailDomain → DISPLAY/ENFORCEMENT domain (e.g., "example.com")
-// • This fixes the “Only emails from @company-d1drge …” UI text by letting
-//   the UI read Business.emailDomain (human-readable) instead of Business.domain.
-// • Same transaction as before: create Business + attach user.businessId atomically.
-//
-// Pillars
-// -------
-// ✅ Efficiency  – Minimal reads/writes; single transaction for business path
-// ✅ Robustness  – Deterministic unique handle; validation and clear errors
-// ✅ Simplicity  – Small pure helpers; minimal code changes
-// ✅ Ease of Mgmt – Thorough comments; obvious intent
-// ✅ Security    – Bcrypt hashing; duplicate email guard; no client trust for roles
-//
-// NOTE: We DO NOT set hasPaid=true here. Server truth is owned by
-// Stripe webhooks + /api/payments/check. Individual-account logic remains untouched.
+// IMPORTANT:
+// If you see Prisma error "The column `emailDomain` does not exist",
+// run a migration so the DB matches prisma/schema.prisma (commands at bottom).
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
-import { isStrongPassword } from "@/lib/validator"; // ✅ Password complexity helper
+import { isStrongPassword } from "@/lib/validator";
 
-// ---------------------------------------------
-// Small helpers (pure/side-effect free)
-// ---------------------------------------------
-
-/**
- * slugify:
- * Turn a name like "Acme Pty Ltd" into "acme-pty-ltd".
- */
 function slugify(input: string): string {
   return (input || "")
     .toLowerCase()
@@ -46,26 +23,15 @@ function slugify(input: string): string {
     .replace(/['"]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 48); // keep it reasonably short
+    .slice(0, 48);
 }
 
-/**
- * uniqueBusinessHandle:
- * Build the INTERNAL unique handle for Business.domain.
- * We slugify the businessName and append a deterministic suffix based on userId.
- * Example: "acme-pty-ltd-a1b2c3"
- */
 function uniqueBusinessHandle(businessName: string, userId: string): string {
   const base = slugify(businessName) || "business";
   const suffix = (userId || "").slice(-6) || "member";
   return `${base}-${suffix}`;
 }
 
-/**
- * extractEmailDomain:
- * Returns the human-visible email domain from an address, e.g. "example.com".
- * If anything is off, returns undefined (caller can skip storing).
- */
 function extractEmailDomain(email?: string): string | undefined {
   if (!email) return undefined;
   const at = email.indexOf("@");
@@ -73,14 +39,11 @@ function extractEmailDomain(email?: string): string | undefined {
   return email.slice(at + 1).toLowerCase();
 }
 
-// ------------------------------------------------------------
-// POST /api/auth/signup
-// ------------------------------------------------------------
 export async function POST(req: NextRequest) {
   try {
     console.log("[API] Signup route hit with POST");
 
-    // 1) Parse the body
+    // 1) Parse body
     const body = await req.json();
     const { name, email, password, userType, businessName } = body as {
       name?: string;
@@ -95,7 +58,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
 
-    // 3) Password complexity
+    // 3) Password strength
     if (!isStrongPassword(password)) {
       return NextResponse.json(
         {
@@ -112,22 +75,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User already exists." }, { status: 400 });
     }
 
-    // 5) Hash password securely
+    // 5) Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 6) Role + package type
+    // 6) Role & package
     const isBusiness = userType === "business";
     const role = isBusiness ? "BUSINESS_OWNER" : "USER";
     const packageType = isBusiness ? "business" : "individual";
 
-    // 7) Create the user FIRST (lets us derive a deterministic Business handle)
+    // 7) Create user first (so we can build a deterministic handle)
     const user = await prisma.user.create({
       data: {
         name,
         email,
         hashedPassword,
         role,
-        hasPaid: false, // paid truth via webhooks/check
+        hasPaid: false,
         packageType,
       },
       select: { id: true, role: true },
@@ -135,7 +98,7 @@ export async function POST(req: NextRequest) {
 
     console.log("[API] User created:", { id: user.id, role: user.role });
 
-    // 8) If business owner, create Business + link to user in one transaction
+    // 8) Business path: create Business + link user in a single transaction
     if (role === "BUSINESS_OWNER") {
       if (!businessName?.trim()) {
         return NextResponse.json(
@@ -144,10 +107,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // INTERNAL unique handle (slug + id suffix)
       let internalHandle = uniqueBusinessHandle(businessName, user.id);
-
-      // DISPLAY/ENFORCEMENT domain: the owner’s actual email host (e.g. "example.com")
       const emailDomain = extractEmailDomain(email);
 
       try {
@@ -156,20 +116,19 @@ export async function POST(req: NextRequest) {
             data: {
               name: businessName.trim(),
               domain: internalHandle, // INTERNAL unique handle
-              emailDomain,            // Human-friendly domain for staff policy & UI
+              emailDomain,            // human-visible org email domain (e.g., "example.com")
               owner: { connect: { id: user.id } },
             },
             select: { id: true },
           });
 
-          // Attach business to user
           await tx.user.update({
             where: { id: user.id },
             data: { businessId: business.id },
           });
         });
       } catch (err: any) {
-        // If (extremely rare) the derived handle collides, try once with a random suffix.
+        // Handle rare unique collision on domain
         if (err?.code === "P2002") {
           const randomSuffix = Math.random().toString(36).slice(2, 8);
           internalHandle = `${slugify(businessName)}-${randomSuffix || "new"}`;
@@ -191,12 +150,12 @@ export async function POST(req: NextRequest) {
             });
           });
         } else {
-          throw err; // bubble up
+          throw err;
         }
       }
     }
 
-    // 9) Minimal response (client will sign the user in)
+    // 9) Respond; client then signs in silently
     return NextResponse.json(
       { message: "User created successfully.", role: user.role, userId: user.id },
       { status: 201 }

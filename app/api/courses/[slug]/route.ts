@@ -3,50 +3,30 @@
 // ============================================================
 // Course detail API (Sanity-only, production-ready)
 // ------------------------------------------------------------
-// • Fetches a single course by slug from Sanity (published content only)
-// • Uses Next.js tag-aware caching (pairs with On-Demand Revalidation)
-// • Flattens nested submodules → a simple modules[] list for the UI
-// • Next.js 15 typed routes compatible (params as Promise)
+// • Fetches a single published course by slug from Sanity
+// • Uses tag-aware caching with your fetchSanity() helper (pairs with ODR)
+// • Flattens nested submodules → simple modules[] for your UI
+// • ✅ Fixes GROQ 400: query now defined in lib/sanity/queries WITHOUT "??"
+// • ✅ Removes dependency on 'next-sanity' to avoid “Cannot find module” error
 // ------------------------------------------------------------
 // Pillars
 // -------
-// ✅ Efficiency  – one Sanity query + single-pass flatten + HTTP caching
+// ✅ Efficiency  – one query + single-pass flatten + HTTP caching
 // ✅ Robustness  – defensive checks for undefined/null shapes
-// ✅ Simplicity  – DTO mirrors your UI; no Prisma, no dual sources
-// ✅ Security    – no drafts in production; only published content
-// ✅ Ease of mgmt – tags integrate with /api/revalidate endpoint
+// ✅ Simplicity  – DTO mirrors your UI; no Prisma; no extra deps
+// ✅ Security    – published-only fetch (per your helper config)
+// ✅ Ease of mgmt – tags integrate with /api/revalidate
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { fetchSanity } from "@/lib/sanity/client"; // ← your tag-aware helper (supports { tags, revalidate } )
+import { fetchSanity } from "@/lib/sanity/client"; // your tag-aware helper (already used elsewhere)
 import { COURSE_DETAIL_BY_SLUG } from "@/lib/sanity/queries";
-
-// ------------------------------------------------------------
-// NOTE ON CACHING
-// ------------------------------------------------------------
-// We do NOT set `export const dynamic = "force-dynamic"` — that would disable
-// Next.js caching entirely. We *want* cache + ODR, so we let Next cache
-// using tags below (COURSE_DETAIL + COURSE_DETAIL:<slug>).
-//
-// The corresponding webhook calls /api/revalidate with these tags, so the
-// cache is blasted exactly when you publish a course in Sanity.
-// ------------------------------------------------------------
-
-// ------------------------------------------------------------
-// Helper: safe ID (works in all runtimes)
-// ------------------------------------------------------------
-function safeId(): string {
-  try {
-    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  } catch {}
-  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
 
 // ------------------------------------------------------------
 // Helper: stable sort by optional numeric `order`
 // ------------------------------------------------------------
 // • Undefined orders go to the end (Infinity) so human ordering wins.
-// • We accept any[] to avoid TS narrowing away expected fields.
+// • Keep type as any[] to avoid fighting TS narrowing in content graphs.
 function sortByOrderAny(arr: any[]): any[] {
   return [...(arr || [])].sort((a, b) => {
     const ao =
@@ -58,17 +38,24 @@ function sortByOrderAny(arr: any[]): any[] {
 }
 
 // ------------------------------------------------------------
+// Helper: synthetic id (when a child lacks one)
+// ------------------------------------------------------------
+function safeId(): string {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {}
+  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ------------------------------------------------------------
 // Helper: Flatten modules → submodules → lessons → 1-level modules[]
 // ------------------------------------------------------------
 // Why? Your UI expects a flat `modules[]` each with `lessons[]`.
-// Sanity authors can nest submodules for organization. We flatten here so
-// the front-end remains blissfully simple.
+// Sanity authors may nest submodules. We flatten here so the UI stays simple.
 //
-// Title strategy for submodules: "Parent Module — Child Submodule"
-// This preserves context while staying flat.
-//
-// We also keep "single-content module" fallback: if a module/submodule has no
-// lessons, we synthesize one lesson from its own `content`/`videoUrl`.
+// Title strategy for submodules: "Parent Module — Child Submodule".
+// If a module/submodule has no lessons, we synthesize a single lesson from
+// its own `content`/`videoUrl` to keep the UI consistent.
 function flattenModules(modules: any[]): any[] {
   const result: any[] = [];
   const top = sortByOrderAny(modules);
@@ -84,7 +71,7 @@ function flattenModules(modules: any[]): any[] {
         id: l?._id ?? safeId(),
         title: l?.title ?? "Lesson",
         videoUrl: l?.videoUrl ?? "",
-        // Body can be Portable Text (array) *or* string. Your page normalizes it.
+        // Body can be Portable Text (array) or string; the page normalizes it.
         body: l?.body ?? l?.content ?? undefined,
         quiz: l?.quiz
           ? {
@@ -173,48 +160,46 @@ function flattenModules(modules: any[]): any[] {
 // ------------------------------------------------------------
 // GET /api/courses/[slug]
 // ------------------------------------------------------------
-// ⚠️ Next.js 15 typed routes: props.params is a Promise. We accept it and await.
-// We return a single { course } object in the exact DTO your UI expects.
+// ⚠️ Next.js 15 typed routes on Vercel often type params as a Promise.
+// Use `ctx: { params: Promise<{ slug: string }> }` to be safe.
 export async function GET(
   _req: Request,
-  ctx: { params: Promise<{ slug: string }> } // ← important for Vercel/Next's ParamCheck
+  ctx: { params: Promise<{ slug: string }> }
 ) {
-  // 1) Unwrap slug from promised params
-  const { slug } = await ctx.params;
+  try {
+    // 1) Unwrap slug from promised params
+    const { slug } = await ctx.params;
 
-  // 2) Build cache tags: one generic & one specific
-  //    These pair with your /api/revalidate endpoint and Sanity webhook
-  const tags = ["COURSE_DETAIL", `COURSE_DETAIL:${slug}`];
+    // 2) Build cache tags for ODR
+    const tags = ["COURSE_DETAIL", `COURSE_DETAIL:${slug}`];
 
-  // 3) Fetch published course from Sanity using a static GROQ + params
-  //    Revalidate every 1 hour as a safety net; ODR will keep it fresh instantly on publish.
-  const doc = await fetchSanity<any>(
-    COURSE_DETAIL_BY_SLUG,
-    { slug },
-    {
-      tags,
-      revalidate: 3600, // 1 hour TTL (ODR will usually refresh sooner)
-      // perspective: 'published'  // (your helper defaults to published; keep it explicit if you added that option)
+    // 3) Fetch published course from Sanity using the fixed query string
+    //    Revalidate hourly as a fallback; ODR will usually refresh immediately.
+    const doc = await fetchSanity<any>(
+      COURSE_DETAIL_BY_SLUG,
+      { slug },
+      { tags, revalidate: 3600 }
+    );
+
+    // 4) 404 if not found / unpublished
+    if (!doc) {
+      return NextResponse.json({ error: "Course not found" }, { status: 404 });
     }
-  );
 
-  // 4) 404 if not found / unpublished
-  if (!doc) {
-    return NextResponse.json({ error: "Course not found" }, { status: 404 });
+    // 5) Normalize into your front-end DTO
+    const dto = {
+      id: doc.id ?? doc._id,
+      slug: doc.slug,
+      title: doc.title,
+      summary: doc.summary ?? null,
+      coverImage: typeof doc.coverImage === "string" ? doc.coverImage : doc.coverImage ?? null,
+      modules: flattenModules(doc.modules || []),
+    };
+
+    // 6) Respond (Next caches based on the fetch above)
+    return NextResponse.json({ course: dto }, { status: 200 });
+  } catch (err) {
+    console.error("[GET /api/courses/[slug]] error:", err);
+    return NextResponse.json({ error: "Failed to load course" }, { status: 500 });
   }
-
-  // 5) Normalize into your front-end DTO
-  const dto = {
-    id: doc.id ?? doc._id,
-    slug: doc.slug,
-    title: doc.title,
-    summary: doc.summary ?? null,
-    coverImage:
-      // If you later switch to direct asset urls in GROQ, this still stays safe
-      doc.coverImage?.asset?._ref ? doc.coverImage : doc.coverImage ?? null,
-    modules: flattenModules(doc.modules || []),
-  };
-
-  // 6) Respond with JSON (cache handled by Next based on the fetch above)
-  return NextResponse.json({ course: dto });
 }

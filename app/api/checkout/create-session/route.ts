@@ -1,20 +1,11 @@
 // app/api/checkout/create-session/route.ts
 //
-// Purpose:
-// - Securely creates Stripe Checkout Sessions from the server.
-// - Supports multiple package types: "individual", "business", "staff_seat".
-// - Prices are pulled from server-side env vars (cents).
-//
-// Updates in this version:
-// - If the user is logged in, success/cancel URLs now target internal dashboard routes:
-//     success: /dashboard?success=true
-//     cancel:  /dashboard/upgrade?canceled=true
-//   (This fixes the issue where successful payments returned to the public /services page.)
-// - Adds `metadata.userId` (when logged in) so the webhook can attach the payment to the right user.
-// - Adds `metadata.description` to create clear human-readable payment descriptions in DB.
-//
-// Security:
-// - Never trust client price; always resolve on server from STRIPE_* env vars.
+// Purpose
+// -------
+// Create Stripe Checkout Sessions securely.
+// - Uses server-side env amounts (never trust client)
+// - Writes metadata for robust webhook handling
+// - Returns dashboard success/cancel URLs so we don't bounce back to /services
 
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -48,9 +39,9 @@ export async function POST(req: Request) {
     }
 
     const session = await getServerSession(authOptions);
-    const isLoggedIn = Boolean(session?.user?.id);
     const userId = session?.user?.id || null;
 
+    // Send users back to the right dashboard areas
     const successUrl =
       packageType === "staff_seat"
         ? `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true`
@@ -77,10 +68,11 @@ export async function POST(req: Request) {
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata: {
+        // Purpose is PACKAGE for plan purchases; STAFF_SEAT for seat add-ons.
         purpose: packageType === "staff_seat" ? "STAFF_SEAT" : "PACKAGE",
         packageType,
         description: productName,
-        ...(isLoggedIn && userId ? { userId } : {}),
+        ...(userId ? { userId } : {}), // webhook uses this to identify payer
       },
     });
 
@@ -93,12 +85,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
-
-
-
-
-
-
-
-

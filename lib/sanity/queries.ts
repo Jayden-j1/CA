@@ -6,8 +6,8 @@
 //
 // 🧱 Pillars
 // - Efficiency   : Only expose the fields required by the UI.
-// - Robustness   : coalesce() for predictable shapes.
-// - Simplicity   : Queries as raw strings (no extra tag helper).
+// - Robustness   : coalesce() for predictable shapes; *no* JS "??" operator.
+// - Simplicity   : Queries as raw strings (avoids extra runtime deps).
 // - Ease of mgmt : One file for all query logic.
 // - Security     : Avoid broad wildcards that could leak data.
 // ============================================================
@@ -26,6 +26,11 @@ export const COURSE_LIST_QUERY = `
 // ------------------------------------------------------------
 // 📘 COURSE DETAIL BY SLUG (Modules → Lessons → Submodules)
 // ------------------------------------------------------------
+// IMPORTANT FIXES compared to your previous version:
+// - Replaced any "??" (JS) with GROQ `coalesce()`
+// - Ensured every projection has matching braces
+// - Added optional fields safely via `coalesce(...)`
+// - Kept shape stable for your front-end DTO/flattening
 export const COURSE_DETAIL_BY_SLUG = `
   *[_type == "course" && slug.current == $slug][0]{
     "id": _id,
@@ -34,13 +39,17 @@ export const COURSE_DETAIL_BY_SLUG = `
     "summary": coalesce(summary, null),
     "coverImage": coalesce(coverImage.asset->url, null),
 
+    // Top-level modules (ordered)
     "modules": coalesce(
       modules[]-> | order(order asc){
         _id,
         title,
         "description": coalesce(description, null),
         "order": select(defined(order) => order, null),
+        "videoUrl": coalesce(videoUrl, null),
+        "content": content,
 
+        // Lessons (ordered)
         "lessons": coalesce(
           lessons[]-> | order(order asc){
             _id,
@@ -48,25 +57,34 @@ export const COURSE_DETAIL_BY_SLUG = `
             "order": select(defined(order) => order, null),
             "videoUrl": coalesce(videoUrl, null),
             "body": coalesce(body, []),
-            "quiz": coalesce(quiz{
-              "passingScore": passingScore,
-              "questions": questions[] {
-                "id": coalesce(id, _key),
-                "question": question,
-                "options": options[] ?? [],
-                "correctIndex": correctIndex
-              }
-            }, null)
+
+            // Quiz object (if present)
+            "quiz": select(
+              defined(quiz) => {
+                "title": coalesce(quiz.title, null),
+                "passingScore": quiz.passingScore,
+                "questions": coalesce(quiz.questions, [])[]{
+                  "id": coalesce(id, _key),
+                  "question": question,
+                  "options": coalesce(options, []),
+                  "correctIndex": correctIndex
+                }
+              },
+              null
+            )
           },
           []
         ),
 
+        // Optional authoring: nested submodules (ordered)
         "submodules": coalesce(
           submodules[]-> | order(order asc){
             _id,
             title,
             "description": coalesce(description, null),
             "order": select(defined(order) => order, null),
+            "videoUrl": coalesce(videoUrl, null),
+            "content": content,
 
             "lessons": coalesce(
               lessons[]-> | order(order asc){
@@ -75,15 +93,19 @@ export const COURSE_DETAIL_BY_SLUG = `
                 "order": select(defined(order) => order, null),
                 "videoUrl": coalesce(videoUrl, null),
                 "body": coalesce(body, []),
-                "quiz": coalesce(quiz{
-                  "passingScore": passingScore,
-                  "questions": questions[] {
-                    "id": coalesce(id, _key),
-                    "question": question,
-                    "options": options[] ?? [],
-                    "correctIndex": correctIndex
-                  }
-                }, null)
+                "quiz": select(
+                  defined(quiz) => {
+                    "title": coalesce(quiz.title, null),
+                    "passingScore": quiz.passingScore,
+                    "questions": coalesce(quiz.questions, [])[]{
+                      "id": coalesce(id, _key),
+                      "question": question,
+                      "options": coalesce(options, []),
+                      "correctIndex": correctIndex
+                    }
+                  },
+                  null
+                )
               },
               []
             )
