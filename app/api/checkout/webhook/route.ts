@@ -2,19 +2,14 @@
 //
 // Purpose
 // -------
-// Secure Stripe webhook receiver that:
-// 1) Verifies Stripe signature
-// 2) Records successful payments into Prisma.Payment (idempotent)
-// 3) Flips user.hasPaid = true for PACKAGE purchases (individual/business)
+// 1) Verify Stripe signature and accept only checkout.session.completed.
+// 2) Idempotently insert a Payment row (owner/payer).
+// 3) For PACKAGE → flip payer.hasPaid = true.
+// 4) For STAFF_SEAT → ACTIVATE the pre-created staff user (isActive: true) using metadata.newStaffId.
 //
-// Why this file fixes your symptom:
-// - Your "Business purchase not showing in Billing" happens when we never
-//   persist the payment. This webhook makes the write authoritative.
-//
-// Security notes:
-// - Uses raw body; Stripe signature checked via STRIPE_WEBHOOK_SECRET.
-// - Only reacts to "checkout.session.completed".
-// - Idempotent: we skip if a payment row with this stripeId already exists.
+// Notes:
+// - We DO NOT change existing behavior for PACKAGE purchases.
+// - We only add the small step to activate a staff record when purpose=STAFF_SEAT.
 
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -56,54 +51,56 @@ export async function POST(req: NextRequest) {
     }
 
     if (event.type !== "checkout.session.completed") {
-      // We only care about completed checkout sessions for payments.
       return NextResponse.json({ received: true });
     }
 
     const session = event.data.object as Stripe.Checkout.Session;
 
-    // Metadata set in /api/checkout/create-session
+    // Metadata from create-session / staff-add
     const meta = (session.metadata || {}) as Record<string, string | undefined>;
     const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) || "PACKAGE";
     const packageType = (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
-    const userId = meta.userId; // present when user was signed in before checkout
+    const userId = meta.userId || undefined;       // payer (owner)
+    const newStaffId = meta.newStaffId || undefined; // for STAFF_SEAT activation
     const description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
 
-    // Stripe amounts are in cents; your Payment.amount is a Float in dollars
     const amount = (session.amount_total || 0) / 100;
     const currency = (session.currency || "aud").toLowerCase();
-
-    // Use the Checkout Session id as the unique stripeId (your model requires unique string)
-    const stripeId = session.id;
+    const stripeId = session.id; // unique
 
     // Idempotency: skip if already recorded
     const existing = await prisma.payment.findUnique({ where: { stripeId } });
     if (existing) {
+      // Still attempt activation in case previous run wrote payment but crashed before activation
+      if (purpose === "STAFF_SEAT" && newStaffId) {
+        await prisma.user.updateMany({
+          where: { id: newStaffId, isActive: false },
+          data: { isActive: true },
+        });
+      }
       return NextResponse.json({ ok: true, duplicate: true });
     }
 
-    // We require userId to attribute the payment. If Stripe metadata didn't include it,
-    // we still record the payment with a safe fallback (null user won't pass your schema,
-    // so we no-op in that case). This should not occur with your current flows.
     if (!userId) {
       console.warn("[Webhook] No userId in session metadata; payment not attributed.");
       return NextResponse.json({ ok: true, unattributed: true });
     }
 
-    // Create the Payment row
+    // 1) Create the Payment row (owner-scoped; Billing filters by businessId via nested user)
     await prisma.payment.create({
       data: {
         userId,
         amount,
         currency,
-        stripeId,     // UNIQUE
+        stripeId,
         description,
-        purpose,      // PACKAGE | STAFF_SEAT
+        purpose,
       },
     });
 
-    // For plan purchases (PACKAGE), unlock access for this user
+    // 2) Post-processing based on purpose
     if (purpose === "PACKAGE") {
+      // Unlock plan for payer (individual/business)
       await prisma.user.update({
         where: { id: userId },
         data: {
@@ -111,6 +108,14 @@ export async function POST(req: NextRequest) {
           packageType: packageType === "business" ? "business" : "individual",
         },
       });
+    } else if (purpose === "STAFF_SEAT") {
+      // Activate the pre-created staff (created inactive in /api/staff/add)
+      if (newStaffId) {
+        await prisma.user.updateMany({
+          where: { id: newStaffId, isActive: false },
+          data: { isActive: true },
+        });
+      }
     }
 
     return NextResponse.json({ ok: true });
