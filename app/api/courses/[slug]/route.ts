@@ -4,29 +4,24 @@
 // Course detail API (Sanity-only, production-ready)
 // ------------------------------------------------------------
 // • Fetches a single published course by slug from Sanity
-// • Uses tag-aware caching with your fetchSanity() helper (pairs with ODR)
+// • Uses tag-aware caching with fetchSanity() (pairs with ODR)
 // • Flattens nested submodules → simple modules[] for your UI
-// • ✅ Fixes GROQ 400: query now defined in lib/sanity/queries WITHOUT "??"
-// • ✅ Removes dependency on 'next-sanity' to avoid “Cannot find module” error
+// • ✅ Uses fixed GROQ from lib/sanity/queries (no "??")
+// • ✅ No 'next-sanity' import (resolves your VS Code warning)
 // ------------------------------------------------------------
 // Pillars
-// -------
-// ✅ Efficiency  – one query + single-pass flatten + HTTP caching
-// ✅ Robustness  – defensive checks for undefined/null shapes
-// ✅ Simplicity  – DTO mirrors your UI; no Prisma; no extra deps
-// ✅ Security    – published-only fetch (per your helper config)
-// ✅ Ease of mgmt – tags integrate with /api/revalidate
+// - Efficiency : one query + single-pass normalization
+// - Robustness : resilient flattening; synthetic IDs where needed
+// - Simplicity : DTO exactly what the front-end expects
+// - Security   : published-only reads
+// - Ease of mgmt: rich comments; trivial to extend
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { fetchSanity } from "@/lib/sanity/client"; // your tag-aware helper (already used elsewhere)
+import { fetchSanity } from "@/lib/sanity/client";
 import { COURSE_DETAIL_BY_SLUG } from "@/lib/sanity/queries";
 
-// ------------------------------------------------------------
-// Helper: stable sort by optional numeric `order`
-// ------------------------------------------------------------
-// • Undefined orders go to the end (Infinity) so human ordering wins.
-// • Keep type as any[] to avoid fighting TS narrowing in content graphs.
+// ---------- Helpers: order/safe id ----------
 function sortByOrderAny(arr: any[]): any[] {
   return [...(arr || [])].sort((a, b) => {
     const ao =
@@ -37,9 +32,6 @@ function sortByOrderAny(arr: any[]): any[] {
   });
 }
 
-// ------------------------------------------------------------
-// Helper: synthetic id (when a child lacks one)
-// ------------------------------------------------------------
 function safeId(): string {
   try {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -47,15 +39,7 @@ function safeId(): string {
   return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ------------------------------------------------------------
-// Helper: Flatten modules → submodules → lessons → 1-level modules[]
-// ------------------------------------------------------------
-// Why? Your UI expects a flat `modules[]` each with `lessons[]`.
-// Sanity authors may nest submodules. We flatten here so the UI stays simple.
-//
-// Title strategy for submodules: "Parent Module — Child Submodule".
-// If a module/submodule has no lessons, we synthesize a single lesson from
-// its own `content`/`videoUrl` to keep the UI consistent.
+// ---------- Flatten modules → submodules → lessons ----------
 function flattenModules(modules: any[]): any[] {
   const result: any[] = [];
   const top = sortByOrderAny(modules);
@@ -65,13 +49,12 @@ function flattenModules(modules: any[]): any[] {
     const baseTitle = m?.title ?? "Untitled Module";
     const baseDesc = m?.description ?? undefined;
 
-    // Case A: Module has its own lessons
+    // A) Module’s own lessons
     if (Array.isArray(m?.lessons) && m.lessons.length > 0) {
       const mappedLessons = sortByOrderAny(m.lessons).map((l: any) => ({
         id: l?._id ?? safeId(),
         title: l?.title ?? "Lesson",
         videoUrl: l?.videoUrl ?? "",
-        // Body can be Portable Text (array) or string; the page normalizes it.
         body: l?.body ?? l?.content ?? undefined,
         quiz: l?.quiz
           ? {
@@ -90,7 +73,7 @@ function flattenModules(modules: any[]): any[] {
       });
     }
 
-    // Case B: Flatten submodules (if any)
+    // B) Submodules (flattened)
     if (Array.isArray(m?.submodules) && m.submodules.length > 0) {
       for (const sm of sortByOrderAny(m.submodules)) {
         const subId = sm?._id ?? sm?.id ?? safeId();
@@ -113,7 +96,7 @@ function flattenModules(modules: any[]): any[] {
                   : undefined,
               }))
             : [
-                // Fallback: treat submodule itself as a single-lesson container
+                // Single-lesson fallback from submodule content
                 {
                   id: `${subId}-lesson`,
                   title: subTitle,
@@ -132,7 +115,7 @@ function flattenModules(modules: any[]): any[] {
       }
     }
 
-    // Case C: Neither lessons nor submodules → single-content fallback
+    // C) Fallback when no lessons or submodules
     if (
       (!Array.isArray(m?.lessons) || m.lessons.length === 0) &&
       (!Array.isArray(m?.submodules) || m.submodules.length === 0)
@@ -157,36 +140,27 @@ function flattenModules(modules: any[]): any[] {
   return result;
 }
 
-// ------------------------------------------------------------
-// GET /api/courses/[slug]
-// ------------------------------------------------------------
-// ⚠️ Next.js 15 typed routes on Vercel often type params as a Promise.
-// Use `ctx: { params: Promise<{ slug: string }> }` to be safe.
+// ---------- GET /api/courses/[slug] ----------
 export async function GET(
   _req: Request,
-  ctx: { params: Promise<{ slug: string }> }
+  ctx: { params: Promise<{ slug: string }> } // Next 15/edge-safe: params often arrive as a Promise
 ) {
   try {
-    // 1) Unwrap slug from promised params
     const { slug } = await ctx.params;
 
-    // 2) Build cache tags for ODR
+    // Pair with ODR: revalidate when you publish/patch this course in Sanity
     const tags = ["COURSE_DETAIL", `COURSE_DETAIL:${slug}`];
 
-    // 3) Fetch published course from Sanity using the fixed query string
-    //    Revalidate hourly as a fallback; ODR will usually refresh immediately.
     const doc = await fetchSanity<any>(
       COURSE_DETAIL_BY_SLUG,
       { slug },
-      { tags, revalidate: 3600 }
+      { tags, revalidate: 3600 } // 1h TTL safety; ODR will usually refresh instantly
     );
 
-    // 4) 404 if not found / unpublished
     if (!doc) {
       return NextResponse.json({ error: "Course not found" }, { status: 404 });
     }
 
-    // 5) Normalize into your front-end DTO
     const dto = {
       id: doc.id ?? doc._id,
       slug: doc.slug,
@@ -196,9 +170,9 @@ export async function GET(
       modules: flattenModules(doc.modules || []),
     };
 
-    // 6) Respond (Next caches based on the fetch above)
     return NextResponse.json({ course: dto }, { status: 200 });
   } catch (err) {
+    // If GROQ is invalid, fetchSanity will include Sanity's parse error here.
     console.error("[GET /api/courses/[slug]] error:", err);
     return NextResponse.json({ error: "Failed to load course" }, { status: 500 });
   }
