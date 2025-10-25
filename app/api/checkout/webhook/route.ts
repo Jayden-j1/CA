@@ -2,145 +2,120 @@
 //
 // Purpose
 // -------
-// Securely receive Stripe webhook events and write authoritative payment records.
-// We only handle `checkout.session.completed` here to keep scope tight and safe.
+// Secure Stripe webhook receiver that:
+// 1) Verifies Stripe signature
+// 2) Records successful payments into Prisma.Payment (idempotent)
+// 3) Flips user.hasPaid = true for PACKAGE purchases (individual/business)
 //
-// What this does
-// --------------
-// 1) Verifies Stripe signature using STRIPE_WEBHOOK_SECRET
-// 2) Extracts metadata we set during checkout:
-//      • purpose      → "PACKAGE" | "STAFF_SEAT"
-//      • packageType  → "individual" | "business" | "staff_seat" (for PACKAGE, we use this to set user.packageType)
-//      • description  → e.g. "Business Package"
-//      • userId       → payer user id (so we can attribute Payment)
-// 3) Idempotency: if a Payment already exists for this `stripeId` (session.id), do nothing.
-// 4) Writes a Payment row, and for PACKAGE purchases marks the user as paid.
+// Why this file fixes your symptom:
+// - Your "Business purchase not showing in Billing" happens when we never
+//   persist the payment. This webhook makes the write authoritative.
 //
-// Notes
-// -----
-// • No schema changes required.
-// • This route intentionally avoids touching staff creation logic. It only
-//   records the seat payment (`purpose = STAFF_SEAT`) so Billing shows it.
-// • If you later add more event types, keep them guarded and idempotent.
-//
-// Environment
-// -----------
-// - STRIPE_SECRET_KEY        (already in use)
-// - STRIPE_WEBHOOK_SECRET    (this is new; create it in your Stripe Dashboard)
-// - NEXT_PUBLIC_APP_URL      (unchanged)
-//
-// Next.js runtime
-// ---------------
-// - Use Node.js runtime (Stripe requires raw body to verify signatures).
-// - Read the raw request body via req.text() and pass to `constructEvent`.
+// Security notes:
+// - Uses raw body; Stripe signature checked via STRIPE_WEBHOOK_SECRET.
+// - Only reacts to "checkout.session.completed".
+// - Idempotent: we skip if a payment row with this stripeId already exists.
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/prisma";
 import Stripe from "stripe";
 
-export const runtime = "nodejs";         // Required for raw body access
-export const dynamic = "force-dynamic";  // Webhooks must not be statically optimized
+// Stripe requires the raw body to verify the signature
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2023-10-16" as any,
-});
-
-function safeUpper<T extends string>(v: unknown, fallback: T): T {
-  return (typeof v === "string" ? (v.toUpperCase() as T) : fallback) || fallback;
+async function getRawBody(req: Request): Promise<Buffer> {
+  const arrayBuffer = await req.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
-export async function POST(req: Request) {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    console.error("[Webhook] Missing STRIPE_WEBHOOK_SECRET");
-    return NextResponse.json({ error: "Misconfigured webhook secret" }, { status: 500 });
-  }
-
-  // 1) Read raw body and signature header
-  const sig = req.headers.get("stripe-signature");
-  if (!sig) {
-    return NextResponse.json({ error: "Missing signature" }, { status: 400 });
-  }
-
-  const rawBody = await req.text();
-
-  let event: Stripe.Event;
+export async function POST(req: NextRequest) {
   try {
-    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
-  } catch (err: any) {
-    console.error("[Webhook] Signature verification failed:", err?.message || err);
-    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
-  }
-
-  // 2) Handle event types we care about
-  if (event.type !== "checkout.session.completed") {
-    // No-op for other events (safe to return 200)
-    return NextResponse.json({ received: true, ignored: event.type }, { status: 200 });
-  }
-
-  const session = event.data.object as Stripe.Checkout.Session;
-
-  // Defensive guards around optional fields
-  const stripeId = session.id; // unique per checkout session
-  const amountTotal = typeof session.amount_total === "number" ? session.amount_total : 0;
-  const currency = (session.currency || "aud").toUpperCase();
-  const meta = session.metadata || {};
-
-  const purpose = safeUpper<"PACKAGE" | "STAFF_SEAT">(meta.purpose, "PACKAGE"); // default to PACKAGE
-  const description = typeof meta.description === "string" ? meta.description : (session.mode || "Payment");
-  const userId = typeof meta.userId === "string" ? meta.userId : null;
-
-  // For PACKAGE purchases, we may also get packageType
-  const packageType = typeof meta.packageType === "string" ? meta.packageType : null;
-
-  // 3) Idempotency: bail if we've already recorded this session
-  const existing = await prisma.payment.findUnique({ where: { stripeId } }).catch(() => null);
-  if (existing) {
-    return NextResponse.json({ ok: true, idempotent: true }, { status: 200 });
-  }
-
-  // 4) Insert Payment row
-  //    Note: amount is stored in dollars (not cents) in your schema.
-  try {
-    if (!userId) {
-      // We expect userId metadata. If missing, still create a Payment without a user?
-      // To avoid referential issues, we require userId here. If you want to allow
-      // guest checkouts later, you can relax this (but your schema requires userId).
-      console.error("[Webhook] Missing userId metadata; cannot attribute payment.");
-      return NextResponse.json({ error: "Missing userId metadata" }, { status: 400 });
+    const sig = req.headers.get("stripe-signature");
+    if (!sig) {
+      return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.payment.create({
+    const rawBody = await getRawBody(req);
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error("[Webhook] Missing STRIPE_WEBHOOK_SECRET");
+      return NextResponse.json({ error: "Webhook misconfigured" }, { status: 500 });
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("[Webhook] Signature verification failed:", err?.message);
+      return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+    }
+
+    if (event.type !== "checkout.session.completed") {
+      // We only care about completed checkout sessions for payments.
+      return NextResponse.json({ received: true });
+    }
+
+    const session = event.data.object as Stripe.Checkout.Session;
+
+    // Metadata set in /api/checkout/create-session
+    const meta = (session.metadata || {}) as Record<string, string | undefined>;
+    const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) || "PACKAGE";
+    const packageType = (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
+    const userId = meta.userId; // present when user was signed in before checkout
+    const description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
+
+    // Stripe amounts are in cents; your Payment.amount is a Float in dollars
+    const amount = (session.amount_total || 0) / 100;
+    const currency = (session.currency || "aud").toLowerCase();
+
+    // Use the Checkout Session id as the unique stripeId (your model requires unique string)
+    const stripeId = session.id;
+
+    // Idempotency: skip if already recorded
+    const existing = await prisma.payment.findUnique({ where: { stripeId } });
+    if (existing) {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
+
+    // We require userId to attribute the payment. If Stripe metadata didn't include it,
+    // we still record the payment with a safe fallback (null user won't pass your schema,
+    // so we no-op in that case). This should not occur with your current flows.
+    if (!userId) {
+      console.warn("[Webhook] No userId in session metadata; payment not attributed.");
+      return NextResponse.json({ ok: true, unattributed: true });
+    }
+
+    // Create the Payment row
+    await prisma.payment.create({
+      data: {
+        userId,
+        amount,
+        currency,
+        stripeId,     // UNIQUE
+        description,
+        purpose,      // PACKAGE | STAFF_SEAT
+      },
+    });
+
+    // For plan purchases (PACKAGE), unlock access for this user
+    if (purpose === "PACKAGE") {
+      await prisma.user.update({
+        where: { id: userId },
         data: {
-          userId,
-          amount: amountTotal > 0 ? amountTotal / 100 : 0,
-          currency,
-          stripeId,
-          description,
-          purpose, // Prisma enum: "PACKAGE" | "STAFF_SEAT"
+          hasPaid: true,
+          packageType: packageType === "business" ? "business" : "individual",
         },
       });
+    }
 
-      // If this was a plan/package purchase, mark the user as paid
-      if (purpose === "PACKAGE") {
-        await tx.user.update({
-          where: { id: userId },
-          data: {
-            hasPaid: true,
-            ...(packageType ? { packageType } : {}),
-          },
-        });
-      }
-      // STAFF_SEAT: no user flags to set here (seat is for a staff account purchase).
-      // The existence of the Payment row is what the Billing UI needs to show the line item.
-    });
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("[Webhook] Failed to write payment:", err);
-    // Return 200 so Stripe doesn’t hammer retries forever if this was a logic error.
-    // If you want automatic retries, return 500 instead — but ensure your handler is idempotent (it is).
-    return NextResponse.json({ error: "Payment write failed" }, { status: 200 });
+    console.error("[Webhook] Unhandled error:", err);
+    return NextResponse.json({ error: "Webhook error" }, { status: 500 });
   }
-
-  return NextResponse.json({ ok: true }, { status: 200 });
 }

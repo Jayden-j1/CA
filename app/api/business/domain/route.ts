@@ -1,99 +1,74 @@
 // app/api/business/domain/route.ts
 //
-// Purpose:
-// - Return the "effective" business domain for the current session user
-//   (BUSINESS_OWNER or ADMIN with a businessId).
-// - If the Business.domain is missing, auto-derive it from the caller's email
-//   once and persist it, so future validations are consistent.
+// Purpose
+// -------
+// Return the *human-visible* company email domain for the current business owner:
 //
-// Why this endpoint?
-// - Client UX: Add Staff page can show "Only @example.com emails are allowed".
-// - Backend still enforces the rule in /api/staff/add (cannot be bypassed).
+// Priority:
+// 1) Business.emailDomain (if present in DB)
+// 2) The owner's email host (e.g. "example.com") as a safe fallback
+//
+// Why this fixes your symptom:
+// - The UI was showing the *internal handle* (Business.domain) like "ehealth-8ox1d1".
+// - This endpoint deliberately returns only the email domain suitable for staff validation,
+//   e.g. "health.com" so your client shows "@health.com".
 //
 // Security:
-// - Only BUSINESS_OWNER or ADMIN with a businessId can query.
-// - Returns { domain: string } on success, or 400/401/403 if invalid.
-//
-// Notes:
-// - If an ADMIN is not tied to a business (businessId == null), we cannot infer
-//   which business to resolve; return 400 in that case.
+// - Requires an authenticated session.
+// - Only BUSINESS_OWNER or ADMIN will get a business-based domain; other roles will get
+//   a null with a descriptive error.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-/** Helper: derive lowercase domain from an email address. */
-function extractDomain(email: string | null | undefined): string | null {
+function extractEmailDomain(email?: string | null): string | null {
   if (!email) return null;
-  const at = email.lastIndexOf("@");
+  const at = email.indexOf("@");
   if (at < 0 || at === email.length - 1) return null;
-  return email.slice(at + 1).toLowerCase().trim();
+  return email.slice(at + 1).toLowerCase();
 }
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const role = session.user.role;
-  const businessId = session.user.businessId || null;
+  const businessId = session.user.businessId;
 
-  // Only BUSINESS_OWNER or ADMIN with businessId can resolve a business domain
-  if (role !== "BUSINESS_OWNER" && role !== "ADMIN") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (!businessId) {
+  // Only business owners/admins (assigned to a business) can resolve a business domain
+  if ((role !== "BUSINESS_OWNER" && role !== "ADMIN") || !businessId) {
     return NextResponse.json(
-      { error: "No business assigned to this account" },
+      { error: "No business assigned to your account" },
       { status: 400 }
     );
   }
 
-  try {
-    // Load business
-    const business = await prisma.business.findUnique({
-      where: { id: businessId },
-      select: { id: true, domain: true },
-    });
+  // Look up the Business row
+  const business = await prisma.business.findUnique({
+    where: { id: businessId },
+    select: {
+      emailDomain: true,
+      owner: { select: { email: true } },
+    },
+  });
 
-    if (!business) {
-      return NextResponse.json({ error: "Business not found" }, { status: 400 });
-    }
-
-    // If domain missing, auto-derive from the caller's email and persist
-    let effectiveDomain = (business.domain || "").toLowerCase().trim();
-    if (!effectiveDomain) {
-      const callerDomain = extractDomain(session.user.email);
-      if (!callerDomain) {
-        return NextResponse.json(
-          { error: "Unable to derive domain from user email" },
-          { status: 400 }
-        );
-      }
-
-      try {
-        const updated = await prisma.business.update({
-          where: { id: business.id },
-          data: { domain: callerDomain },
-          select: { domain: true },
-        });
-        effectiveDomain = updated.domain.toLowerCase();
-        console.log("[Business/Domain] Persisted new domain:", effectiveDomain);
-      } catch (e: any) {
-        // On uniqueness or other constraints, still return the derived domain (not persisted)
-        effectiveDomain = callerDomain;
-        console.warn(
-          "[Business/Domain] Failed to persist domain; returning derived domain:",
-          effectiveDomain
-        );
-      }
-    }
-
-    return NextResponse.json({ domain: effectiveDomain });
-  } catch (err) {
-    console.error("[Business/Domain] Error:", err);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  if (!business) {
+    return NextResponse.json({ error: "Business not found" }, { status: 404 });
   }
+
+  // Prefer stored column; otherwise fall back to the owner’s email host
+  const domain = business.emailDomain || extractEmailDomain(business.owner?.email) || null;
+
+  if (!domain) {
+    return NextResponse.json(
+      { error: "Unable to resolve business email domain" },
+      { status: 400 }
+    );
+  }
+
+  return NextResponse.json({ domain });
 }
