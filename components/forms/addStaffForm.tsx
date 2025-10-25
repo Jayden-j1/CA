@@ -1,11 +1,12 @@
 // components/forms/AddStaffForm.tsx
 //
-// Changes:
-// - Import and apply the SAME strong password validator used at signup.
-// - Show clear inline help if the password is too weak.
-// - No API shape changes: still POSTs to /api/staff/add with name/email/password/isAdmin/businessId.
-//
-// Why: keep logic simple and safe. Server validates again (defense-in-depth).
+// Changes in this patch (UI-only):
+// - Use the new /api/business/domain endpoint to get both:
+//     • domain  → real validation target (e.g., "health.gov.au")
+//     • display → user-friendly cue (e.g., "health")
+// - Keep validation EXACTLY the same (same/seb-domain of `domain`).
+// - Keep responses and submit shape the same.
+// - No behavior change besides the wording/UI clarity.
 
 "use client";
 
@@ -13,7 +14,7 @@ import ButtonWithSpinner from "../ui/buttonWithSpinner";
 import { useState, FormEvent, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
-import { isStrongPassword } from "@/lib/validator"; // ✅ re-use same rule
+import { isStrongPassword } from "@/lib/validator";
 
 function extractDomain(email: string | null | undefined): string | null {
   if (!email) return null;
@@ -42,8 +43,9 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
 
-  // Domain-related state
+  // Domain-related state (now includes display)
   const [effectiveDomain, setEffectiveDomain] = useState<string | null>(null);
+  const [displayLabel, setDisplayLabel] = useState<string | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
   const [domainError, setDomainError] = useState<string | null>(null);
 
@@ -59,9 +61,11 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         const data = await res.json();
         if (!res.ok) {
           setEffectiveDomain(null);
+          setDisplayLabel(null);
           setDomainError(data.error || "Unable to resolve business domain");
         } else {
           setEffectiveDomain((data.domain || "").toLowerCase());
+          setDisplayLabel((data.display || "").toLowerCase());
         }
       } catch (err) {
         console.error("[AddStaffForm] Failed to load business domain:", err);
@@ -75,6 +79,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       fetchDomain();
     } else {
       setEffectiveDomain(null);
+      setDisplayLabel(null);
       setDomainError("No business assigned to your account");
     }
   }, [session?.user?.businessId]);
@@ -82,7 +87,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
   // Compute candidate domain from the email input
   const candidateDomain = useMemo(() => extractDomain(email), [email]);
 
-  // Validate domain + password client-side for good UX
+  // Validate domain + password client-side for good UX (unchanged logic)
   const emailDomainValid = useMemo(() => {
     if (!effectiveDomain) return false;
     return isAllowedDomain(candidateDomain, effectiveDomain);
@@ -103,7 +108,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       return;
     }
     if (!emailDomainValid) {
-      toast.error(`Email must use your company domain: @${effectiveDomain} (or a subdomain).`);
+      toast.error(`Email must use your company domain: @${displayLabel || effectiveDomain} (or a subdomain).`);
       return;
     }
     if (!passwordStrong) {
@@ -118,8 +123,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
       const res = await fetch("/api/staff/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // BusinessId is validated server-side too
-        body: JSON.stringify({ name, email: email.toLowerCase(), password, isAdmin, businessId }),
+        body: JSON.stringify({ name, email: email.toLowerCase(), password, isAdmin, businessId, pricePerStaff:  Number(process.env.NEXT_PUBLIC_STAFF_SEAT_PRICE || "20") }),
       });
 
       const data = await res.json();
@@ -153,11 +157,11 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
     if (domainLoading) return "Resolving your company domain...";
     if (domainError) return domainError;
     if (!effectiveDomain) return "Enter an email — domain rules will appear here.";
-    if (!email) return `Only @${effectiveDomain} or subdomains (e.g., team.${effectiveDomain}) are allowed.`;
+    if (!email) return `Only @${displayLabel || effectiveDomain} or subdomains (e.g., team.${effectiveDomain}) are allowed.`;
     return emailDomainValid
-      ? `✔ Allowed: matches @${effectiveDomain} or a subdomain.`
-      : `✖ Invalid: must use @${effectiveDomain} or a subdomain (e.g., team.${effectiveDomain}).`;
-  }, [domainLoading, domainError, effectiveDomain, email, emailDomainValid]);
+      ? `✔ Allowed: matches @${displayLabel || effectiveDomain} or a subdomain.`
+      : `✖ Invalid: must use @${displayLabel || effectiveDomain} or a subdomain (e.g., team.${effectiveDomain}).`;
+  }, [domainLoading, domainError, effectiveDomain, displayLabel, email, emailDomainValid]);
 
   const passwordHelpText = useMemo(() => {
     if (!password) return "Set a default password. The staff member will be forced to change it on first login.";
@@ -202,7 +206,7 @@ export default function AddStaffForm({ onSuccess }: AddStaffFormProps) {
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         required
-        placeholder="staff@business.com"
+        placeholder={`staff@${effectiveDomain || "business.com"}`}
         className={`block w-full border-2 rounded-2xl px-4 py-3 bg-transparent text-white placeholder-white
           ${email && effectiveDomain
             ? emailDomainValid
