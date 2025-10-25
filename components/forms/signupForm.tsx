@@ -11,6 +11,12 @@
  *  3) If origin === 'services' → create Stripe checkout and redirect to Stripe
  *     else → go straight to /dashboard
  *
+ * Patch (business flow via Sign-up page)
+ * --------------------------------------
+ * • New: If origin === 'signup' AND the user selects "business", we *do* send them
+ *   straight to checkout after successful sign-up (Sign-up → payment → dashboard),
+ *   matching your requested flow. Individuals remain unchanged.
+ *
  * Notes
  * -----
  * - DO NOT read window / pathname to decide behavior; server sends `origin`.
@@ -122,13 +128,45 @@ export default function SignupForm({
       }
 
       // 3) Branch by origin:
+      // ----------------------------------------------------------------
+      // A) If this is the "signup" page:
+      //    - INDIVIDUAL: go to dashboard (unchanged)
+      //    - BUSINESS:   go to checkout (Sign-up → payment → dashboard)
       if (origin === 'signup') {
-        // Direct to dashboard (user can upgrade later)
-        window.location.href = redirectTo;
+        if (userType === 'business') {
+          const checkoutRes = await fetch('/api/checkout/create-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ packageType: 'business' }),
+          });
+
+          if (!checkoutRes.ok) {
+            const msg = await safeMessage(checkoutRes);
+            console.error('[SignupForm] Checkout session (business@signup) failed:', msg);
+            // Land on Upgrade page (still logged in) so the user can retry
+            window.location.href = '/dashboard/upgrade?error=checkout';
+            return;
+          }
+
+          const { url } = (await checkoutRes.json()) as { url?: string };
+          if (url) {
+            window.location.href = url; // hard redirect to Stripe
+            return;
+          }
+
+          console.error('[SignupForm] Missing Stripe checkout URL in response');
+          window.location.href = '/dashboard/upgrade?error=no_url';
+          return;
+        }
+
+        // INDIVIDUAL via "signup" origin → unchanged behavior
+        window.location.href = redirectTo; // usually "/dashboard"
         return;
       }
 
-      // origin === 'services'
+      // ----------------------------------------------------------------
+      // B) If this is the "services" origin:
+      //    Respect postSignupBehavior (default 'checkout') for Individuals.
       if (postSignupBehavior === 'checkout') {
         const packageType = normalizePackage();
 
@@ -157,7 +195,7 @@ export default function SignupForm({
         return;
       }
 
-      // Alternate path: go straight to dashboard
+      // C) Alternate: go straight to dashboard
       window.location.href = redirectTo;
     } catch (err: any) {
       console.error('[SignupForm] Error:', err);
@@ -288,7 +326,9 @@ export default function SignupForm({
       {/* Footnote (SSR-stable) */}
       <p className="text-xs text-gray-500 text-center">
         {isSignupOrigin ? (
-          <>After signup you’ll land on your dashboard (you can upgrade any time).</>
+          userType === 'business'
+            ? <>After signup you’ll be taken to checkout for: <strong>business</strong>.</>
+            : <>After signup you’ll land on your dashboard (you can upgrade any time).</>
         ) : (
           <>After signup you’ll be taken to checkout for: <strong>{normalizePackage()}</strong></>
         )}
