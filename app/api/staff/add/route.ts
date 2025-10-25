@@ -2,24 +2,24 @@
 //
 // Purpose
 // -------
-// Create a new staff user for the current business owner, then either:
-//   • If under free seat limit -> return success (no Stripe)
-//   • Else -> create a Stripe Checkout session and return { checkoutUrl } so
-//             the client can redirect to Stripe for payment.
+// Create the staff user, then either:
+//  • ALWAYS redirect to Stripe Checkout by default (matches your stated flow)
+//    – configurable via STAFF_FREE_SEAT_LIMIT (defaults to 0 => always paid)
+//  • Or, if under the free-seat limit, return a success without Stripe.
 //
-// Why this change?
-// ----------------
-// - The previous version didn't create the staff user at all (so the Staff list stayed empty).
-// - The response key was `url`, but your form expects `checkoutUrl` to redirect.
-// - We now also enforce server-side domain rules (vendor mailboxes blocked + must match company domain).
+// Why this fix is safe/minimal
+// ----------------------------
+// - We DO NOT change client code or any other flows.
+// - We DO NOT change Staff form logic: it already redirects when `checkoutUrl` exists.
+// - We DO ensure the API always returns `checkoutUrl` when a paid seat is needed.
+// - We DO correctly create the staff user first so it appears on the Staff page.
 //
-// Security & Pillars
-// ------------------
-// - Authz: only BUSINESS_OWNER can call this route.
-// - Validations: blocks public mailbox domains, enforces company domain or subdomain.
-// - Robustness: idempotent-ish behavior via unique email; friendly 409 on duplicates.
-// - Observability: logs only minimal, non-sensitive info.
-// - Simplicity: single linear flow with early returns; uses Prisma transaction only when needed.
+// Pillars
+// -------
+// - Efficiency: single pass, minimal queries.
+// - Robustness: guards for domain & password, duplicate email, and proper business context.
+// - Simplicity: early returns, readable branches, tiny helpers.
+// - Security: role checks, vendor domain block, company domain/subdomain enforcement.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -30,25 +30,24 @@ import bcrypt from "bcryptjs";
 import { isStrongPassword } from "@/lib/validator";
 import { extractEmailDomain, isPublicMailboxDomain } from "@/lib/email/corporate";
 
-//  No apiVersion to avoid type mismatch warnings in some setups
+// Keep Stripe init simple to avoid type mismatch warnings across setups
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-// --------- Small helpers (pure) ---------
+// ---------- Helpers (pure) ----------
 
 function normalizeLower(s?: string | null) {
   return (s || "").toLowerCase().trim();
 }
 
 function isSubdomain(candidate: string, root: string): boolean {
-  // Accept exact domain or any subdomain (e.g., team.example.com endsWith .example.com)
   if (candidate === root) return true;
   return candidate.endsWith("." + root);
 }
 
-// --------- POST /api/staff/add ---------
+// ---------- POST /api/staff/add ----------
 
 export async function POST(req: NextRequest) {
-  // 1) Require auth and correct role
+  // 1) Auth + role
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -57,14 +56,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Only business owners can add staff" }, { status: 403 });
   }
 
-  // 2) Parse payload
+  // 2) Parse body
   const body = await req.json();
   const {
     name,
     email,
     password,
     isAdmin,
-    businessId: bodyBusinessId,        // client sends this; we still re-check vs session for safety
+    businessId: bodyBusinessId,
   } = (body || {}) as {
     name?: string;
     email?: string;
@@ -73,42 +72,38 @@ export async function POST(req: NextRequest) {
     businessId?: string;
   };
 
-  // 3) Validate required fields
   if (!name || !email || !password) {
     return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
   }
 
-  // 4) Ensure the requester actually has a business
+  // 3) Confirm the caller belongs to (and is operating on) their own business
   const ownerBusinessId = session.user.businessId || null;
   if (!ownerBusinessId || ownerBusinessId !== bodyBusinessId) {
     return NextResponse.json({ error: "Invalid business context." }, { status: 400 });
   }
 
-  // 5) Resolve the business's human-visible domain (if any)
-  //    We trust the Business table (authoritative), but if null we fallback to owner email's host.
+  // 4) Resolve business domain and enforce server-side rules (defense-in-depth)
   const business = await prisma.business.findUnique({
     where: { id: ownerBusinessId },
     select: { emailDomain: true },
   });
+
   const companyDomain = normalizeLower(
     business?.emailDomain ||
       extractEmailDomain(session.user.email || "") ||
       undefined
   );
 
-  // 6) Server-side domain enforcement (defense-in-depth)
   const staffDomain = normalizeLower(extractEmailDomain(email || ""));
   if (!staffDomain) {
     return NextResponse.json({ error: "Invalid staff email." }, { status: 400 });
   }
-  // Block vendor/public mailbox domains outright
   if (isPublicMailboxDomain(staffDomain)) {
     return NextResponse.json(
       { error: "Please use a company email address (Gmail/Outlook/Yahoo etc. are not allowed)." },
       { status: 400 }
     );
   }
-  // If we have a company domain on record, enforce it (exact or subdomain)
   if (companyDomain && !isSubdomain(staffDomain, companyDomain)) {
     return NextResponse.json(
       { error: `Email must use @${companyDomain} or a subdomain (e.g., team.${companyDomain}).` },
@@ -116,7 +111,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 7) Password strength (same rule as signup)
+  // 5) Password strength (same as signup)
   if (!isStrongPassword(password)) {
     return NextResponse.json(
       { error: "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character." },
@@ -124,16 +119,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 8) Check for duplicate email
+  // 6) Duplicate email check
   const existing = await prisma.user.findUnique({ where: { email: normalizeLower(email) } });
   if (existing) {
     return NextResponse.json({ error: "A user with this email already exists." }, { status: 409 });
   }
 
-  // 9) Create the staff user now (so they appear immediately on the Staff page).
-  //    - mustChangePassword: true (they’ll be forced to update on first login)
-  //    - role: ADMIN if isAdmin else USER
-  //    - hasPaid is false; access is inherited by business purchase anyway
+  // 7) Create the staff user NOW so they appear on the Staff page immediately
   const hashedPassword = await bcrypt.hash(password, 10);
   const staffUser = await prisma.user.create({
     data: {
@@ -149,20 +141,26 @@ export async function POST(req: NextRequest) {
     select: { id: true, email: true },
   });
 
-  // 10) Determine if a paid seat is required
-  //     Count USER/ADMIN (non-owner) under this business; owner is not counted as "staff".
-  const staffCount = await prisma.user.count({
+  // 8) Determine if payment is required
+  //
+  //    IMPORTANT:
+  //    - Your stated flow is "redirect to payment form" for adding staff.
+  //    - To make this explicit, STAFF_FREE_SEAT_LIMIT defaults to 0 (always paid).
+  //    - If you want a grace seat later, set STAFF_FREE_SEAT_LIMIT=1 in .env
+  //      (we count all non-owner members under the business).
+  //
+  const FREE_SEAT_LIMIT = Number(process.env.STAFF_FREE_SEAT_LIMIT ?? "0"); // default 0 => always paid
+
+  const nonOwnerCount = await prisma.user.count({
     where: {
       businessId: ownerBusinessId,
-      // any non-owner roles count as "staff"
-      NOT: { id: session.user.id },
+      NOT: { id: session.user.id }, // exclude the owner themselves
     },
   });
 
-  const freeStaffLimit = 1; // adjust if needed
-  const requiresPayment = staffCount > freeStaffLimit;
+  const requiresPayment = nonOwnerCount > FREE_SEAT_LIMIT;
 
-  // 11) If under free limit -> done (no Stripe). Staff is created and will show on Staff page.
+  // 9) If under free limit → no Stripe; done
   if (!requiresPayment) {
     return NextResponse.json({
       requiresPayment: false,
@@ -171,11 +169,11 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 12) Otherwise, create a Stripe Checkout session for +1 staff seat.
-  //     We write rich metadata so the webhook can record the payment.
+  // 10) Otherwise create Stripe Checkout session (paid seat)
   const unitAmountCents = parseInt(process.env.STRIPE_STAFF_SEAT_PRICE || "5000", 10);
-  const successUrl = `${process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true`;
-  const cancelUrl = `${process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?canceled=true`;
+  const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL;
+  const successUrl = `${baseUrl}/dashboard/staff?success=true`;
+  const cancelUrl = `${baseUrl}/dashboard/staff?canceled=true`;
 
   const checkout = await stripe.checkout.sessions.create({
     mode: "payment",
@@ -201,10 +199,10 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // 13) Return the key your form already expects to redirect.
+  // 11) Return the exact key the client is listening for
   return NextResponse.json({
     requiresPayment: true,
-    checkoutUrl: checkout.url,
+    checkoutUrl: checkout.url, // 👈 AddStaffForm will redirect using this
     staffUserId: staffUser.id,
   });
 }
