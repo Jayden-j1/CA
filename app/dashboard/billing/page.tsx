@@ -2,17 +2,15 @@
 //
 // Purpose:
 // - Billing dashboard that lists payments with simple filters and CSV export.
-// - (Fixed) React rule-of-hooks: ALL hooks now appear before any conditional returns.
-//
-// What changed (high level):
-// - Moved all useState/useEffect/useMemo above the early return that shows the loading/redirect screen.
-// - Guarded effects so they only run when the user is allowed to view billing.
+// - ✅ FIX: Use /api/payments/check fast-probe (with brief polling on success)
+//   to decide visibility, so Billing doesn’t bounce back to home while the
+//   NextAuth session is still catching up.
 //
 // Pillars:
-// - Efficiency: fetch only when allowed, debounce-heavy work not needed.
-// - Robustness: server-side rules still enforced in /api/payments/history.
-// - Simplicity & ease of management: minimal changes; same UX.
-// - Security: UI guards mirror server rules, but server remains source of truth.
+// - Efficiency: fetch only when allowed; state persisted via localStorage.
+// - Robustness: server-side rules remain enforced by /api/payments/history.
+// - Simplicity/ease of mgmt: minimal changes; preserves UX.
+// - Security: server is the source of truth (no client-side flips).
 
 "use client";
 
@@ -20,6 +18,7 @@ import { Suspense } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { usePaidAccess } from "@/hooks/usePaidAccess";
 
 interface PaymentRecord {
   id: string;
@@ -31,7 +30,7 @@ interface PaymentRecord {
   user?: {
     email: string;
     name: string | null;
-    role: string; // USER | ADMIN | BUSINESS_OWNER
+    role: string;
   };
 }
 
@@ -53,8 +52,6 @@ function PurposeBadge({ purpose }: { purpose: string }) {
   );
 }
 
-// ---------- Page wrapper with Suspense ----------
-// (unchanged)
 export default function BillingPage() {
   return (
     <Suspense
@@ -69,34 +66,32 @@ export default function BillingPage() {
   );
 }
 
-// ---------- Main component (fixed hook order) ----------
 function BillingPageInner() {
-  // 1) ALWAYS declare hooks before any conditional return
-  // ----------------------------------------------------
+  // 1) Session & fast access probe (do this BEFORE any conditional returns)
   const { data: session, status } = useSession();
   const router = useRouter();
+  const access = usePaidAccess(); // { loading, hasAccess }
 
-  // Derive flags used for access gating (pure computation, safe before returns)
+  // User attributes
   const role = session?.user?.role;
   const businessId = session?.user?.businessId || null;
-  const hasPaid = !!session?.user?.hasPaid;
 
-  // Memoized gate: who is allowed to see Billing UI?
+  // Allow Billing?
+  // - BUSINESS_OWNER / ADMIN → always
+  // - USER staff-seat (businessId!=null) → never
+  // - USER individual → only if access.hasAccess (probe ensures no lag)
   const allowBilling = useMemo(() => {
     if (!role) return false;
-
     if (role === "BUSINESS_OWNER" || role === "ADMIN") return true;
-
     if (role === "USER") {
-      const isStaffSeatUser = !!businessId;
-      if (isStaffSeatUser) return false; // staff-seat (role USER, tied to business) cannot see billing
-      return hasPaid; // individual users must be paid to see billing
+      const isStaff = !!businessId;
+      if (isStaff) return false;
+      return access.hasAccess === true;
     }
-
     return false;
-  }, [role, businessId, hasPaid]);
+  }, [role, businessId, access.hasAccess]);
 
-  // Local UI state (MUST be above any return)
+  // Local UI state (declared before returns)
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,7 +102,7 @@ function BillingPageInner() {
   const [userSearch, setUserSearch] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Persisted filters (read once on mount)
+  // Persisted filters
   useEffect(() => {
     const storedPurpose = localStorage.getItem("billing:purposeFilter");
     const storedUser = localStorage.getItem("billing:userFilter");
@@ -118,15 +113,16 @@ function BillingPageInner() {
     }
   }, []);
 
-  // Redirect users who are not allowed — only after session has resolved.
+  // Redirect only AFTER session has resolved AND the access probe says no access.
   useEffect(() => {
     if (status === "loading") return;
+    if (access.loading) return;
     if (!allowBilling) {
       router.replace("/dashboard");
     }
-  }, [status, allowBilling, router]);
+  }, [status, access.loading, allowBilling, router]);
 
-  // Fetch helper (no hooks inside; safe to define here)
+  // Fetch helper
   const fetchPayments = async () => {
     try {
       setLoading(true);
@@ -134,7 +130,9 @@ function BillingPageInner() {
       if (purposeFilter !== "ALL") params.set("purpose", purposeFilter);
       if (userFilter) params.set("user", userFilter);
 
-      const res = await fetch(`/api/payments/history?${params.toString()}`);
+      const res = await fetch(`/api/payments/history?${params.toString()}`, {
+        cache: "no-store",
+      });
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.error || "Failed to load payments");
@@ -150,29 +148,26 @@ function BillingPageInner() {
     }
   };
 
-  // Re-fetch when filters change — but only when:
-  // - session is authenticated
-  // - and the user is allowed to view billing
+  // Re-fetch when filters change — but only when user is allowed and probe finished
   useEffect(() => {
-    // Save filters for next visit
     localStorage.setItem("billing:purposeFilter", purposeFilter);
     localStorage.setItem("billing:userFilter", userFilter);
 
     if (status !== "authenticated") return;
+    if (access.loading) return;
     if (!allowBilling) return;
 
     fetchPayments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [purposeFilter, userFilter, status, allowBilling]);
+  }, [purposeFilter, userFilter, status, allowBilling, access.loading]);
 
-  // Derived suggestion list (pure computation)
+  // Suggestions
   const filteredSuggestions = users.filter(
     (u) =>
       u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
       (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
-  // CSV export (pure UI helper)
   const exportCSV = () => {
     const headers = [
       "User",
@@ -207,19 +202,25 @@ function BillingPageInner() {
     link.click();
   };
 
-  // 2) Now it’s safe to conditionally return UI
-  // -------------------------------------------
-  // We kept your UX: while session is loading OR user can’t access, show a simple screen.
-  if (status === "loading" || !allowBilling) {
+  // Early UI states:
+  if (status === "loading" || access.loading) {
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
-        <p className="text-white text-xl">Loading billing...</p>
+        <p className="text-white text-xl">Loading billing…</p>
       </section>
     );
   }
 
-  // 3) Main UI (unchanged except for comments)
-  // ------------------------------------------
+  if (!allowBilling) {
+    // Router will redirect, but render a friendly state meanwhile.
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Redirecting…</p>
+      </section>
+    );
+  }
+
+  // Main UI
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-20 flex flex-col items-center">
       <h1 className="text-white font-bold text-4xl sm:text-5xl mb-8">
@@ -228,7 +229,6 @@ function BillingPageInner() {
 
       {/* Filters + Export */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6 relative">
-        {/* Purpose Filter */}
         <select
           value={purposeFilter}
           onChange={(e) => setPurposeFilter(e.target.value)}
@@ -239,7 +239,6 @@ function BillingPageInner() {
           <option value="STAFF_SEAT">Staff Seats</option>
         </select>
 
-        {/* User Search (only shown if server provided a user list) */}
         {users.length > 0 && (
           <div className="relative">
             <input
@@ -284,7 +283,6 @@ function BillingPageInner() {
           </div>
         )}
 
-        {/* CSV Export Button */}
         <button
           onClick={exportCSV}
           className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white text-sm font-bold rounded shadow cursor-pointer"
@@ -293,7 +291,6 @@ function BillingPageInner() {
         </button>
       </div>
 
-      {/* Table */}
       {loading ? (
         <p className="text-white">Loading payments...</p>
       ) : error ? (

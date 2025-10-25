@@ -2,51 +2,42 @@
 //
 // Why this structure?
 // -------------------
-// Next.js App Router prefers that components calling `useSearchParams()`
-// render within a <Suspense> boundary. This file provides:
-//   1) A small page wrapper that renders <Suspense fallback=...>
-//   2) The original logic inside <MapPageInner/>
+// The Map is inherently client-side (Google Maps SDK / DOM APIs). Making the
+// *page* a Server Component wouldn't yield a practical win because the map
+// itself forces a client boundary. Instead, we:
+//   • Keep this page client-side
+//   • Use a single shared, authoritative access probe (usePaidAccess())
+//   • Briefly poll after Stripe success (?success=true) so unlock is instant
 //
-// What’s fixed here?
-// ------------------
+// What’s fixed / improved?
+// ------------------------
+// • Replaced ad-hoc polling with the shared usePaidAccess() hook
 // • Corrected Tailwind class typo: "bg-linear-to-b" → "bg-gradient-to-b"
-//   (cosmetic, avoids invalid class). Access logic stays identical.
+// • Removed duplicate state/redirect guards (less room for race conditions)
+// • Consistent UX states: "Checking..." → unlock → render map
 //
 // Pillars
 // -------
-// - Simplicity / Robustness: minimal, explicit changes.
-// - Efficiency: client-side only.
-// - Security: unchanged (still gated by /api/payments/check).
+// - Efficiency: tiny fetches; polling only after success.
+// - Robustness: single source of truth (/api/payments/check).
+// - Simplicity: minimal code, consistent with Billing/Course.
+// - Security: read-only probe; server owns paid state.
 
 "use client";
 
-import { Suspense } from "react";
-import { useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { Suspense, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { usePaidAccess } from "@/hooks/usePaidAccess";
 import GoogleMapComponent from "@/components/GoogleMap/GoogleMapComponent";
 
-// ------------------------------
-// Access check response typing
-// ------------------------------
-interface PaymentCheckResponse {
-  hasAccess: boolean;
-  packageType: "individual" | "business" | null;
-  latestPayment: {
-    id: string;
-    createdAt: string;
-    amount: number;
-  } | null;
-}
-
-// -----------------------------------------------------
-// Page wrapper: provides Suspense around the inner page
-// -----------------------------------------------------
+// ---------------------------------------------
+// Page wrapper: keep Suspense for URL params etc.
+// ---------------------------------------------
 export default function MapPage() {
   return (
     <Suspense
       fallback={
-        <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
+        <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
           <p className="text-white text-xl">Loading map…</p>
         </section>
       }
@@ -56,128 +47,57 @@ export default function MapPage() {
   );
 }
 
-// -----------------------------------------------------
-// Inner page
-// -----------------------------------------------------
+// ---------------------------------------------
+// Inner page (client) using the unified probe
+// ---------------------------------------------
 function MapPageInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const { data: session, status } = useSession();
+  const access = usePaidAccess(); // { loading, hasAccess, inheritedFrom?, healed? }
 
-  // Null-safe query param usage.
-  const justSucceeded = (searchParams?.get("success") ?? "") === "true";
-
-  // ---------- UI / data state ----------
-  const [loading, setLoading] = useState(true);
-  const [hasAccess, setHasAccess] = useState(false);
-  const [packageType, setPackageType] =
-    useState<"individual" | "business" | null>(null);
-  const [latestPayment, setLatestPayment] =
-    useState<PaymentCheckResponse["latestPayment"]>(null);
-
-  // Prevent duplicate redirects (helps with React strict mode double-invoke)
-  const didRedirect = useRef(false);
-
-  // -----------------------------------------------------
-  // Authoritative access check + short polling after checkout
-  // -----------------------------------------------------
+  // Redirect to Upgrade only when we are certain access is not granted.
   useEffect(() => {
-    const ac = new AbortController();
+    if (access.loading) return;
+    if (!access.hasAccess) {
+      router.replace("/dashboard/upgrade");
+    }
+  }, [access.loading, access.hasAccess, router]);
 
-    const checkOnce = async () => {
-      const res = await fetch("/api/payments/check", {
-        signal: ac.signal,
-        cache: "no-store",
-      });
-      const data: PaymentCheckResponse = await res.json();
-      return { ok: res.ok, data };
-    };
-
-    const run = async () => {
-      if (status === "loading") return;
-
-      try {
-        // Optimistic unlock if session already has paid flag.
-        if (session?.user?.hasPaid) {
-          setHasAccess(true);
-        }
-
-        // Server truth
-        const first = await checkOnce();
-
-        if (first.ok && first.data.hasAccess) {
-          setHasAccess(true);
-          setPackageType(first.data.packageType);
-          setLatestPayment(first.data.latestPayment);
-          return; // done
-        }
-
-        // Post-checkout: poll a few times until webhook lands
-        if (justSucceeded) {
-          const maxAttempts = 8; // ~12s total @ 1.5s each
-          const delayMs = 1500;
-          for (let i = 0; i < maxAttempts; i++) {
-            await new Promise((r) => setTimeout(r, delayMs));
-            const retry = await checkOnce();
-            if (retry.ok && retry.data.hasAccess) {
-              setHasAccess(true);
-              setPackageType(retry.data.packageType);
-              setLatestPayment(retry.data.latestPayment);
-              return; // done
-            }
-          }
-        }
-
-        // Still no access → redirect once
-        if (!didRedirect.current) {
-          didRedirect.current = true;
-          router.push("/dashboard/upgrade");
-        }
-      } catch (err) {
-        if (!(err instanceof DOMException && err.name === "AbortError")) {
-          console.error("[MapPage] Access check failed:", err);
-          if (!didRedirect.current) {
-            didRedirect.current = true;
-            router.push("/dashboard/upgrade");
-          }
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    run();
-    return () => ac.abort();
-  }, [status, session?.user?.hasPaid, router, justSucceeded]);
-
-  // ---------- Render states ----------
-  if (loading) {
+  // Loading (single source of truth)
+  if (access.loading) {
     return (
-      <section className="w-full min-h-screen flex items-center justify-center bg-linear-to-b from-blue-700 to-blue-300">
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
         <p className="text-white text-xl">
-          {justSucceeded ? "Finalizing your payment..." : "Checking map access..."}
+          Finalizing your payment…
         </p>
       </section>
     );
   }
 
-  if (!hasAccess) return null;
+  // If we’re redirecting, render a friendly state (prevents flicker)
+  if (!access.hasAccess) {
+    return (
+      <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
+        <p className="text-white text-xl">Redirecting…</p>
+      </section>
+    );
+  }
 
-  // ---------- Main content ----------
+  // ✅ Paid users see the Map immediately
   return (
-    <section className="w-full min-h-screen bg-linear-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
-      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-3">Interactive Map</h1>
+    <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-16 flex flex-col items-center">
+      <h1 className="text-white font-bold text-4xl sm:text-5xl mb-6">
+        Interactive Map
+      </h1>
 
-      {/* Package/payment info (purely informational) */}
-      {packageType && (
-        <p className="text-white mb-1 text-lg">
-          You are on the <strong>{packageType}</strong> package.
+      {/* Optional: show inherited/healed info for clarity (non-blocking) */}
+      {access.inheritedFrom === "business" && (
+        <p className="text-white/90 mb-2 text-sm">
+          Access inherited from your business owner.
         </p>
       )}
-      {latestPayment && (
-        <p className="text-white mb-6 text-md">
-          Last purchase: <strong>${latestPayment.amount}</strong> on{" "}
-          {new Date(latestPayment.createdAt).toLocaleDateString()}
+      {access.healed && (
+        <p className="text-white/90 mb-6 text-sm">
+          Your access was refreshed from your recent payment.
         </p>
       )}
 
