@@ -2,30 +2,21 @@
 //
 // Purpose
 // -------
-// Create a Stripe Checkout Session specifically for "Staff Seat" purchases.
-// The payment is attributed to the *owner* (payer), but we now also include
-// the *beneficiary* (staff) in Stripe metadata so the webhook can persist a
-// clear description. This lets the Billing UI show the *staff* identity
-// in the "User" column for STAFF_SEAT payments.
+// Create a Stripe Checkout Session for *Staff Seat* purchases. We attribute the
+// payment to the *payer* (owner/admin) but now also pass the *beneficiary*
+// (staff) in metadata so Billing can show the correct person in the "User" column.
 //
-// What changed (surgical, backward-compatible):
-// - We *optionally* accept name/email/isAdmin in the POST body (as already sent
-//   by your AddStaffForm) and pass them through as Stripe metadata:
-//     • staffEmail
-//     • staffName
-//     • staffRole ("ADMIN" | "USER")
-// - Nothing else about the flow is touched.
+// What changed (surgical):
+// - Accept optional staff identity fields from the AddStaff form.
+// - Include staffEmail/staffName/staffRole in Stripe metadata.
+// - Everything else (pricing, auth, redirects) is unchanged.
 //
 // Security:
-// - Server still gates: BUSINESS_OWNER or business-scoped ADMIN only.
-// - We never trust client price; unit_amount uses env (fallback only if needed).
+// - Only BUSINESS_OWNER or business-scoped ADMIN can call.
+// - We still prefer env pricing; client price is only a fallback.
 //
-// Pillars:
-// - Efficiency: no extra DB work here.
-// - Robustness: all fields optional; existing flows keep working.
-// - Simplicity: metadata-only for downstream display.
-// - Ease of management: minimal, well-commented diff.
-// - Security: gating + env-driven pricing unchanged.
+// Pillars: efficiency (no extra DB ops), robustness (all fields optional),
+// simplicity (metadata only), security (server gating), ease of mgmt (tiny diff).
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -36,13 +27,11 @@ import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: NextRequest) {
-  // 1) Require authenticated session
+  // 1) Auth
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  // 2) Allow BUSINESS_OWNER and business-scoped ADMIN (ADMIN with businessId)
   const isOwner = session.user.role === "BUSINESS_OWNER";
   const isBizAdmin = session.user.role === "ADMIN" && !!session.user.businessId;
   if (!isOwner && !isBizAdmin) {
@@ -50,33 +39,28 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // We accept both the newer "hint-only" body and the existing form payload.
+    // 2) Parse body (AddStaffForm sends these)
     const body = await req.json();
-
-    // Price hint (never trusted in prod—env rules the real price)
     const pricePerStaff = Number(body?.pricePerStaff ?? 0);
 
-    // Optional staff identity passed from AddStaffForm (non-breaking)
+    // Optional: staff identity for Billing display
     const staffName: string | undefined = body?.name || body?.staffName || undefined;
     const staffEmail: string | undefined = body?.email || body?.staffEmail || undefined;
     const staffRole: "ADMIN" | "USER" | undefined =
       body?.staffRole ||
       (typeof body?.isAdmin === "boolean" ? (body.isAdmin ? "ADMIN" : "USER") : undefined);
 
-    // 3) Count current staff for this business to determine if payment is required
+    // 3) Free-seat check (business-scoped)
     const businessId = session.user.businessId!;
     const staffCount = await prisma.user.count({
       where: { businessId, role: "USER", isActive: true },
     });
-
     const FREE_SEAT_LIMIT = Number(process.env.STAFF_FREE_SEAT_LIMIT ?? "0");
-
     if (staffCount < FREE_SEAT_LIMIT) {
-      // Under the free limit → no Stripe session, caller continues with free creation
       return NextResponse.json({ requiresPayment: false });
     }
 
-    // 4) Build unit amount in cents from env (fallback to provided hint)
+    // 4) Price (prefer env; fall back to provided hint)
     const unitAmountCents = Number(
       process.env.STRIPE_STAFF_SEAT_PRICE ?? Math.round(pricePerStaff * 100)
     );
@@ -84,12 +68,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid staff seat price" }, { status: 400 });
     }
 
-    // 5) Success / cancel URLs land back on the Staff page per your flow
+    // 5) Success/cancel
     const baseUrl = process.env.NEXTAUTH_URL!;
-    const successUrl = `${baseUrl}/dashboard/staff?success=true${staffEmail ? `&staff=${encodeURIComponent(staffEmail)}` : ""}`;
+    const successUrl = `${baseUrl}/dashboard/staff?success=true${
+      staffEmail ? `&staff=${encodeURIComponent(staffEmail)}` : ""
+    }`;
     const cancelUrl = `${baseUrl}/dashboard/staff?canceled=true`;
 
-    // 6) Create a Stripe Checkout Session
+    // 6) Stripe session with *beneficiary* metadata
     const stripeSession = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -105,14 +91,11 @@ export async function POST(req: NextRequest) {
       ],
       success_url: successUrl,
       cancel_url: cancelUrl,
-
-      // ✅ Critical metadata for downstream webhook/UX
       metadata: {
         purpose: "STAFF_SEAT",
         packageType: "staff_seat",
         description: "Staff Seat",
-        userId: session.user.id,            // payer (owner/admin of this business)
-        // beneficiary (optional; used only for display in Billing)
+        userId: session.user.id, // payer (owner/admin)
         ...(staffEmail ? { staffEmail } : {}),
         ...(staffName ? { staffName } : {}),
         ...(staffRole ? { staffRole } : {}),

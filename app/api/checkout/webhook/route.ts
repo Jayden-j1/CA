@@ -2,58 +2,36 @@
 //
 // Purpose
 // -------
-// Verify Stripe, upsert Payment, unlock access. For STAFF_SEAT purchases,
-// we now encode the *beneficiary* (actual staff) in Payment.description,
-// so Billing can render the staff member in the "User" column.
+// Secure Stripe webhook receiver: verify signature, record Payment (idempotent),
+// unlock access for PACKAGE. NEW: For STAFF_SEAT, we encode the *beneficiary*
+// (staff) in Payment.description so the Billing UI can display the staff user.
 //
-// What changed (surgical):
-// - When purpose === "STAFF_SEAT", build a human-friendly description:
-//     "Staff Seat for {NameOrEmail} <email> (ROLE)"
-// - PACKAGE flow unchanged. Attribution (userId) remains the payer.
-// - Still idempotent and secure.
-//
-// Pillars:
-// - Efficiency: single pass; minimal conditionals.
-// - Robustness: falls back gracefully if metadata missing.
-// - Simplicity: no schema change; use existing `description` field.
-// - Ease of management: predictable description format for the UI to parse.
-// - Security: signature verification unchanged.
+// Change footprint: minimal; PACKAGE flow untouched; DB shape unchanged.
 
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/prisma";
 import Stripe from "stripe";
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+export const config = { api: { bodyParser: false } };
 
 async function getRawBody(req: Request): Promise<Buffer> {
-  const arrayBuffer = await req.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  const ab = await req.arrayBuffer();
+  return Buffer.from(ab);
 }
 
 export async function POST(req: NextRequest) {
   try {
     const sig = req.headers.get("stripe-signature");
-    if (!sig) {
-      return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
-    }
+    if (!sig) return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
 
     const rawBody = await getRawBody(req);
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      console.error("[Webhook] Missing STRIPE_WEBHOOK_SECRET");
-      return NextResponse.json({ error: "Webhook misconfigured" }, { status: 500 });
-    }
-
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
     let event: Stripe.Event;
     try {
       event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
-    } catch (err: any) {
-      console.error("[Webhook] Signature verification failed:", err?.message);
+    } catch (e: any) {
+      console.error("[Webhook] Signature verification failed:", e?.message);
       return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
     }
 
@@ -64,58 +42,50 @@ export async function POST(req: NextRequest) {
     const session = event.data.object as Stripe.Checkout.Session;
     const meta = (session.metadata || {}) as Record<string, string | undefined>;
 
-    const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) || "PACKAGE";
-    const packageType = (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
-    const userId = meta.userId; // payer (owner/admin/individual)
+    const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) ?? "PACKAGE";
+    const packageType =
+      (meta.packageType as "individual" | "business" | "staff_seat" | undefined) ?? "individual";
+    const userId = meta.userId; // payer
     const amount = (session.amount_total || 0) / 100;
     const currency = (session.currency || "aud").toLowerCase();
     const stripeId = session.id;
 
-    // Skip duplicates (idempotent)
+    // Idempotent write
     const existing = await prisma.payment.findUnique({ where: { stripeId } });
-    if (existing) {
-      return NextResponse.json({ ok: true, duplicate: true });
-    }
+    if (existing) return NextResponse.json({ ok: true, duplicate: true });
 
     if (!userId) {
       console.warn("[Webhook] No userId in metadata; cannot attribute payment.");
       return NextResponse.json({ ok: true, unattributed: true });
     }
 
-    // Build a robust description:
-    // - PACKAGE: keep original or sane default
-    // - STAFF_SEAT: embed the staff beneficiary (if provided)
-    let description: string;
+    // Build description (beneficiary for STAFF_SEAT)
+    let description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
     if (purpose === "STAFF_SEAT") {
       const staffEmail = meta.staffEmail;
-      const staffName = meta.staffName;
-      const staffRole = (meta.staffRole === "ADMIN" ? "ADMIN" : "USER");
-
-      // Predictable string so the UI can parse safely:
-      // "Staff Seat for Alice Smith <alice@org.com> (ADMIN)"
+      const staffName = meta.staffName?.trim();
+      const staffRole = meta.staffRole === "ADMIN" ? "ADMIN" : "USER";
       if (staffEmail) {
-        const label = staffName?.trim() || staffEmail;
+        const label = staffName || staffEmail;
         description = `Staff Seat for ${label} <${staffEmail}> (${staffRole})`;
       } else {
-        description = meta.description || "Staff Seat";
+        description = "Staff Seat";
       }
-    } else {
-      description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
     }
 
-    // Persist Payment
+    // Write Payment
     await prisma.payment.create({
       data: {
-        userId,
+        userId,        // payer (owner/admin/individual)
         amount,
         currency,
-        stripeId,
-        description,
-        purpose,
+        stripeId,      // UNIQUE
+        description,   // includes beneficiary for STAFF_SEAT
+        purpose,       // PACKAGE | STAFF_SEAT
       },
     });
 
-    // Unlock for PACKAGE purchases (owner/individual)
+    // Unlock for PACKAGE purchases
     if (purpose === "PACKAGE") {
       await prisma.user.update({
         where: { id: userId },
