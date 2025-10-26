@@ -2,11 +2,9 @@
 //
 // Purpose
 // -------
-// Secure Stripe webhook receiver: verify signature, record Payment (idempotent),
-// unlock access for PACKAGE. NEW: For STAFF_SEAT, we encode the *beneficiary*
-// (staff) in Payment.description so the Billing UI can display the staff user.
-//
-// Change footprint: minimal; PACKAGE flow untouched; DB shape unchanged.
+// Verify Stripe signature, persist Payment (idempotent), and unlock PACKAGE.
+// For STAFF_SEAT we encode the beneficiary in the description so the Billing UI
+// can show the staff member instead of the payer.
 
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -25,11 +23,11 @@ export async function POST(req: NextRequest) {
     const sig = req.headers.get("stripe-signature");
     if (!sig) return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
 
-    const rawBody = await getRawBody(req);
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+    const raw = await getRawBody(req);
+    const secret = process.env.STRIPE_WEBHOOK_SECRET!;
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+      event = stripe.webhooks.constructEvent(raw, sig, secret);
     } catch (e: any) {
       console.error("[Webhook] Signature verification failed:", e?.message);
       return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
@@ -45,12 +43,13 @@ export async function POST(req: NextRequest) {
     const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) ?? "PACKAGE";
     const packageType =
       (meta.packageType as "individual" | "business" | "staff_seat" | undefined) ?? "individual";
-    const userId = meta.userId; // payer
+    const userId = meta.userId; // payer (owner/admin/individual)
+
     const amount = (session.amount_total || 0) / 100;
     const currency = (session.currency || "aud").toLowerCase();
     const stripeId = session.id;
 
-    // Idempotent write
+    // Idempotency
     const existing = await prisma.payment.findUnique({ where: { stripeId } });
     if (existing) return NextResponse.json({ ok: true, duplicate: true });
 
@@ -59,33 +58,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, unattributed: true });
     }
 
-    // Build description (beneficiary for STAFF_SEAT)
-    let description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
+    // Build description with beneficiary for Staff Seats
+    let description =
+      meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
     if (purpose === "STAFF_SEAT") {
       const staffEmail = meta.staffEmail;
       const staffName = meta.staffName?.trim();
       const staffRole = meta.staffRole === "ADMIN" ? "ADMIN" : "USER";
-      if (staffEmail) {
-        const label = staffName || staffEmail;
-        description = `Staff Seat for ${label} <${staffEmail}> (${staffRole})`;
-      } else {
-        description = "Staff Seat";
-      }
+      description = staffEmail
+        ? `Staff Seat for ${staffName || staffEmail} <${staffEmail}> (${staffRole})`
+        : "Staff Seat";
     }
 
-    // Write Payment
+    // Persist payment
     await prisma.payment.create({
       data: {
-        userId,        // payer (owner/admin/individual)
+        userId,        // payer
         amount,
         currency,
-        stripeId,      // UNIQUE
-        description,   // includes beneficiary for STAFF_SEAT
-        purpose,       // PACKAGE | STAFF_SEAT
+        stripeId,
+        description,   // carries beneficiary for STAFF_SEAT
+        purpose,
       },
     });
 
-    // Unlock for PACKAGE purchases
+    // Unlock PACKAGE
     if (purpose === "PACKAGE") {
       await prisma.user.update({
         where: { id: userId },

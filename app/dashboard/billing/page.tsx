@@ -2,12 +2,9 @@
 //
 // Purpose
 // -------
-// Billing UI. NEW: For STAFF_SEAT rows, if description includes a beneficiary
-// in the format "Staff Seat for {NameOrEmail} <email> (ROLE)", render that
-// staff user (name/email/role) instead of the payer.
-//
-// Scope: only table rendering + CSV export use the parsed beneficiary.
-// Filters, access rules, and data fetching remain untouched.
+// Billing UI. For STAFF_SEAT rows, if description includes a beneficiary
+// "Staff Seat for {NameOrEmail} <email> (ROLE)", show that staff member in
+// the "User" column; otherwise show the payer (existing behavior).
 
 "use client";
 
@@ -48,7 +45,7 @@ function PurposeBadge({ purpose }: { purpose: string }) {
   );
 }
 
-// ── NEW: parse "Staff Seat for {Name} <email> (ROLE)" → {name,email,role}
+// Parse "Staff Seat for {Name} <email> (ROLE)" → { name, email, role }
 function parseStaffBeneficiary(desc: string | undefined) {
   if (!desc) return null;
   const m = desc.match(/Staff Seat for (.+?) <([^>]+)>\s*\(([^)]+)\)/i);
