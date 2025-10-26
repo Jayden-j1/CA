@@ -7,9 +7,9 @@
 // - Writes metadata for robust webhook handling
 // - Returns dashboard success/cancel URLs so we don't bounce back to /services
 //
-// ⚙️ Small robustness addition:
+// 🔧 Robustness addition:
 // - Provide `customer_email` when a session user exists so the webhook can
-//   always attribute the payment (fallback via email).
+//   always attribute the payment via email fallback (if metadata.userId is absent).
 
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
     const userId = session?.user?.id || null;
     const userEmail = session?.user?.email || undefined;
 
-    // Send users back to the right dashboard areas
+    // Return to the correct area of the dashboard after payment/cancel.
     const successUrl =
       packageType === "staff_seat"
         ? `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/staff?success=true`
@@ -60,7 +60,6 @@ export async function POST(req: Request) {
     const checkout = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
-      // ✅ Add a single item with server-driven price
       line_items: [
         {
           price_data: {
@@ -71,19 +70,18 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
-      // ✅ URLs
       success_url: successUrl,
       cancel_url: cancelUrl,
 
-      // ✅ NEW: set payer email when known (makes webhook fallback 100% reliable)
+      // ✅ Ensures webhook can attribute payer even if userId metadata is missing
       ...(userEmail ? { customer_email: userEmail } : {}),
 
-      // ✅ Metadata used by webhook to classify and attribute payment
+      // Metadata used by webhook
       metadata: {
         purpose: packageType === "staff_seat" ? "STAFF_SEAT" : "PACKAGE",
         packageType,
         description: productName,
-        ...(userId ? { userId } : {}), // still send userId when we have it
+        ...(userId ? { userId } : {}),
       },
     });
 
