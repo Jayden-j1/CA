@@ -4,21 +4,15 @@
 // -------
 // Render Sanity Portable Text (blocks[]) with:
 //  • headings, paragraphs, and lists
-//  • inline IMAGES (using @sanity/image-url → urlFor())
+//  • inline IMAGES (via @sanity/image-url → urlFor())
 //  • inline VIDEO EMBEDS (custom "videoEmbed" object) via <VideoPlayer />
-//  • CODE blocks (with <pre><code> styling)
-//  • CALLOUT objects (note/tip/warning panels)
+//  • CODE blocks
+//  • CALLOUT objects
 //
-// Usage
-// -----
-// <PortableTextRenderer value={blocksArray} className="prose prose-blue max-w-none" />
+// NOTE: No behavior change except that <VideoPlayer /> now smart-embeds
+// common providers (YouTube/Vimeo/Bing/etc.) instead of trying to <video>
+// a non-media URL.
 //
-// Design pillars
-// --------------
-// • Efficiency: pure functional, no state.
-// • Robustness: guards for unknown nodes; alt-safe images; safe links.
-// • Simplicity: all PT config lives here; page stays clean.
-// • Security: no dangerouslySetInnerHTML; all rendering via React.
 
 "use client";
 
@@ -35,7 +29,6 @@ type Props = {
 };
 
 const components: PortableTextComponents = {
-  // Headings and paragraphs
   block: {
     h2: ({ children }) => (
       <h2 className="text-2xl font-bold text-blue-900 mt-6 mb-3">{children}</h2>
@@ -53,7 +46,6 @@ const components: PortableTextComponents = {
     ),
   },
 
-  // Lists
   list: {
     bullet: ({ children }) => (
       <ul className="list-disc ml-6 text-gray-800 space-y-1">{children}</ul>
@@ -63,19 +55,18 @@ const components: PortableTextComponents = {
     ),
   },
 
-  // Inline marks (strong/em/link/code etc.)
   marks: {
     link: ({ children, value }) => {
       const href = typeof value?.href === "string" ? value.href : "#";
-      const isHttp = /^https?:\/\//i.test(href); // robust check
+      const isHttp = /^https?:\/\//i.test(href);
       return (
         <a
-        href={href}
-        rel={isHttp ? "noopener noreferrer" : undefined}
-        target={isHttp ? "_blank" : undefined}
-        className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
+          href={href}
+          rel={isHttp ? "noopener noreferrer" : undefined}
+          target={isHttp ? "_blank" : undefined}
+          className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
         >
-        {children}
+          {children}
         </a>
       );
     },
@@ -84,15 +75,10 @@ const components: PortableTextComponents = {
     ),
   },
 
-  // Custom block/object types inside PT arrays
   types: {
-    // Sanity image block: { _type: 'image', asset: { _ref }, alt?, caption? }
     image: ({ value }) => {
       if (!value?.asset?._ref) return null;
-
-      // Build URL; keep it responsive and optimized.
       const src = urlFor(value).width(1400).fit("max").url();
-
       const alt =
         typeof value?.alt === "string" && value.alt.trim().length > 0
           ? value.alt
@@ -115,13 +101,14 @@ const components: PortableTextComponents = {
       );
     },
 
-    // Custom inline video object: { _type: 'videoEmbed', url, caption? }
+    // Custom inline video object from Sanity (`_type: "videoEmbed"`)
     videoEmbed: ({ value }) => {
       const url = typeof value?.url === "string" ? value.url : "";
       if (!url) return null;
 
       return (
         <div className="my-6">
+          {/* VideoPlayer now auto-detects providers and renders iframe or <video> */}
           <VideoPlayer src={url} title={value?.caption || "Embedded video"} />
           {value?.caption && (
             <p className="text-sm text-gray-600 mt-2">{value.caption}</p>
@@ -130,7 +117,6 @@ const components: PortableTextComponents = {
       );
     },
 
-    // Built-in Sanity code block: { _type: 'code', language?, code }
     code: ({ value }) => {
       const code = typeof value?.code === "string" ? value.code : "";
       const language = typeof value?.language === "string" ? value.language : "text";
@@ -144,7 +130,6 @@ const components: PortableTextComponents = {
       );
     },
 
-    // Lightweight callout object (note/tip/warning)
     callout: ({ value }) => {
       const tone = (value?.tone as string) || "note";
       const title = (value?.title as string) || undefined;
@@ -168,7 +153,6 @@ const components: PortableTextComponents = {
 };
 
 export default function PortableTextRenderer({ value, className }: Props) {
-  // Defensive: if someone passes a string or null accidentally
   if (!Array.isArray(value)) return null;
   return (
     <div className={className}>
