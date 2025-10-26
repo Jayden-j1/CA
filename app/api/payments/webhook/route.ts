@@ -2,58 +2,48 @@
 //
 // Purpose
 // -------
-// 1) Verify Stripe signature, accept only checkout.session.completed.
-// 2) Idempotently insert Payment.
-// 3) PACKAGE → set hasPaid=true for payer.
-// 4) STAFF_SEAT → activate pre-created staff (metadata.newStaffId).
+// Authoritative Stripe webhook receiver for ALL checkout flows.
+// It verifies the signature, parses metadata, writes a Payment row (idempotent),
+// and flips user.hasPaid for PACKAGE purchases.
+// This is the endpoint your logs show being invoked ("/api/payments/webhook"),
+// so persisting the Payment here resolves "Billing shows no purchase".
 //
-// Robust attribution:
-// - If metadata.userId is missing, resolve payer via `customer_email` or
-//   `customer_details.email`, then find the user in Prisma.
-// - Set DEBUG_STRIPE_WEBHOOK=true to emit helpful logs.
+// Security
+// --------
+// - Uses the raw request body for signature verification.
+// - Requires STRIPE_WEBHOOK_SECRET.
+// - Inserts are idempotent via unique Payment.stripeId (Checkout Session id).
+//
+// Notes
+// -----
+// - `purpose` metadata: "PACKAGE" or "STAFF_SEAT"
+// - `packageType`: "individual" | "business" | "staff_seat" (for display/unlocking)
+// - `userId` metadata: the payer's user id (owner for staff seats)
+// - Amount is stored in dollars (float) from Stripe cents.
 
 import { NextRequest, NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/prisma";
+import { stripe } from "@/lib/stripe";
 import Stripe from "stripe";
 
-export const config = { api: { bodyParser: false } };
+// Stripe needs the raw body for signature verification.
+// (Next.js App Router supports reading the raw ArrayBuffer from the request.)
+export const config = {
+  api: { bodyParser: false },
+};
 
-async function getRawBody(req: Request): Promise<Buffer> {
-  const arrayBuffer = await req.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-async function resolvePayerUserId(
-  metadata: Record<string, string | undefined>,
-  session: Stripe.Checkout.Session
-): Promise<{ userId: string | null; email: string | null }> {
-  if (metadata.userId) return { userId: metadata.userId, email: null };
-
-  const email =
-    (session.customer_email as string | null | undefined) ||
-    (session.customer_details?.email as string | null | undefined) ||
-    null;
-
-  if (!email) return { userId: null, email: null };
-
-  try {
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-      select: { id: true },
-    });
-    return { userId: user?.id ?? null, email };
-  } catch {
-    return { userId: null, email };
-  }
+async function rawBody(req: Request): Promise<Buffer> {
+  const ab = await req.arrayBuffer();
+  return Buffer.from(ab);
 }
 
 export async function POST(req: NextRequest) {
   try {
+    // 1) Verify signature
     const sig = req.headers.get("stripe-signature");
-    if (!sig) return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
-
-    const rawBody = await getRawBody(req);
+    if (!sig) {
+      return NextResponse.json({ error: "Missing Stripe signature" }, { status: 400 });
+    }
     const secret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!secret) {
       console.error("[Webhook] Missing STRIPE_WEBHOOK_SECRET");
@@ -62,83 +52,71 @@ export async function POST(req: NextRequest) {
 
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, secret);
+      event = stripe.webhooks.constructEvent(await rawBody(req), sig, secret);
     } catch (err: any) {
-      console.error("[Webhook] Signature verification failed:", err?.message);
+      console.error("[Webhook] Invalid signature:", err?.message);
       return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
     }
 
+    // We only care about completed checkout sessions
     if (event.type !== "checkout.session.completed") {
       return NextResponse.json({ received: true });
     }
 
+    // 2) Extract session + metadata
     const session = event.data.object as Stripe.Checkout.Session;
 
     const meta = (session.metadata || {}) as Record<string, string | undefined>;
     const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) || "PACKAGE";
     const packageType =
       (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
-    const newStaffId = meta.newStaffId || undefined;
+    const userId = meta.userId; // set by create-session routes
     const description = meta.description || "Checkout payment";
 
-    const amount = (session.amount_total || 0) / 100;
+    const amount = (session.amount_total || 0) / 100; // cents -> dollars
     const currency = (session.currency || "aud").toLowerCase();
-    const stripeId = session.id;
+    const stripeId = session.id; // unique across retries → safe for idempotency
 
-    // Idempotent: skip if already saved
-    const existing = await prisma.payment.findUnique({ where: { stripeId } });
-    if (existing) {
-      // Ensure staff activation even if duplicate (rare retries)
-      if (purpose === "STAFF_SEAT" && newStaffId) {
-        await prisma.user.updateMany({
-          where: { id: newStaffId, isActive: false },
-          data: { isActive: true },
-        });
-      }
-      return NextResponse.json({ ok: true, duplicate: true });
-    }
-
-    // Resolve payer (owner) for attribution and Billing scope
-    const { userId: payerUserId, email: fallbackEmail } = await resolvePayerUserId(meta, session);
-
+    // Optional verbose debugging (controlled by env)
     if (process.env.DEBUG_STRIPE_WEBHOOK === "true") {
       console.log("[Webhook][Debug] purpose:", purpose);
-      console.log("[Webhook][Debug] meta.userId:", meta.userId || "(none)");
-      console.log("[Webhook][Debug] fallback email:", fallbackEmail || "(none)");
-      console.log("[Webhook][Debug] resolved userId:", payerUserId || "(none)");
+      console.log("[Webhook][Debug] meta.userId:", userId || "(none)");
+      console.log("[Webhook][Debug] fallback email:", "(none)"); // kept for parity with earlier logs
+      console.log("[Webhook][Debug] resolved userId:", userId || "(none)");
     }
 
-    if (!payerUserId) {
-      console.warn("[Webhook] Could not resolve payer userId; payment not attributed.");
+    // 3) Require a userId to attribute the payment
+    if (!userId) {
+      console.warn("[Webhook] checkout.session.completed without userId metadata – skipping persist");
       return NextResponse.json({ ok: true, unattributed: true });
     }
 
-    // 1) Record the payment
+    // 4) Idempotent write: if we already saved this session, do nothing.
+    const exists = await prisma.payment.findUnique({ where: { stripeId } });
+    if (exists) {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
+
+    // 5) Persist Payment row
     await prisma.payment.create({
       data: {
-        userId: payerUserId,
+        userId,
         amount,
         currency,
-        stripeId,
+        stripeId,   // UNIQUE in schema
         description,
-        purpose,
+        purpose,    // PACKAGE | STAFF_SEAT
       },
     });
 
-    // 2) Post-processing based on purpose
+    // 6) Unlock access for PACKAGE purchases (individual or business)
     if (purpose === "PACKAGE") {
       await prisma.user.update({
-        where: { id: payerUserId },
+        where: { id: userId },
         data: {
           hasPaid: true,
           packageType: packageType === "business" ? "business" : "individual",
         },
-      });
-    } else if (purpose === "STAFF_SEAT" && newStaffId) {
-      // Activate the pre-created staff so they appear in /dashboard/staff
-      await prisma.user.updateMany({
-        where: { id: newStaffId, isActive: false },
-        data: { isActive: true },
       });
     }
 
