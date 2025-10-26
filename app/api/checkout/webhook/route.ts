@@ -3,13 +3,20 @@
 // Purpose
 // -------
 // 1) Verify Stripe signature and accept only checkout.session.completed.
-// 2) Idempotently insert a Payment row (owner/payer).
-// 3) For PACKAGE → flip payer.hasPaid = true.
-// 4) For STAFF_SEAT → ACTIVATE the pre-created staff user (isActive: true) using metadata.newStaffId.
+// 2) Idempotently insert a Payment row.
+// 3) Flip user.hasPaid for PACKAGE purchases.
+// 4) Activate pre-created staff for STAFF_SEAT purchases (if newStaffId is present).
 //
-// Notes:
-// - We DO NOT change existing behavior for PACKAGE purchases.
-// - We only add the small step to activate a staff record when purpose=STAFF_SEAT.
+// 🔧 Robustness patch (business purchase not showing in Billing):
+// - If metadata.userId is missing (race around silent sign-in), we now fall back
+//   to the payer’s email on the Stripe session (customer_email or customer_details.email),
+//   look up the user in Prisma, and attribute the Payment correctly.
+// - This preserves all existing behavior and fixes missed writes.
+//
+// Security:
+// - Signature verified with STRIPE_WEBHOOK_SECRET.
+// - Only reacts to checkout.session.completed.
+// - Idempotent: skip if a Payment with the same stripeId already exists.
 
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -26,6 +33,40 @@ export const config = {
 async function getRawBody(req: Request): Promise<Buffer> {
   const arrayBuffer = await req.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Try to determine the payer userId.
+ * Priority:
+ *  1) metadata.userId (authoritative)
+ *  2) session.customer_email / session.customer_details?.email → DB lookup
+ * If neither resolves to a user in DB, return null (we’ll no-op but report OK).
+ */
+async function resolvePayerUserId(
+  metadata: Record<string, string | undefined>,
+  session: Stripe.Checkout.Session
+): Promise<string | null> {
+  // 1) Authoritative userId in metadata (normal path)
+  if (metadata.userId) return metadata.userId;
+
+  // 2) Fallback via email address seen on Checkout Session
+  const email =
+    (session.customer_email as string | null | undefined) ||
+    (session.customer_details?.email as string | null | undefined) ||
+    null;
+
+  if (!email) return null;
+
+  // Look up user by email
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      select: { id: true },
+    });
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -51,6 +92,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (event.type !== "checkout.session.completed") {
+      // Only handle successful checkout sessions
       return NextResponse.json({ received: true });
     }
 
@@ -59,19 +101,19 @@ export async function POST(req: NextRequest) {
     // Metadata from create-session / staff-add
     const meta = (session.metadata || {}) as Record<string, string | undefined>;
     const purpose = (meta.purpose as "PACKAGE" | "STAFF_SEAT" | undefined) || "PACKAGE";
-    const packageType = (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
-    const userId = meta.userId || undefined;       // payer (owner)
-    const newStaffId = meta.newStaffId || undefined; // for STAFF_SEAT activation
+    const packageType =
+      (meta.packageType as "individual" | "business" | "staff_seat" | undefined) || "individual";
+    const newStaffId = meta.newStaffId || undefined; // used for STAFF_SEAT activation
     const description = meta.description || (session.mode === "payment" ? "Checkout payment" : "Payment");
 
+    // Amount/currency
     const amount = (session.amount_total || 0) / 100;
     const currency = (session.currency || "aud").toLowerCase();
-    const stripeId = session.id; // unique
+    const stripeId = session.id; // UNIQUE
 
-    // Idempotency: skip if already recorded
+    // Idempotency: if we've already recorded this, we may still finish staff activation
     const existing = await prisma.payment.findUnique({ where: { stripeId } });
     if (existing) {
-      // Still attempt activation in case previous run wrote payment but crashed before activation
       if (purpose === "STAFF_SEAT" && newStaffId) {
         await prisma.user.updateMany({
           where: { id: newStaffId, isActive: false },
@@ -81,35 +123,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, duplicate: true });
     }
 
-    if (!userId) {
-      console.warn("[Webhook] No userId in session metadata; payment not attributed.");
+    // 🔎 Robust `userId` resolution: metadata.userId OR fallback via payer email
+    const payerUserId = await resolvePayerUserId(meta, session);
+    if (!payerUserId) {
+      // We don't fail the webhook; just note that we couldn’t attribute.
+      // (This avoids “snowball” effects yet keeps the endpoint healthy.)
+      console.warn("[Webhook] Could not resolve payer userId; payment not attributed.");
       return NextResponse.json({ ok: true, unattributed: true });
     }
 
-    // 1) Create the Payment row (owner-scoped; Billing filters by businessId via nested user)
+    // 1) Insert Payment row (attribute to payer)
     await prisma.payment.create({
       data: {
-        userId,
+        userId: payerUserId,
         amount,
         currency,
         stripeId,
         description,
-        purpose,
+        purpose, // PACKAGE | STAFF_SEAT
       },
     });
 
-    // 2) Post-processing based on purpose
+    // 2) Post-processing by purpose
     if (purpose === "PACKAGE") {
-      // Unlock plan for payer (individual/business)
+      // Flip hasPaid for the payer; set packageType appropriately
       await prisma.user.update({
-        where: { id: userId },
+        where: { id: payerUserId },
         data: {
           hasPaid: true,
           packageType: packageType === "business" ? "business" : "individual",
         },
       });
     } else if (purpose === "STAFF_SEAT") {
-      // Activate the pre-created staff (created inactive in /api/staff/add)
+      // Activate pre-created staff (created inactive in /api/staff/add)
       if (newStaffId) {
         await prisma.user.updateMany({
           where: { id: newStaffId, isActive: false },
