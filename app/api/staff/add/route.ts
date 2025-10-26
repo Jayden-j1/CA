@@ -7,18 +7,15 @@
 // - If over the free-seat limit, create a Stripe Checkout Session to charge.
 // - Webhook (on successful payment) activates the pre-created staff user.
 //
-// Why this fixes your issues
-// --------------------------
-// • Staff not appearing: we now PRE-CREATE the user record so it can appear
-//   after payment (or immediately if within free-seat limit).
-// • Staff-seat purchase missing in Billing: we include purpose=STAFF_SEAT and
-//   userId (owner) in metadata; the webhook writes a Payment row.
-// • We also set `customer_email` to the owner's email so attribution is robust.
+// Why this fixes the issues
+// -------------------------
+// • Staff not appearing: we PRE-CREATE the user record; after payment, the
+//   webhook sets isActive=true so they show in /dashboard/staff.
+// • Staff-seat purchase missing in Billing: we set Stripe metadata:
+//     purpose=STAFF_SEAT, packageType=staff_seat, userId=<owner>, newStaffId=<user>
+//   so the webhook writes a Payment row attributed to the owner and activates staff.
 //
-// Security
-// --------
-// - Owner-only route, server-side domain checks, password hashed server-side.
-// - No sensitive data in Stripe metadata.
+// No other flows or UI logic changed.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
@@ -30,12 +27,13 @@ import bcrypt from "bcryptjs";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
+// Shallow helper: allow exact domain or subdomain (team.example.com)
 function sameOrSubdomain(candidate: string, root: string) {
   return candidate === root || candidate.endsWith("." + root);
 }
 
 export async function POST(req: NextRequest) {
-  // 1) AuthN/AuthZ
+  // 1) Auth + only BUSINESS_OWNER
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.user.role !== "BUSINESS_OWNER") {
@@ -43,7 +41,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // We accept both the old { pricePerStaff } shape and the new explicit shape.
+    // We support both: “check price only” and “create staff + possibly pay”.
     const body = await req.json();
     const {
       name,
@@ -66,12 +64,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Business not found" }, { status: 400 });
     }
 
-    // 2) Resolve allowed domain from Business
+    // 2) Resolve the company email domain to validate staff emails server-side.
     const business = await prisma.business.findUnique({
       where: { id: businessId },
       select: { emailDomain: true },
     });
-
     const allowedDomain = (business?.emailDomain || "").toLowerCase() || null;
     if (!allowedDomain) {
       return NextResponse.json(
@@ -80,15 +77,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3) Free-seat policy and existing staff count
+    // 3) Free-seat policy (defaults to 0)
     const FREE_SEAT_LIMIT = Number(process.env.STAFF_FREE_SEAT_LIMIT ?? "0");
     const staffCount = await prisma.user.count({
       where: { businessId, role: { in: ["USER", "ADMIN"] }, isActive: true },
     });
 
-    // 4) If we received staff details, we are in the "create staff" flow.
+    // 4) If we received staff details, this is the create+maybe-pay path
     if (name && email && password) {
-      // 4a) Server-side domain validation (defense-in-depth)
+      // 4a) Server-side domain validation (defense in depth).
       const domain = extractEmailDomain(email);
       if (!domain || isPublicMailboxDomain(domain) || !sameOrSubdomain(domain, allowedDomain)) {
         return NextResponse.json(
@@ -97,7 +94,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // 4b) Prevent duplicate email
+      // 4b) Prevent duplicate email.
       const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
       if (existing) {
         return NextResponse.json({ error: "A user with this email already exists." }, { status: 400 });
@@ -106,7 +103,7 @@ export async function POST(req: NextRequest) {
       const hashed = await bcrypt.hash(password, 10);
       const role: "USER" | "ADMIN" = isAdmin ? "ADMIN" : "USER";
 
-      // 4c) If within free-seat limit → create ACTIVE staff immediately (no Stripe)
+      // 4c) If within free-seat limit → create ACTIVE staff immediately (no Stripe).
       if (staffCount < FREE_SEAT_LIMIT) {
         const staff = await prisma.user.create({
           data: {
@@ -117,7 +114,7 @@ export async function POST(req: NextRequest) {
             businessId,
             isActive: true,
             mustChangePassword: true,
-            hasPaid: true, // inherits business access
+            hasPaid: true,        // inherits business access
             packageType: "business",
           },
           select: { id: true, email: true, role: true, createdAt: true },
@@ -130,7 +127,7 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // 4d) Over free limit → pre-create INACTIVE staff and start Stripe checkout
+      // 4d) Over free limit → PRE-CREATE INACTIVE staff and start Stripe checkout.
       const precreated = await prisma.user.create({
         data: {
           name,
@@ -138,9 +135,9 @@ export async function POST(req: NextRequest) {
           hashedPassword: hashed,
           role,
           businessId,
-          isActive: false,          // will be flipped true on webhook success
-          mustChangePassword: true, // enforced on first login
-          hasPaid: true,            // inherits business access (seat controls activation)
+          isActive: false,          // ⬅ will be flipped by webhook after payment
+          mustChangePassword: true, // staff changes password on first login
+          hasPaid: true,            // inherits business access; seat controls activation
           packageType: "business",
         },
         select: { id: true, email: true },
@@ -150,7 +147,6 @@ export async function POST(req: NextRequest) {
         process.env.STRIPE_STAFF_SEAT_PRICE ??
           Math.round(Number(pricePerStaff || 0) * 100)
       );
-
       if (!Number.isFinite(unitAmountCents) || unitAmountCents <= 0) {
         return NextResponse.json({ error: "Invalid staff seat price" }, { status: 400 });
       }
@@ -178,38 +174,36 @@ export async function POST(req: NextRequest) {
         success_url: successUrl,
         cancel_url: cancelUrl,
 
-        // ✅ So webhook can recover payer if metadata.userId is absent
+        // Robust attribution even if metadata.userId were missing:
         customer_email: ownerEmail,
 
-        // ✅ Critical metadata for webhook
+        // CRITICAL metadata so webhook can both write Payment and activate staff:
         metadata: {
           purpose: "STAFF_SEAT",
           packageType: "staff_seat",
           description: "Staff Seat",
-          userId: ownerId,             // who paid (owner)
-          newStaffId: precreated.id,   // who to activate after payment
+          userId: ownerId,            // payer = owner (Billing uses this)
+          newStaffId: precreated.id,  // ⬅ who to activate after payment
         },
       });
 
       return NextResponse.json({
         requiresPayment: true,
-        checkoutUrl: stripeSession.url,
+        checkoutUrl: stripeSession.url, // matches AddStaffForm.tsx expectation
       });
     }
 
-    // 5) Legacy path: request only asked "do I need to pay?" (no user details yet)
+    // 5) Legacy “do I need to pay?” probe (no staff details yet)
     const needsPayment = staffCount >= FREE_SEAT_LIMIT;
     if (!needsPayment) {
-      // Nothing to bill; caller should proceed to actually create the staff via this same route with details.
       return NextResponse.json({ requiresPayment: false });
     }
 
-    // If someone calls this legacy check with a price and no user details, return a Session to pay for one seat.
+    // Optionally return a session to pre-purchase one seat (no staff yet)
     const unitAmountCents = Number(
       process.env.STRIPE_STAFF_SEAT_PRICE ??
         Math.round(Number(pricePerStaff || 0) * 100)
     );
-
     if (!Number.isFinite(unitAmountCents) || unitAmountCents <= 0) {
       return NextResponse.json({ error: "Invalid staff seat price" }, { status: 400 });
     }
