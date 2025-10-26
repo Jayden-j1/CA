@@ -6,6 +6,10 @@
 // - Uses server-side env amounts (never trust client)
 // - Writes metadata for robust webhook handling
 // - Returns dashboard success/cancel URLs so we don't bounce back to /services
+//
+// ⚙️ Small robustness addition:
+// - Provide `customer_email` when a session user exists so the webhook can
+//   always attribute the payment (fallback via email).
 
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
@@ -40,6 +44,7 @@ export async function POST(req: Request) {
 
     const session = await getServerSession(authOptions);
     const userId = session?.user?.id || null;
+    const userEmail = session?.user?.email || undefined;
 
     // Send users back to the right dashboard areas
     const successUrl =
@@ -55,6 +60,7 @@ export async function POST(req: Request) {
     const checkout = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
+      // ✅ Add a single item with server-driven price
       line_items: [
         {
           price_data: {
@@ -65,14 +71,19 @@ export async function POST(req: Request) {
           quantity: 1,
         },
       ],
+      // ✅ URLs
       success_url: successUrl,
       cancel_url: cancelUrl,
+
+      // ✅ NEW: set payer email when known (makes webhook fallback 100% reliable)
+      ...(userEmail ? { customer_email: userEmail } : {}),
+
+      // ✅ Metadata used by webhook to classify and attribute payment
       metadata: {
-        // Purpose is PACKAGE for plan purchases; STAFF_SEAT for seat add-ons.
         purpose: packageType === "staff_seat" ? "STAFF_SEAT" : "PACKAGE",
         packageType,
         description: productName,
-        ...(userId ? { userId } : {}), // webhook uses this to identify payer
+        ...(userId ? { userId } : {}), // still send userId when we have it
       },
     });
 
