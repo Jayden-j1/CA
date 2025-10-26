@@ -1,21 +1,26 @@
 // app/dashboard/add-staff/page.tsx
 //
 // Purpose:
-// - Restricts access to BUSINESS_OWNER users.
-// - Displays the allowed staff email domain (fetched from /api/business/domain).
-// - Provides the AddStaffForm to invite staff accounts.
+// - Allow BOTH BUSINESS_OWNER and BUSINESS-ADMIN (ADMIN with a businessId) to access Add Staff.
+// - Show the allowed staff email domain (fetched from /api/business/domain).
+// - Render the AddStaffForm to invite staff accounts.
 //
-// Key fix (build error):
-// - Next.js App Router requires hooks like useSearchParams/useRouter/useSession
-//   to be wrapped in a <Suspense> boundary to avoid CSR bailout errors.
-// - Even though this file doesn’t directly use useSearchParams, child components
-//   (e.g. AddStaffForm) may, so we add a safe Suspense wrapper around the page.
+// What changed (precise + minimal):
+// - Access gate now admits: BUSINESS_OWNER OR (ADMIN && businessId != null).
+// - Domain fetch now runs for those same roles (was BUSINESS_OWNER-only).
+// - Render guard mirrors the exact same condition.
+// - Everything else (UX, Suspense, layout, form integration) is unchanged.
+//
+// Why we also require businessId for ADMIN:
+// - Prevents a "super-admin" (ADMIN with no businessId) from adding staff to arbitrary orgs.
+// - Matches the backend API guard you already have.
 //
 // Pillars applied:
-// - Efficiency: Suspense fallback is minimal (just a “Loading…” screen).
-// - Robustness: Guards against both unauthenticated and unauthorized roles.
-// - Simplicity: Clear separation of role check, domain fetch, and rendering.
-// - Security: Role check enforced here + API validation on the server.
+// - Efficiency: same fetch pattern; no extra queries.
+// - Robustness: symmetric, explicit guards (redirects only when needed).
+// - Simplicity: one, clear predicate reused in effect + render.
+// - Ease of management: comments + no changes to unrelated code.
+// - Security: page gate matches API gate (owner or business-scoped admin only).
 
 'use client';
 
@@ -28,28 +33,48 @@ function AddStaffPageInner() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Local state for the allowed staff email domain
+  // Local state for the allowed staff email domain (UX hint only)
   const [allowedDomain, setAllowedDomain] = useState<string | null>(null);
   const [domainError, setDomainError] = useState<string | null>(null);
 
-  // ── 1) Access control
+  // ────────────────────────────────────────────────────────────
+  // Helper: determine if the current user may access this page.
+  // Allowed:
+  //   • BUSINESS_OWNER
+  //   • ADMIN with a businessId (i.e., admin of a specific business)
+  // Blocked:
+  //   • USER (regular staff)
+  //   • ADMIN without businessId (super-admin)
+  // ────────────────────────────────────────────────────────────
+  const canAccess =
+    !!session?.user &&
+    (
+      session.user.role === "BUSINESS_OWNER" ||
+      (session.user.role === "ADMIN" && !!session.user.businessId)
+    );
+
+  // ── 1) Access control: apply redirects only when we know the session status.
   useEffect(() => {
+    if (status === "loading") return;
+
     if (status === "unauthenticated") {
       // 🚫 Not logged in → back to login
       router.push("/login");
-    } else if (
-      status === "authenticated" &&
-      session?.user.role !== "BUSINESS_OWNER"
-    ) {
-      // 🚫 Logged in but not a business owner → back to dashboard
+      return;
+    }
+
+    // At this point, status === "authenticated"
+    if (!canAccess) {
+      // 🚫 Logged in but NOT owner or business-scoped admin → back to dashboard
       router.push("/dashboard");
     }
-  }, [status, session, router]);
+  }, [status, canAccess, router]);
 
-  // ── 2) Fetch the allowed domain (UX hint only; server still validates)
+  // ── 2) Fetch the allowed domain
+  //    (Only when authenticated AND the user is allowed to access the page.)
   useEffect(() => {
     if (status !== "authenticated") return;
-    if (session?.user?.role !== "BUSINESS_OWNER") return;
+    if (!canAccess) return;
 
     let ignore = false;
     (async () => {
@@ -72,7 +97,7 @@ function AddStaffPageInner() {
     return () => {
       ignore = true;
     };
-  }, [status, session]);
+  }, [status, canAccess]);
 
   // ── 3) Loading + unauthorized states
   if (status === "loading") {
@@ -83,11 +108,13 @@ function AddStaffPageInner() {
     );
   }
 
-  if (!session?.user || session.user.role !== "BUSINESS_OWNER") {
+  // If we know the user is authenticated but not allowed, render nothing
+  // (the effect above already redirected).
+  if (status === "authenticated" && !canAccess) {
     return null;
   }
 
-  // ── 4) Main render
+  // ── 4) Main render (only when allowed)
   return (
     <section className="w-full flex flex-col justify-center items-center bg-gradient-to-b from-blue-700 to-blue-300 min-h-screen py-20">
       <h2 className="text-white font-bold text-3xl sm:text-4xl md:text-5xl tracking-wide mb-6 text-center">
