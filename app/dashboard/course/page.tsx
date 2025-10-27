@@ -6,37 +6,34 @@
 //  - <ModuleList />        (sidebar of modules/lessons)
 //  - <VideoPlayer />       (lesson video)
 //  - <PortableTextRenderer /> (rich text)
-//  - <QuizCard />          (optional per-lesson quiz)
-// while keeping the *existing* access-gating logic unchanged.
+//  - <QuizCard />          (per-lesson quiz)
 //
-// What this DOES NOT touch
-// ------------------------
-// - Signup, payment, or unlock flows.
-// - Stripe / session / webhook logic.
-// - /api/courses/[slug] response contract.
+// Access rules:
+// - Uses usePaidAccess() to gate the page. No flow changes.
 //
-// Key Fix
-// -------
-// Your UI type `CourseQuiz` does not define `passingScore`, but the API may
-// include it. We now:
-//  • Preserve `passingScore` when normalizing (via a safe cast).
-//  • Read it with `(quiz as any)?.passingScore ?? 70` so TypeScript is happy.
+// Key updates in this patch:
+// - Removed scoring/percentage text entirely.
+// - After the user clicks "Submit", we:
+//    • set `revealed = true` so QuizCard highlights correct green / wrong red
+//    • start a 1.5s timer to auto-advance to the next lesson (or next module's first lesson).
+//    • if there is no next lesson at all, we simply stay on the last lesson.
+// - Inputs are disabled after reveal to avoid edits during the short delay.
 //
 // Pillars
 // -------
 // - Efficiency : one fetch per slug; no-store to reflect fresh content.
 // - Robustness : defensive checks for missing fields; graceful fallbacks.
-// - Simplicity : normalization function; minimal state.
+// - Simplicity : normalization function + minimal state.
 // - Ease of mgmt : clear comments; components stay decoupled.
-// - Security : read-only data path; no client mutations to auth or payments.
+// - Security : read-only data path; no changes to auth or payments.
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePaidAccess } from "@/hooks/usePaidAccess";
 
-// Course UI building blocks (import-only; logic untouched)
+// Course UI building blocks (import-only; logic untouched except passing new props)
 import ModuleList from "@/components/course/ModuleList";
 import PortableTextRenderer from "@/components/course/PortableTextRenderer";
 import QuizCard from "@/components/course/QuizCard";
@@ -74,7 +71,7 @@ interface CourseLessonDTO {
   quiz?: CourseQuizDTO;
 }
 interface CourseQuizDTO {
-  passingScore?: number; // optional in API
+  passingScore?: number; // optional in API; ignored now (no scoring UI)
   questions: {
     id: string;
     question: string;
@@ -86,6 +83,8 @@ interface CourseQuizDTO {
 // Answers map for the current lesson quiz: questionId -> selected option index
 type QuizAnswers = Record<string, number | null>;
 
+// ────────────────────────────────────────────────────────────
+// Utility: compute prev/next lesson across module boundaries
 // ────────────────────────────────────────────────────────────
 function computeAdjacentLesson(
   modules: UICourseModule[],
@@ -108,6 +107,7 @@ function computeAdjacentLesson(
 // Normalization: DTO → UI types expected by components
 // - Guarantees lesson.videoUrl is a string ("" when missing)
 // - Carries `passingScore` through via a safe cast (UI type may not include it).
+//   (We no longer use it in the UI, but keeping parity is harmless.)
 // ────────────────────────────────────────────────────────────
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
@@ -120,9 +120,6 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
       title: l.title,
       videoUrl: l.videoUrl ?? "", // ✅ force string for UI type
       body: l.body,
-      // Preserve quiz and any extra fields (like passingScore) via cast.
-      // This avoids changing your central CourseQuiz type while still allowing
-      // us to read passingScore dynamically if present.
       quiz: l.quiz
         ? (({
             questions: l.quiz.questions?.map((q) => ({
@@ -131,7 +128,6 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
               options: q.options,
               correctIndex: q.correctIndex,
             })) ?? [],
-            // carry-through (may not exist on UI type; that's okay)
             passingScore: l.quiz.passingScore,
           } as any) as UICourseQuiz)
         : undefined,
@@ -229,15 +225,20 @@ export default function CoursePage() {
   }, [uiModules, currentModuleIndex, currentLessonIndex]);
 
   // ────────────────────────────────────────────────────────────
-  // 5) Quiz (pure UI; no persistence)
+  // 5) Quiz state (pure UI; no persistence)
   // ────────────────────────────────────────────────────────────
   const [answers, setAnswers] = useState<QuizAnswers>({});
-  const [quizFeedback, setQuizFeedback] = useState<string>("");
+  const [revealed, setRevealed] = useState<boolean>(false);
+  const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear quiz state when lesson changes
   useEffect(() => {
     setAnswers({});
-    setQuizFeedback("");
+    setRevealed(false);
+    if (autoAdvanceTimer.current) {
+      clearTimeout(autoAdvanceTimer.current);
+      autoAdvanceTimer.current = null;
+    }
   }, [currentLesson?.id]);
 
   const handleQuizChange = (questionId: string, optionIndex: number) => {
@@ -245,27 +246,32 @@ export default function CoursePage() {
   };
 
   const handleQuizSubmit = () => {
-    if (!currentLesson?.quiz) return;
+    // Reveal correctness feedback
+    setRevealed(true);
 
-    const total = currentLesson.quiz.questions.length;
-    let correct = 0;
-    for (const q of currentLesson.quiz.questions) {
-      if (answers[q.id] === q.correctIndex) correct += 1;
-    }
+    // Start a short timer to auto-advance (1.5s)
+    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+    autoAdvanceTimer.current = setTimeout(() => {
+      // Advance to next lesson if available
+      if (nextLesson) {
+        setCurrentModuleIndex(nextLesson.m);
+        setCurrentLessonIndex(nextLesson.l);
+      }
+      // else: stay on last lesson (no-op). We intentionally do NOT
+      // redirect or change flow to preserve your existing UX.
+    }, 1500);
+  };
 
-    const pct = Math.round((correct / total) * 100);
-    // 🔑 UI type may not declare passingScore, so read it defensively via `any`
-    const maybePassing: unknown = (currentLesson.quiz as any)?.passingScore;
-    const passing =
-      typeof maybePassing === "number" && Number.isFinite(maybePassing)
-        ? maybePassing
-        : 70; // default threshold if not provided
-
-    setQuizFeedback(
-      pct >= passing
-        ? `✅ Great job! You scored ${pct}% (pass threshold: ${passing}%).`
-        : `❌ You scored ${pct}% (pass threshold: ${passing}%). Try again.`
-    );
+  // Manual navigation buttons still available
+  const goPrev = () => {
+    if (!prevLesson) return;
+    setCurrentModuleIndex(prevLesson.m);
+    setCurrentLessonIndex(prevLesson.l);
+  };
+  const goNext = () => {
+    if (!nextLesson) return;
+    setCurrentModuleIndex(nextLesson.m);
+    setCurrentLessonIndex(nextLesson.l);
   };
 
   // ────────────────────────────────────────────────────────────
@@ -347,27 +353,19 @@ export default function CoursePage() {
                 )}
               </div>
 
-              {/* Prev/Next lesson controls */}
+              {/* Prev/Next lesson controls (manual override) */}
               <div className="flex gap-2">
                 <button
                   disabled={!prevLesson}
                   className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 hover:bg-gray-50"
-                  onClick={() => {
-                    if (!prevLesson) return;
-                    setCurrentModuleIndex(prevLesson.m);
-                    setCurrentLessonIndex(prevLesson.l);
-                  }}
+                  onClick={goPrev}
                 >
                   ← Prev
                 </button>
                 <button
                   disabled={!nextLesson}
                   className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 hover:bg-gray-50"
-                  onClick={() => {
-                    if (!nextLesson) return;
-                    setCurrentModuleIndex(nextLesson.m);
-                    setCurrentLessonIndex(nextLesson.l);
-                  }}
+                  onClick={goNext}
                 >
                   Next →
                 </button>
@@ -400,14 +398,11 @@ export default function CoursePage() {
                 <QuizCard
                   quiz={currentLesson.quiz}
                   answers={answers}
+                  revealed={revealed}
                   onChange={handleQuizChange}
                   onSubmit={handleQuizSubmit}
                 />
-                {quizFeedback && (
-                  <p className="mt-3 text-sm font-medium">
-                    {quizFeedback}
-                  </p>
-                )}
+                {/* No scoring/threshold/feedback text by design */}
               </div>
             )}
           </div>
