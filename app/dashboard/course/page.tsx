@@ -3,29 +3,17 @@
 // Purpose
 // -------
 // Render the paid Course experience using your existing components:
-//  - <ModuleList />        (sidebar of modules/lessons)
-//  - <VideoPlayer />       (lesson video)
+//  - <ModuleList /> (sidebar of modules/lessons)
+//  - <VideoPlayer /> (lesson video)
 //  - <PortableTextRenderer /> (rich text)
-//  - <QuizCard />          (per-lesson quiz)
+//  - <QuizCard /> (per-lesson quiz with reveal + auto-advance)
 //
-// Access rules:
-// - Uses usePaidAccess() to gate the page. No flow changes.
+// New in this patch (UX-only):
+// - Wires ModuleList.onSelectLesson(mIdx, lIdx) to update local state so a
+//   clicked lesson displays immediately.
 //
-// Key updates in this patch:
-// - Removed scoring/percentage text entirely.
-// - After the user clicks "Submit", we:
-//    • set `revealed = true` so QuizCard highlights correct green / wrong red
-//    • start a 1.5s timer to auto-advance to the next lesson (or next module's first lesson).
-//    • if there is no next lesson at all, we simply stay on the last lesson.
-// - Inputs are disabled after reveal to avoid edits during the short delay.
-//
-// Pillars
-// -------
-// - Efficiency : one fetch per slug; no-store to reflect fresh content.
-// - Robustness : defensive checks for missing fields; graceful fallbacks.
-// - Simplicity : normalization function + minimal state.
-// - Ease of mgmt : clear comments; components stay decoupled.
-// - Security : read-only data path; no changes to auth or payments.
+// Everything else (auth, payments, data fetch, auto-advance after quiz submit)
+// remains unchanged from your current working version.
 
 "use client";
 
@@ -33,22 +21,18 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { usePaidAccess } from "@/hooks/usePaidAccess";
 
-// Course UI building blocks (import-only; logic untouched except passing new props)
 import ModuleList from "@/components/course/ModuleList";
 import PortableTextRenderer from "@/components/course/PortableTextRenderer";
 import QuizCard from "@/components/course/QuizCard";
 import VideoPlayer from "@/components/course/VideoPlayer";
 
-// 🔒 UI types your components expect
 import type {
   CourseModule as UICourseModule,
   CourseLesson as UICourseLesson,
   CourseQuiz as UICourseQuiz,
 } from "@/types/course";
 
-// ────────────────────────────────────────────────────────────
-// Local DTOs (match /api/courses/[slug])
-// ────────────────────────────────────────────────────────────
+// DTOs matching /api/courses/[slug]
 interface CourseDTO {
   id: string;
   slug: string;
@@ -66,12 +50,12 @@ interface CourseModuleDTO {
 interface CourseLessonDTO {
   id: string;
   title: string;
-  videoUrl?: string; // optional in DTO (from Sanity)
+  videoUrl?: string;
   body?: any;
   quiz?: CourseQuizDTO;
 }
 interface CourseQuizDTO {
-  passingScore?: number; // optional in API; ignored now (no scoring UI)
+  passingScore?: number;
   questions: {
     id: string;
     question: string;
@@ -80,12 +64,8 @@ interface CourseQuizDTO {
   }[];
 }
 
-// Answers map for the current lesson quiz: questionId -> selected option index
 type QuizAnswers = Record<string, number | null>;
 
-// ────────────────────────────────────────────────────────────
-// Utility: compute prev/next lesson across module boundaries
-// ────────────────────────────────────────────────────────────
 function computeAdjacentLesson(
   modules: UICourseModule[],
   moduleIndex: number,
@@ -103,12 +83,6 @@ function computeAdjacentLesson(
   return { prev, next };
 }
 
-// ────────────────────────────────────────────────────────────
-// Normalization: DTO → UI types expected by components
-// - Guarantees lesson.videoUrl is a string ("" when missing)
-// - Carries `passingScore` through via a safe cast (UI type may not include it).
-//   (We no longer use it in the UI, but keeping parity is harmless.)
-// ────────────────────────────────────────────────────────────
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
   return dtoModules.map<UICourseModule>((m) => ({
@@ -118,7 +92,7 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
     lessons: (m.lessons ?? []).map<UICourseLesson>((l) => ({
       id: l.id,
       title: l.title,
-      videoUrl: l.videoUrl ?? "", // ✅ force string for UI type
+      videoUrl: l.videoUrl ?? "",
       body: l.body,
       quiz: l.quiz
         ? (({
@@ -139,9 +113,7 @@ export default function CoursePage() {
   const router = useRouter();
   const access = usePaidAccess();
 
-  // ────────────────────────────────────────────────────────────
-  // 1) Access gate (UNCHANGED)
-  // ────────────────────────────────────────────────────────────
+  // Access gate (unchanged)
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -149,13 +121,10 @@ export default function CoursePage() {
     }
   }, [access.loading, access.hasAccess, router]);
 
-  // Route: ?slug=... (defaults to your known course)
   const searchParams = useSearchParams();
   const slug = (searchParams?.get("slug") || "cultural-awareness-training").trim();
 
-  // ────────────────────────────────────────────────────────────
-  // 2) Course data fetch (after access is true)
-  // ────────────────────────────────────────────────────────────
+  // Fetch course (unchanged)
   const [course, setCourse] = useState<CourseDTO | null>(null);
   const [loadingCourse, setLoadingCourse] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string>("");
@@ -191,24 +160,21 @@ export default function CoursePage() {
     };
   }, [access.loading, access.hasAccess, slug]);
 
-  // ────────────────────────────────────────────────────────────
-  // 3) Normalized modules for UI components
-  // ────────────────────────────────────────────────────────────
+  // Normalize for UI
   const uiModules: UICourseModule[] = useMemo(
     () => normalizeModules(course?.modules),
     [course?.modules]
   );
 
-  // 4) UI State: current module/lesson + derived lesson + quiz state
+  // Current indices + derived current lesson
   const [currentModuleIndex, setCurrentModuleIndex] = useState<number>(0);
   const [currentLessonIndex, setCurrentLessonIndex] = useState<number>(0);
 
-  // Reset to first lesson when module changes
+  // When module changes, reset to first lesson (unchanged)
   useEffect(() => {
     setCurrentLessonIndex(0);
   }, [currentModuleIndex]);
 
-  // Current module/lesson derived safely (from normalized modules)
   const currentModule = useMemo(() => {
     if (!uiModules.length) return null;
     return uiModules[currentModuleIndex] || uiModules[0] || null;
@@ -219,14 +185,11 @@ export default function CoursePage() {
     return currentModule.lessons[currentLessonIndex] || currentModule.lessons[0] || null;
   }, [currentModule, currentLessonIndex]);
 
-  // Adjacent lesson navigation (prev/next across module boundaries)
   const { prev: prevLesson, next: nextLesson } = useMemo(() => {
     return computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
   }, [uiModules, currentModuleIndex, currentLessonIndex]);
 
-  // ────────────────────────────────────────────────────────────
-  // 5) Quiz state (pure UI; no persistence)
-  // ────────────────────────────────────────────────────────────
+  // Quiz UI state (unchanged)
   const [answers, setAnswers] = useState<QuizAnswers>({});
   const [revealed, setRevealed] = useState<boolean>(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,23 +209,17 @@ export default function CoursePage() {
   };
 
   const handleQuizSubmit = () => {
-    // Reveal correctness feedback
     setRevealed(true);
-
-    // Start a short timer to auto-advance (1.5s)
     if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
     autoAdvanceTimer.current = setTimeout(() => {
-      // Advance to next lesson if available
       if (nextLesson) {
         setCurrentModuleIndex(nextLesson.m);
         setCurrentLessonIndex(nextLesson.l);
       }
-      // else: stay on last lesson (no-op). We intentionally do NOT
-      // redirect or change flow to preserve your existing UX.
     }, 1500);
   };
 
-  // Manual navigation buttons still available
+  // Manual navigation
   const goPrev = () => {
     if (!prevLesson) return;
     setCurrentModuleIndex(prevLesson.m);
@@ -274,9 +231,13 @@ export default function CoursePage() {
     setCurrentLessonIndex(nextLesson.l);
   };
 
-  // ────────────────────────────────────────────────────────────
-  // 6) Render states (UNCHANGED access logic)
-  // ────────────────────────────────────────────────────────────
+  // ✅ NEW: when a lesson is clicked in the sidebar, display it immediately.
+  const handleSelectLesson = (mIdx: number, lIdx: number) => {
+    setCurrentModuleIndex(mIdx);
+    setCurrentLessonIndex(lIdx);
+  };
+
+  // Render states (unchanged)
   if (access.loading) {
     return (
       <section className="w-full min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-700 to-blue-300">
@@ -312,9 +273,7 @@ export default function CoursePage() {
     );
   }
 
-  // ────────────────────────────────────────────────────────────
-  // 7) Main Layout
-  // ────────────────────────────────────────────────────────────
+  // Main UI (unchanged except passing `onSelectLesson`)
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 px-4 sm:px-6">
       {/* Header */}
@@ -334,6 +293,7 @@ export default function CoursePage() {
               setCurrentModuleIndex(idx);
               setCurrentLessonIndex(0);
             }}
+            onSelectLesson={handleSelectLesson} // ✅ NEW
           />
         </div>
 
@@ -353,7 +313,7 @@ export default function CoursePage() {
                 )}
               </div>
 
-              {/* Prev/Next lesson controls (manual override) */}
+              {/* Prev/Next lesson controls */}
               <div className="flex gap-2">
                 <button
                   disabled={!prevLesson}
@@ -372,7 +332,7 @@ export default function CoursePage() {
               </div>
             </div>
 
-            {/* Video (optional; normalized to string) */}
+            {/* Video (optional) */}
             {currentLesson?.videoUrl && (
               <VideoPlayer
                 src={currentLesson.videoUrl}
@@ -380,7 +340,7 @@ export default function CoursePage() {
               />
             )}
 
-            {/* Rich body (Portable Text or string) */}
+            {/* Rich body */}
             {Array.isArray(currentLesson?.body) ? (
               <PortableTextRenderer
                 value={currentLesson?.body}
@@ -392,7 +352,7 @@ export default function CoursePage() {
               </div>
             ) : null}
 
-            {/* Quiz (optional, in-card) */}
+            {/* Quiz (optional) */}
             {!!currentLesson?.quiz && (
               <div className="mt-4">
                 <QuizCard
@@ -402,7 +362,7 @@ export default function CoursePage() {
                   onChange={handleQuizChange}
                   onSubmit={handleQuizSubmit}
                 />
-                {/* No scoring/threshold/feedback text by design */}
+                {/* No scoring text by design */}
               </div>
             )}
           </div>
