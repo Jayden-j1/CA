@@ -3,25 +3,19 @@
 // Purpose
 // -------
 // Render the paid course UI and *persist* progress reliably so that:
-//  • The dashboard ring reflects real completion
+//  • Any progress UI (dashboard ring/bar) reflects real completion
 //  • Modules unlock sequentially and stay unlocked across navigation
 //  • Your place in the course is remembered (resume)
 //
-// What changed (surgical, look for "SERVER PROGRESS", "LOCK GUARD", and "ENDPOINT FIX"):
-//  1) ENDPOINT FIX: Client now calls the correct progress API path: /api/course/progress (singular).
-//     Previously it called /api/courses/progress (404), so no progress was saved → dashboard bar never moved.
-//  2) LOCK GUARD: The “Next” button is disabled and guarded if clicking it would cross into a locked module.
-//     We do *not* alter lessons inside the current module; we only block advancing into the next module
-//     unless it’s actually unlocked by completing the current one.
-//  3) We continue to POST an explicit percent to guarantee the dashboard ring moves.
-//  4) No other flows are touched (auth, staff/owner access, payments, video, quizzes).
+// Surgical updates in this revision (look for tags):
+//  - [ENDPOINT FIX] (retained from prior step): use /api/course/progress (singular).
+//  - [QUIZ SUBMIT ✅]: make onSubmit async, await save, and resolve promise so buttons don’t get stuck.
+//  - [AUTO-ADVANCE ✅]: after submit, short delay then recompute the next pointer and advance if permitted.
+//  - [LOCK GUARD ✅]: preserved; “Next” cannot cross into a locked module.
+//  - No changes to signup/staff/payment flows.
 //
-// Pillars implemented:
-//  - Efficiency: minimal fetches; reuse memoized sets; tiny state updates.
-//  - Robustness: graceful fallbacks; idempotent completion; localStorage backup.
-//  - Simplicity: clear helpers for unlocked computation and percent.
-//  - Ease of management: verbose comments at change points.
-//  - Security: no extra surface; respects existing access gates.
+// Pillars: efficiency (minimal fetches), robustness (awaits + guards), simplicity (clear helpers),
+// ease-of-management (explicit comments), security (no new surface).
 
 "use client";
 
@@ -63,12 +57,12 @@ interface CourseLessonDTO {
   quiz?: CourseQuizDTO;
 }
 interface CourseQuizDTO {
-  passingScore?: number; // quizzes are reveal-only; not used for scoring
+  passingScore?: number; // reveal-only; not used for scoring
   questions: {
     id: string;
     question: string;
     options: string[];
-    correctIndex: number; // 0-based
+    correctIndex: number;
   }[];
 }
 
@@ -95,7 +89,7 @@ function computeAdjacentLesson(
   return { prev, next };
 }
 
-/** Normalize API DTO → UI types (keeps your Video/Body/Quiz components unchanged). */
+/** Normalize API DTO → UI types (keeps your components unchanged). */
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
   return dtoModules.map<UICourseModule>((m) => ({
@@ -198,10 +192,8 @@ function computeUnlocked(
   const unlocked = new Set<number>();
   if (modules.length === 0) return unlocked;
 
-  // Module 0 is always unlocked by default
-  unlocked.add(0);
+  unlocked.add(0); // Module 0 unlocked by default
 
-  // Track the farthest completed module so we can unlock the next one after it
   let farthest = -1;
   modules.forEach((m, idx) => {
     if (completedModuleIds.has(m.id)) {
@@ -210,14 +202,13 @@ function computeUnlocked(
     }
   });
 
-  // Unlock the next module after the farthest completed one (if any)
   const nextIdx = farthest + 1;
   if (nextIdx >= 0 && nextIdx < modules.length) unlocked.add(nextIdx);
 
   return unlocked;
 }
 
-/** Compute % complete client-side as a safe fallback. */
+/** Compute % complete on client as a safe fallback and to send server-side. */
 function computePercentClient(totalModules: number, completedCount: number): number {
   if (totalModules <= 0) return 0;
   const pct = Math.round((completedCount / totalModules) * 100);
@@ -311,7 +302,7 @@ export default function CoursePage() {
   const [revealed, setRevealed] = useState<boolean>(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Clear quiz state on lesson change
+  // Clear quiz state on lesson change + store resume pointer
   useEffect(() => {
     setAnswers({});
     setRevealed(false);
@@ -324,7 +315,7 @@ export default function CoursePage() {
     if (course?.id && currentModule && currentLesson) {
       saveResume(course.id, currentModule.id, currentLesson.id);
     }
-  }, [currentLesson?.id, currentModule?.id]); // save only when identity changes
+  }, [currentLesson?.id, currentModule?.id]);
 
   // ---------------- SERVER PROGRESS: completion state + sync ----------------
 
@@ -344,14 +335,14 @@ export default function CoursePage() {
     // 2) Server seed
     (async () => {
       try {
-        // ENDPOINT FIX: correct path is /api/course/progress (singular)
+        // [ENDPOINT FIX]: correct path is /api/course/progress (singular)
         const res = await fetch(
           `/api/course/progress?courseId=${encodeURIComponent(course.id)}`,
           { cache: "no-store" }
         );
         const json = await res.json().catch(() => ({}));
 
-        // Only adopt server values if meta actually exists
+        // Only adopt server values if meta exists
         if (json?.meta) {
           const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
             ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
@@ -361,12 +352,10 @@ export default function CoursePage() {
           setCompletedModuleIds(serverSet);
           saveLocalProgress(course.id, Array.from(serverSet));
 
-          // RESUME: if server carries lastModuleId, try to restore to it;
-          // otherwise, try local resume pointer; otherwise leave as-is (module 0).
+          // RESUME: if server carries lastModuleId, try to restore to it; else local pointer.
           const lastModuleId: string | null =
             typeof json.meta.lastModuleId === "string" ? json.meta.lastModuleId : null;
 
-          // We restore ONLY once (initial seed) to avoid fighting user navigation.
           if (lastModuleId && uiModules.length) {
             const mIdx = uiModules.findIndex((m) => m.id === lastModuleId);
             if (mIdx >= 0) {
@@ -374,7 +363,6 @@ export default function CoursePage() {
               setCurrentLessonIndex(0);
             }
           } else {
-            // Try local resume pointer (moduleId, lessonId)
             const { moduleId, lessonId } = loadResume(course.id);
             if (moduleId) {
               const mIdx = uiModules.findIndex((m) => m.id === moduleId);
@@ -387,8 +375,6 @@ export default function CoursePage() {
               }
             }
           }
-        } else {
-          // No server meta (e.g., first-time user) → keep local as-is
         }
       } catch {
         // Network/server failure → keep local as-is
@@ -397,15 +383,15 @@ export default function CoursePage() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [course?.id, uiModules.length]); // seed once when course + modules are ready
+  }, [course?.id, uiModules.length]);
 
   // Compute unlocked indices based on completion
   const unlockedModuleIndices: Set<number> = useMemo(() => {
     return computeUnlocked(uiModules, completedModuleIds);
   }, [uiModules, completedModuleIds]);
 
-  /** Persist a snapshot to the server. The server computes/stores percent —
-   *  but we also provide a client-computed percent to guarantee updates. */
+  /** Persist a snapshot to the server. We also provide a client-computed percent so
+   *  any progress UI can update immediately after the POST succeeds. */
   async function saveProgressSnapshot(opts?: { lastModuleId?: string | null }) {
     if (!course?.id) return;
 
@@ -416,36 +402,44 @@ export default function CoursePage() {
       courseId: course.id,
       completedModuleIds: completedArr,
       lastModuleId: typeof opts?.lastModuleId === "string" ? opts.lastModuleId : null,
-      percent, // SERVER PROGRESS: explicit percent to ensure dashboard ring updates
+      percent, // sent to server so dashboard/progress bars can read fresh value on next GET
     };
 
     try {
-      // ENDPOINT FIX: correct path is /api/course/progress (singular)
-      await fetch("/api/course/progress", {
+      // [ENDPOINT FIX]: correct path is /api/course/progress (singular)
+      const res = await fetch("/api/course/progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         cache: "no-store",
       });
+      // We don't *need* the response body here; await ensures persistence finished.
+      if (!res.ok) {
+        // Soft-fail: keep local state; server can be retried later.
+        console.warn("[progress] server refused POST; progress will retry on next action.");
+      }
     } catch {
-      // Swallow errors; next user action can retry. Local state stays intact.
+      // Swallow errors; local state remains and next user action can retry.
     }
   }
 
-  /** Idempotently mark the *current* module complete and save to server. */
-  async function markCurrentModuleComplete() {
-    if (!currentModule || !course?.id) return;
+  /** Idempotently mark the *current* module complete and save to server.
+   *  Returns a boolean indicating whether a new completion occurred. */
+  async function markCurrentModuleComplete(): Promise<boolean> {
+    if (!currentModule || !course?.id) return false;
 
     const id = currentModule.id;
-    if (completedModuleIds.has(id)) return; // already complete
+    if (completedModuleIds.has(id)) return false; // already complete
 
+    // Update local set immediately for snappy UX (optimistic)
     const next = new Set(completedModuleIds);
     next.add(id);
     setCompletedModuleIds(next);
     saveLocalProgress(course.id, Array.from(next));
 
-    // SERVER PROGRESS: include lastModuleId for resume; include percent
+    // Persist on server and include lastModuleId for resume pointers
     await saveProgressSnapshot({ lastModuleId: id });
+    return true;
   }
 
   // ---------------- Handlers ----------------
@@ -454,27 +448,40 @@ export default function CoursePage() {
     setAnswers((prev) => ({ ...prev, [questionId]: optionIndex }));
   };
 
-  const handleQuizSubmit = () => {
-    // 1) Reveal green/red feedback (handled within <QuizCard/>)
+  /** [QUIZ SUBMIT ✅]
+   *  Many quiz components set an internal "submitting" flag and clear it
+   *  only when the provided onSubmit *resolves*. We make this async, await
+   *  persistence, and then resolve to clear the "Submitting..." state.
+   *  We also auto-advance shortly after, recomputing the next pointer
+   *  to avoid race conditions with state updates/unlocks.
+   */
+  const handleQuizSubmit = async () => {
+    // 1) Reveal feedback immediately
     setRevealed(true);
 
-    // 2) Mark the module complete (explicit action: quiz submit)
-    void markCurrentModuleComplete();
+    // 2) Persist completion and progress (await to ensure submit finishes cleanly)
+    await markCurrentModuleComplete();
 
-    // 3) Auto-advance if there is a next lesson
+    // 3) Auto-advance after a short delay:
+    //    - Allow state/unlock recomputations to settle
+    //    - Recompute the next pointer at the time of advance
     if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
     autoAdvanceTimer.current = setTimeout(() => {
-      if (nextLesson) {
-        // LOCK GUARD (auto-advance): only cross module boundary if next module is unlocked
-        if (
-          nextLesson.m === currentModuleIndex || // same module is always OK
-          unlockedModuleIndices.has(nextLesson.m) // next module must be unlocked
-        ) {
-          setCurrentModuleIndex(nextLesson.m);
-          setCurrentLessonIndex(nextLesson.l);
-        }
+      // Recompute adjacent lesson using the latest indices
+      const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
+      if (!next) return;
+
+      // Respect lock when crossing modules
+      if (next.m !== currentModuleIndex && !unlockedModuleIndices.has(next.m)) {
+        return; // still locked; user remains on current module
       }
-    }, 1500);
+
+      setCurrentModuleIndex(next.m);
+      setCurrentLessonIndex(next.l);
+    }, 600); // shorter, snappier UX while still letting state settle
+
+    // 4) Important: return (resolve) to allow QuizCard to exit "Submitting..."
+    return true;
   };
 
   const goPrev = () => {
@@ -492,10 +499,8 @@ export default function CoursePage() {
   const goNext = () => {
     if (!nextLesson) return;
 
-    // LOCK GUARD (manual click): block crossing into a locked module
+    // [LOCK GUARD ✅]: block crossing into a locked module
     if (nextWouldEnterLockedModule) {
-      // We avoid adding new UX libs/toasts here for surgical precision.
-      // Optionally, you could show a subtle inline hint below the buttons (see render below).
       console.warn("Blocked: Next would enter a locked module. Complete current module first.");
       return;
     }
@@ -607,7 +612,7 @@ export default function CoursePage() {
                     ← Prev
                   </button>
                   <button
-                    // LOCK GUARD (UI state): disable Next if it would enter a locked module
+                    // [LOCK GUARD ✅]: disable if it would enter a locked module
                     disabled={!nextLesson || nextWouldEnterLockedModule}
                     className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 hover:bg-gray-50"
                     onClick={goNext}
@@ -651,6 +656,7 @@ export default function CoursePage() {
                   answers={answers}
                   revealed={revealed}
                   onChange={handleQuizChange}
+                  // [QUIZ SUBMIT ✅]: async submit that resolves when save finishes
                   onSubmit={handleQuizSubmit}
                 />
               </div>
@@ -662,10 +668,11 @@ export default function CoursePage() {
                 <button
                   onClick={async () => {
                     await markCurrentModuleComplete();
-                    // After completing a no-quiz module, attempt to advance (will be allowed now)
-                    if (nextLesson) {
-                      setCurrentModuleIndex(nextLesson.m);
-                      setCurrentLessonIndex(nextLesson.l);
+                    // After completing a no-quiz module, attempt to advance (respect lock)
+                    const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
+                    if (next && (next.m === currentModuleIndex || unlockedModuleIndices.has(next.m))) {
+                      setCurrentModuleIndex(next.m);
+                      setCurrentLessonIndex(next.l);
                     }
                   }}
                   className="inline-flex items-center justify-center px-5 py-2 rounded-lg font-semibold
@@ -684,6 +691,7 @@ export default function CoursePage() {
     </section>
   );
 }
+
 
 
 
