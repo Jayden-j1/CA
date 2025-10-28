@@ -222,3 +222,17 @@ model UserModuleProgress {
   @@index([moduleId])
   @@index([userId, updatedAt])
 }
+
+/// Tracks per-user, per-course module completion.
+/// One row per (userId, courseId). `completedModuleIds` is stored as JSON array.
+/// This keeps it DB-agnostic (works across Postgres/MySQL/SQLite).
+model CourseProgress {
+  id                  String   @id @default(cuid())
+  userId              String
+  courseId            String
+  completedModuleIds  Json     /// e.g., ["moduleId1","moduleId2"]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, courseId])
+}

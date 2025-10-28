@@ -4,23 +4,53 @@
 // - Root dashboard landing page with visually polished main content (Div 1)
 //   plus three complementary panels:
 //     • Div 2: Quick Actions (role-aware, access-aware)
-//     • Div 3: Progress Tracker (circular; placeholder value)
+//     • Div 3: Progress Tracker (circular; wired to server progress)
 //     • Div 4: Cultural Highlight (rotating quotes/facts)
 //
-// Key improvements in this patch:
-// - Add explicit type annotation on setHighlightIndex callback to satisfy `strict` TS.
-// - Add an explicit React import (not required by Next 15, but helps certain editors/linters).
+// Important to this fix:
+// - This page renders ONLY the dashboard UI (no Course components).
+// - It may fetch the course ID to compute % progress, but it never renders the course UI.
+// - Ensures no accidental import of CoursePage / ModuleList / QuizCard here.
 //
+// Pillars:
+// - Simplicity & Robustness: clear separation of concerns.
+// - Security & Performance: same access checks as before; no new flows touched.
 
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 import FullPageSpinner from "@/components/ui/fullPageSpinner";
 import TextType from "@/components/dashboard/TypingText";
 import { CircularProgressbar, buildStyles } from "react-circular-progressbar";
+
+// ---- Canonical course slug used to compute dashboard progress ----
+const COURSE_SLUG = "cultural-awareness-training";
+
+// Small helper: animate a number from current -> target smoothly.
+function animateTo(
+  from: number,
+  to: number,
+  durationMs: number,
+  onTick: (value: number) => void
+) {
+  const start = performance.now();
+  const delta = to - from;
+  let raf = 0;
+
+  const step = (t: number) => {
+    const elapsed = t - start;
+    const p = Math.min(1, elapsed / durationMs);
+    const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+    onTick(Math.round(from + delta * eased));
+    if (p < 1) raf = requestAnimationFrame(step);
+  };
+
+  raf = requestAnimationFrame(step);
+  return () => cancelAnimationFrame(raf);
+}
 
 export default function DashboardPage() {
   // ---------------- Session & Navigation ----------------
@@ -36,9 +66,7 @@ export default function DashboardPage() {
   const isIndividualUser = role === "USER" && businessId === null;
 
   // ---------------- Server Access Probe ----------------
-  // Always declare hooks before any conditional return.
   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     const probe = async () => {
@@ -56,23 +84,73 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // ---------------- Progress (placeholder animation) ----------------
+  // ---------------- Progress (wired to server) ----------------
   const [progress, setProgress] = useState<number>(0);
+  const [progressTarget, setProgressTarget] = useState<number>(0);
+  const animateCancelRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
-    let mounted = true;
-    const target = 45;
-    let val = 0;
-    const step = () => {
-      if (!mounted) return;
-      val = Math.min(val + 5, target);
-      setProgress(val);
-      if (val < target) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
+    if (animateCancelRef.current) {
+      animateCancelRef.current();
+      animateCancelRef.current = null;
+    }
+    animateCancelRef.current = animateTo(progress, progressTarget, 600, setProgress);
     return () => {
-      mounted = false;
+      if (animateCancelRef.current) {
+        animateCancelRef.current();
+        animateCancelRef.current = null;
+      }
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressTarget]);
+
+  // Fetch courseId by slug → then progress percent by courseId (with proper abort handling)
+  useEffect(() => {
+    if (status !== "authenticated") return;
+
+    let cancelled = false;
+    const courseController = new AbortController();
+    let progressController: AbortController | null = null;
+
+    (async () => {
+      try {
+        // 1) Fetch the course to get its stable `id` (we DO NOT render the course UI here)
+        const resCourse = await fetch(
+          `/api/courses/${encodeURIComponent(COURSE_SLUG)}`,
+          { cache: "no-store", signal: courseController.signal }
+        );
+        if (!resCourse.ok) throw new Error("Failed to load course");
+        const courseData = await resCourse.json().catch(() => null);
+        const courseId: string | undefined = courseData?.course?.id;
+        if (!courseId) throw new Error("Course id missing");
+        if (cancelled) return;
+
+        // 2) Now fetch server-stored progress by courseId
+        progressController = new AbortController();
+        const resProg = await fetch(
+          `/api/courses/progress?courseId=${encodeURIComponent(courseId)}`,
+          { cache: "no-store", signal: progressController.signal }
+        );
+        const progJson = await resProg.json().catch(() => ({}));
+
+        const rawPercent = progJson?.meta?.percent;
+        const percent =
+          typeof rawPercent === "number"
+            ? Math.max(0, Math.min(100, Math.round(rawPercent)))
+            : 0;
+
+        if (!cancelled) setProgressTarget(percent);
+      } catch {
+        if (!cancelled) setProgressTarget((p) => p || 0);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      courseController.abort();
+      if (progressController) progressController.abort();
+    };
+  }, [status]);
 
   // ---------------- Rotating Cultural Highlights ----------------
   const highlights = useMemo(
@@ -104,7 +182,6 @@ export default function DashboardPage() {
   const [highlightIndex, setHighlightIndex] = useState(0);
   useEffect(() => {
     const id = setInterval(() => {
-      // ✅ Explicit type annotation avoids “implicit any” in strict mode
       setHighlightIndex((i: number) => (i + 1) % highlights.length);
     }, 10000);
     return () => clearInterval(id);
@@ -132,14 +209,13 @@ export default function DashboardPage() {
 
   // ---------------- Links ----------------
   const LINKS = {
-  continueLearning: "/dashboard/course",
-  exploreMap: "/dashboard/map",
-  resources: "/dashboard/resources",
-  manageStaff: "/dashboard/staff",
-  billing: "/dashboard/billing",
-  adminPanel: "/dashboard/admin",
-  // ⛏️ FIX: was "/pricing" (404 for your app) → send users to your upgrade flow
-  getAccess: "/dashboard/upgrade",
+    continueLearning: "/dashboard/course",
+    exploreMap: "/dashboard/map",
+    resources: "/dashboard/resources",
+    manageStaff: "/dashboard/staff",
+    billing: "/dashboard/billing",
+    adminPanel: "/dashboard/admin",
+    getAccess: "/dashboard/upgrade",
   };
 
   // ---------------- Greeting ----------------
@@ -300,7 +376,9 @@ export default function DashboardPage() {
           </div>
 
           <p className="mt-4 text-sm text-gray-700 max-w-sm">
-            You’re making steady progress. Keep going — learning is a journey.
+            You’re making steady progress, Keep going!
+            <br />
+            <b>Gangga Nuhma — To learn and understand.</b>
           </p>
 
           <a
@@ -324,9 +402,7 @@ export default function DashboardPage() {
           >
             “{currentHighlight.quote}”
           </p>
-          <p className="text-sm text-gray-600 mt-3">
-            {currentHighlight.author}
-          </p>
+          <p className="text-sm text-gray-600 mt-3">{currentHighlight.author}</p>
           <a
             href={LINKS.resources}
             className="mt-5 inline-block text-gray-900 bg-yellow-300 hover:bg-yellow-200 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
@@ -338,3 +414,12 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
