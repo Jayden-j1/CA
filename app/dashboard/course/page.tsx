@@ -2,31 +2,23 @@
 //
 // Purpose
 // -------
-// Render the paid course UI and *reliably* persist progress to the server:
-//  - Modules unlock sequentially
-//  - Completion is recorded ONLY on explicit actions
-//  - Server-stored completion feeds the dashboard progress ring
+// Render the paid course UI and *persist* progress reliably so that:
+//  • The dashboard ring reflects real completion
+//  • Modules unlock sequentially and stay unlocked across navigation
+//  • Your place in the course is remembered (resume)
 //
-// Surgical changes vs your current file (look for "SERVER PROGRESS" tags):
-// - Use the canonical endpoint **/api/courses/progress** (plural) for both GET/POST
-//   to match your implemented route handlers.
-// - Seed completion from server meta → never auto-complete on first render.
-// - Mark a module complete only when:
-//     • it has a quiz  → on quiz Submit
-//     • it has no quiz → when clicking “Mark module complete” on its final lesson
-//       (kept your existing button + message)
-// - Compute unlock set as: {0} ∪ completed ∪ (next after farthest completed).
-// - Prevent selecting locked modules/lessons.
+// What changed (surgical, look for "SERVER PROGRESS" and "RESUME"):
+//  1) On completion we now POST a client-computed `percent` along with
+//     `completedModuleIds` and `lastModuleId`. This guarantees the dashboard
+//     ring moves even if the server-side percent calculation is conservative.
+//  2) We never overwrite local/server completion with “empty” values.
+//     We only adopt server values when the server actually returns `meta`.
+//  3) We persist a lightweight resume pointer (moduleId + lessonId) in
+//     localStorage and (optionally) `lastModuleId` on the server;
+//     on load we restore to the last meaningful place.
+//  4) Unlock calculation remains sequential and stable.
 //
-// Everything else (auth, payments, video/body rendering, auto-advance after quiz submit)
-// remains unchanged.
-//
-// Pillars
-// -------
-// - Simplicity: tiny helpers; no new deps
-// - Robustness: defensive fetches; never marks complete implicitly
-// - Ease of management: extensive comments; all changes localized to this file
-// - Security: relies on existing auth + server checks
+// No other flows touched (auth, staff/owner access, payments, video, quizzes).
 
 "use client";
 
@@ -128,8 +120,9 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
   }));
 }
 
-/** LocalStorage key helper (kept as a fallback/optimistic cache). */
+/** LocalStorage keys (fallback + resume). */
 const progressKey = (courseId: string) => `courseProgress:${courseId}`;
+const resumeKey = (courseId: string) => `courseResume:${courseId}`;
 
 /** Load local optimistic progress (fallback if server unreachable). */
 function loadLocalProgress(courseId: string): { completedModuleIds: string[] } {
@@ -150,6 +143,30 @@ function saveLocalProgress(courseId: string, completedModuleIds: string[]) {
     localStorage.setItem(progressKey(courseId), JSON.stringify({ completedModuleIds }));
   } catch {
     // ignore storage errors (private mode, quota, etc.)
+  }
+}
+
+/** Save a tiny resume pointer to local storage (moduleId + lessonId). */
+function saveResume(courseId: string, moduleId: string, lessonId: string) {
+  try {
+    localStorage.setItem(resumeKey(courseId), JSON.stringify({ moduleId, lessonId }));
+  } catch {
+    // ignore
+  }
+}
+
+/** Load resume pointer from local storage. */
+function loadResume(courseId: string): { moduleId?: string; lessonId?: string } {
+  try {
+    const raw = localStorage.getItem(resumeKey(courseId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return {
+      moduleId: typeof parsed?.moduleId === "string" ? parsed.moduleId : undefined,
+      lessonId: typeof parsed?.lessonId === "string" ? parsed.lessonId : undefined,
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -192,6 +209,13 @@ function computeUnlocked(
   if (nextIdx >= 0 && nextIdx < modules.length) unlocked.add(nextIdx);
 
   return unlocked;
+}
+
+/** Compute % complete client-side as a safe fallback. */
+function computePercentClient(totalModules: number, completedCount: number): number {
+  if (totalModules <= 0) return 0;
+  const pct = Math.round((completedCount / totalModules) * 100);
+  return Math.max(0, Math.min(100, pct));
 }
 
 // =============================================================================
@@ -250,6 +274,7 @@ export default function CoursePage() {
     () => normalizeModules(course?.modules),
     [course?.modules]
   );
+  const totalModules = uiModules.length;
 
   // Current indices
   const [currentModuleIndex, setCurrentModuleIndex] = useState<number>(0);
@@ -288,7 +313,12 @@ export default function CoursePage() {
       clearTimeout(autoAdvanceTimer.current);
       autoAdvanceTimer.current = null;
     }
-  }, [currentLesson?.id]);
+
+    // RESUME: keep a tiny resume pointer as user navigates lessons
+    if (course?.id && currentModule && currentLesson) {
+      saveResume(course.id, currentModule.id, currentLesson.id);
+    }
+  }, [currentLesson?.id, currentModule?.id]); // save only when identity changes
 
   // ---------------- SERVER PROGRESS: completion state + sync ----------------
 
@@ -296,15 +326,16 @@ export default function CoursePage() {
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
-  // Seed from local (optimistic) immediately, then hydrate from server and prefer server.
+  // Seed from local (optimistic), then hydrate from server (prefer server meta only if present).
   useEffect(() => {
     if (!course?.id) return;
 
     // 1) Local optimistic seed
     const local = loadLocalProgress(course.id);
-    setCompletedModuleIds(new Set(local.completedModuleIds));
+    const localSet = new Set(local.completedModuleIds);
+    setCompletedModuleIds(localSet);
 
-    // 2) Server seed (prefer meta from /api/courses/progress)
+    // 2) Server seed
     (async () => {
       try {
         const res = await fetch(
@@ -312,35 +343,75 @@ export default function CoursePage() {
           { cache: "no-store" }
         );
         const json = await res.json().catch(() => ({}));
-        const serverArr: string[] = Array.isArray(json?.meta?.completedModuleIds)
-          ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
-          : [];
 
-        const nextSet = new Set(serverArr);
-        setCompletedModuleIds(nextSet);
-        saveLocalProgress(course.id, Array.from(nextSet));
+        // Only adopt server values if `meta` actually exists
+        if (json?.meta) {
+          const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
+            ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
+            : [];
+          const serverSet = new Set(serverArr);
+
+          setCompletedModuleIds(serverSet);
+          saveLocalProgress(course.id, Array.from(serverSet));
+
+          // RESUME: if server carries lastModuleId, try to restore to it;
+          // otherwise, try local resume pointer; otherwise leave as-is (module 0).
+          const lastModuleId: string | null =
+            typeof json.meta.lastModuleId === "string" ? json.meta.lastModuleId : null;
+
+          // We restore ONLY once (initial seed) to avoid fighting user navigation.
+          if (lastModuleId && uiModules.length) {
+            const mIdx = uiModules.findIndex((m) => m.id === lastModuleId);
+            if (mIdx >= 0) {
+              setCurrentModuleIndex(mIdx);
+              setCurrentLessonIndex(0);
+            }
+          } else {
+            // Try local resume pointer (moduleId, lessonId)
+            const { moduleId, lessonId } = loadResume(course.id);
+            if (moduleId) {
+              const mIdx = uiModules.findIndex((m) => m.id === moduleId);
+              if (mIdx >= 0) {
+                setCurrentModuleIndex(mIdx);
+                if (lessonId && uiModules[mIdx]?.lessons?.length) {
+                  const lIdx = uiModules[mIdx].lessons.findIndex((l) => l.id === lessonId);
+                  if (lIdx >= 0) setCurrentLessonIndex(lIdx);
+                }
+              }
+            }
+          }
+        } else {
+          // No server meta (e.g., first-time user) → keep local as-is
+        }
       } catch {
-        // Ignore network errors; local remains effective fallback
+        // Network/server failure → keep local as-is
       } finally {
         setSeededFromServer(true);
       }
     })();
-  }, [course?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [course?.id, uiModules.length]); // seed once when course + modules are ready
 
   // Compute unlocked indices based on completion
   const unlockedModuleIndices: Set<number> = useMemo(() => {
     return computeUnlocked(uiModules, completedModuleIds);
   }, [uiModules, completedModuleIds]);
 
-  /** Persist a snapshot to the server. The server computes percent for the dashboard. */
+  /** Persist a snapshot to the server. The server computes/stores percent —
+   *  but we also provide a client-computed `percent` to guarantee updates. */
   async function saveProgressSnapshot(opts?: { lastModuleId?: string | null }) {
     if (!course?.id) return;
+
+    const completedArr = Array.from(completedModuleIds);
+    const percent = computePercentClient(totalModules, completedArr.length);
+
     const body = {
       courseId: course.id,
-      completedModuleIds: Array.from(completedModuleIds), // authoritative list
+      completedModuleIds: completedArr,
       lastModuleId: typeof opts?.lastModuleId === "string" ? opts.lastModuleId : null,
-      // no 'percent' — server derives it from completedModuleIds
+      percent, // SERVER PROGRESS: explicit percent to ensure dashboard ring updates
     };
+
     try {
       await fetch("/api/courses/progress", {
         method: "POST",
@@ -365,7 +436,7 @@ export default function CoursePage() {
     setCompletedModuleIds(next);
     saveLocalProgress(course.id, Array.from(next));
 
-    // Persist snapshot (server updates percent). Include lastModuleId for convenience.
+    // SERVER PROGRESS: include lastModuleId for resume; include percent
     await saveProgressSnapshot({ lastModuleId: id });
   }
 
@@ -379,7 +450,7 @@ export default function CoursePage() {
     // 1) Reveal green/red feedback (handled within <QuizCard/>)
     setRevealed(true);
 
-    // 2) Mark the module complete (only when quiz is submitted — explicit action)
+    // 2) Mark the module complete (explicit action: quiz submit)
     void markCurrentModuleComplete();
 
     // 3) Auto-advance if there is a next lesson
@@ -399,7 +470,6 @@ export default function CoursePage() {
   };
 
   const goNext = () => {
-    // If there's no next lesson and module has NO quiz, allow manual completion
     if (!nextLesson) return;
     setCurrentModuleIndex(nextLesson.m);
     setCurrentLessonIndex(nextLesson.l);
@@ -475,7 +545,7 @@ export default function CoursePage() {
               setCurrentModuleIndex(idx);
               setCurrentLessonIndex(0);
             }}
-            // NEW: drive locking UI/behavior
+            // Locking UI/behavior
             unlockedModuleIndices={unlockedModuleIndices}
             onSelectLesson={handleSelectLesson}
           />
@@ -570,6 +640,7 @@ export default function CoursePage() {
     </section>
   );
 }
+
 
 
 
