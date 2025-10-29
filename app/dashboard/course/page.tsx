@@ -1,14 +1,21 @@
 // app/dashboard/course/page.tsx
 //
-// Surgical fixes in this revision:
-//  1) Fix a typo that broke TS: `the [revealed, setRevealed]` → `const [revealed, setRevealed]`.
-//     This resolves: "Cannot find name 'the'", "Cannot find name 'revealed'",
-//     "Left side of comma operator is unused", "Cannot find name 'setRevealed'".
-//  2) Keep the non-blocking save (prevents "Submitting..." hangs on Vercel).
-//  3) Continue to smooth-scroll to top when crossing modules.
-//  4) Pass completedModuleIds (array) to ModuleList; ModuleList now accepts it (optional).
+// Finalised course flow (surgical + robust on Vercel)
+// ---------------------------------------------------
+// ✅ Module 1 unlocked by default; others remain locked until prior module completes.
+// ✅ “Module completed” only appears for modules actually completed.
+// ✅ After completing a quiz: Submit → brief “Submitting…” → auto-advance to next lesson/module → smooth scroll to top.
+// ✅ After completing a no-quiz module: click “Mark module complete” → auto-advance → smooth scroll.
+// ✅ Does NOT rely on stale closure values for locks during auto-advance (prevents Vercel “stuck”).
+// ✅ No changes to auth, signup, staff, payment, or unrelated flows.
 //
-// No changes to any other flows (auth, signup, staff, payments).
+// How we ensure robustness:
+// - When a module is marked complete, we optimistically update local state immediately.
+// - For auto-advance, we DO NOT check `unlockedModuleIndices` inside the timer (it can be stale).
+//   Completing the current module *definitionally* unlocks the next module, so we proceed safely.
+// - Progress POST is fire-and-forget; UI never blocks on network.
+//
+// Pillars: efficiency, robustness, simplicity, security, ease of management.
 
 "use client";
 
@@ -180,7 +187,7 @@ function computeUnlocked(
   const unlocked = new Set<number>();
   if (modules.length === 0) return unlocked;
 
-  unlocked.add(0);
+  unlocked.add(0); // Module 1 unlocked by default
 
   let farthest = -1;
   modules.forEach((m, idx) => {
@@ -225,7 +232,7 @@ export default function CoursePage() {
   const router = useRouter();
   const access = usePaidAccess();
 
-  // Access check — unchanged
+  // Access check — unchanged (keep hooks above all conditional returns)
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -303,7 +310,6 @@ export default function CoursePage() {
 
   // Quiz UI state
   const [answers, setAnswers] = useState<QuizAnswers>({});
-  // ✅ FIX: correct React state tuple declaration (the previous "the [...]" caused TS errors)
   const [revealed, setRevealed] = useState<boolean>(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -405,7 +411,6 @@ export default function CoursePage() {
       percent, // explicit so GET has a top-level percent immediately after
     };
 
-    // We intentionally do NOT await this network call — UX should not depend on network or cold starts.
     fetch("/api/course/progress", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -425,7 +430,7 @@ export default function CoursePage() {
 
   /**
    * Idempotently mark the *current* module complete and persist in background.
-   * Returns synchronously so callers never get stuck in a "Submitting..." state.
+   * Returns true if we transitioned state (used to drive auto-advance).
    */
   function markCurrentModuleComplete(): boolean {
     if (!currentModule || !course?.id) return false;
@@ -451,28 +456,28 @@ export default function CoursePage() {
   };
 
   const handleQuizSubmit = () => {
-    // 1) Reveal feedback UI inside <QuizCard/>
+    // 1) Reveal feedback UI inside <QuizCard/> (button shows “Submitting…” via revealed)
     setRevealed(true);
 
-    // 2) Complete the module *synchronously* (non-blocking persistence)
-    void markCurrentModuleComplete();
+    // 2) Complete the module synchronously (optimistic), persist in background
+    const changed = markCurrentModuleComplete();
 
-    // 3) Auto-advance shortly, respecting locks, with smooth scroll on module change
-    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
-    autoAdvanceTimer.current = setTimeout(() => {
-      const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
-      if (!next) return;
+    // 3) Auto-advance shortly (regardless of unlocked memo), with smooth scroll on module change
+    if (changed) {
+      if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+      autoAdvanceTimer.current = setTimeout(() => {
+        const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
+        if (!next) return; // nothing to advance to (end of course)
 
-      const crossingModule = next.m !== currentModuleIndex;
-      if (crossingModule && !unlockedModuleIndices.has(next.m)) return;
+        const crossingModule = next.m !== currentModuleIndex;
+        // We no longer block on `unlockedModuleIndices` here — completing current module unlocks next by definition.
+        setCurrentModuleIndex(next.m);
+        setCurrentLessonIndex(next.l);
+        if (crossingModule) scrollToTopSmooth();
+      }, 600);
+    }
 
-      setCurrentModuleIndex(next.m);
-      setCurrentLessonIndex(next.l);
-      if (crossingModule) scrollToTopSmooth();
-    }, 600);
-
-    // Return quickly so any "Submitting..." UI in <QuizCard/> clears immediately.
-    return true as any;
+    return true as any; // returns quickly so QuizCard clears button state soon after
   };
 
   const goPrev = () => {
@@ -492,7 +497,7 @@ export default function CoursePage() {
     if (!nextLesson) return;
     const crossingModule = nextLesson.m !== currentModuleIndex;
 
-    // Hard block if "next" would enter a locked module.
+    // Manual Next is still guarded by locks (prevents skipping ahead).
     if (nextWouldEnterLockedModule) {
       console.warn("Blocked: Next would enter a locked module. Complete current module first.");
       return;
@@ -554,11 +559,8 @@ export default function CoursePage() {
   const isCurrentModuleCompleted =
     !!currentModule && completedModuleIds.has(currentModule.id);
 
-  // Provide the completed IDs to children (safe: ignored if not used).
-  const completedIdsArray = useMemo(
-    () => Array.from(completedModuleIds),
-    [completedModuleIds]
-  );
+  // Tiny derived values without hooks (avoid changing hook order).
+  const completedIdsArray = Array.from(completedModuleIds);
 
   return (
     <section className="w-full min-h-screen bg-gradient-to-b from-blue-700 to-blue-300 py-10 px-4 sm:px-6">
@@ -566,7 +568,7 @@ export default function CoursePage() {
       <div className="max-w-6xl mx-auto mb-6 text-white">
         <h1 className="text-3xl font-bold">{course.title}</h1>
         {course.summary && <p className="opacity-90 mt-1">{course.summary}</p>}
-        {/* A ProgressBar component elsewhere can listen for 'course-progress-updated' to update immediately. */}
+        {/* Your progress ring/component can listen to 'course-progress-updated' to refresh instantly. */}
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -586,7 +588,7 @@ export default function CoursePage() {
             // Locking UI/behavior
             unlockedModuleIndices={unlockedModuleIndices}
             onSelectLesson={handleSelectLesson}
-            // ✅ Optional prop (now supported by ModuleList) to show completed badges correctly.
+            // Optional: used only for display badges inside ModuleList
             completedModuleIds={completedIdsArray}
           />
         </div>
@@ -671,16 +673,19 @@ export default function CoursePage() {
               <div className="pt-2">
                 <button
                   onClick={() => {
-                    // Synchronous completion + non-blocking persistence
-                    void markCurrentModuleComplete();
-
-                    // Then advance if allowed, with smooth scroll
-                    const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
-                    if (next && (next.m === currentModuleIndex || unlockedModuleIndices.has(next.m))) {
-                      const crossingModule = next.m !== currentModuleIndex;
-                      setCurrentModuleIndex(next.m);
-                      setCurrentLessonIndex(next.l);
-                      if (crossingModule) scrollToTopSmooth();
+                    const changed = markCurrentModuleComplete();
+                    if (changed) {
+                      const { next } = computeAdjacentLesson(
+                        uiModules,
+                        currentModuleIndex,
+                        currentLessonIndex
+                      );
+                      if (next) {
+                        const crossingModule = next.m !== currentModuleIndex;
+                        setCurrentModuleIndex(next.m);
+                        setCurrentLessonIndex(next.l);
+                        if (crossingModule) scrollToTopSmooth();
+                      }
                     }
                   }}
                   className="inline-flex items-center justify-center px-5 py-2 rounded-lg font-semibold

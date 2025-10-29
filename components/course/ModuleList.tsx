@@ -4,31 +4,29 @@
 // -------
 // Display all course modules and lessons in a responsive sidebar.
 //
-// New in this patch (UX-only; no backend changes):
-// 1) Locks modules until the previous module is completed.
-// 2) Provides clear locked styling and prevents clicking locked lessons.
-// 3) Adds `onSelectLesson(mIdx, lIdx)` so clicking a lesson displays it immediately.
-// 4) ✅ NEW (optional, harmless): accepts `completedModuleIds?: string[]` to show
-//    a subtle "✓ Completed" pill for modules truly completed. If parent doesn't pass
-//    it, nothing changes.
+// UX in this patch:
+// 1) Modules are visually locked until prior completes (driven by unlockedModuleIndices).
+// 2) Clear locked styling and prevents clicking locked lessons.
+// 3) Supports clicking lessons via onSelectLesson(mIdx, lIdx).
+// 4) NEW (optional): show a small "✓ Completed" badge on completed modules,
+//    if parent passes `completedModuleIds` (purely presentational).
 //
-// Props expected by design:
-// - unlockedModuleIndices: Set<number> → which module indices are unlocked.
-// - onSelectLesson(mIdx, lIdx): when a lesson is clicked.
-// - completedModuleIds?: string[] → (optional) list of completed module IDs.
-//   This is presentation-only; locking remains driven by `unlockedModuleIndices`.
-//
-// SAFETY GUARD (important):
-// -------------------------
-// To prevent `.has` on undefined, we treat `unlockedModuleIndices` as OPTIONAL
-// and default it to `new Set([0])`. Module 0 is always unlocked by default.
+// Props:
+// - modules: CourseModule[]
+// - currentModuleIndex: number
+// - currentLessonIndex: number
+// - onSelectModule(index: number): void
+// - unlockedModuleIndices?: Set<number>   (defaults to Set([0]) for safety)
+// - onSelectLesson(moduleIndex: number, lessonIndex: number): void
+// - completedModuleIds?: string[]         (optional; for display badges only)
 //
 // Pillars
 // -------
 // - Simplicity: Tailwind only, clean prop-driven behavior.
-// - Robustness: graceful fallback if lessons are missing or prop omitted.
+// - Robustness: safe fallbacks; never crash if props missing.
 // - Accessibility: aria-disabled and cursor/opacity cues.
-// - Ease of management: thoroughly commented and minimal surface area.
+
+"use client";
 
 import React from "react";
 import type { CourseModule } from "@/types/course";
@@ -38,7 +36,6 @@ interface ModuleListProps {
   currentModuleIndex: number;
   currentLessonIndex: number;
 
-  // Select module header
   onSelectModule: (index: number) => void;
 
   // Which module indices are unlocked; if omitted we assume [0] for safety/back-compat
@@ -47,7 +44,7 @@ interface ModuleListProps {
   // Select a specific lesson within a module
   onSelectLesson: (moduleIndex: number, lessonIndex: number) => void;
 
-  // ✅ Optional list of completed module IDs for display-only badges (harmless if omitted)
+  // Optional: used to show a "completed" badge on module headers
   completedModuleIds?: string[];
 }
 
@@ -60,11 +57,9 @@ const ModuleList: React.FC<ModuleListProps> = ({
   onSelectLesson,
   completedModuleIds,
 }) => {
-  // ✅ Defensive default: if parent forgets to pass `unlockedModuleIndices`, assume module 0 unlocked.
+  // ✅ Defensive default:
   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
-
-  // ✅ Completed modules set (presentation-only). If not provided → empty set (no "Completed" badges).
-  const completedSet = new Set<string>(Array.isArray(completedModuleIds) ? completedModuleIds : []);
+  const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
   return (
     <aside
@@ -74,7 +69,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
       {modules.map((module, mIdx) => {
         const isActiveModule = mIdx === currentModuleIndex;
         const isUnlocked = safeUnlocked.has(mIdx);
-        const isCompleted = completedSet.has(module.id); // ✅ Only true if parent explicitly marks it
+        const isCompleted = completedIdSet.has(module.id);
 
         return (
           <div
@@ -98,37 +93,24 @@ const ModuleList: React.FC<ModuleListProps> = ({
               aria-disabled={!isUnlocked}
               title={!isUnlocked ? "Complete the previous module to unlock" : undefined}
             >
-              <span>
-                {mIdx + 1}. {module.title}
-              </span>
-
-              <span className="ml-2 inline-flex items-center gap-2">
-                {/* Locked indicator (unchanged) */}
-                {!isUnlocked && (
-                  <span
-                    className="inline-flex items-center text-xs font-medium text-gray-600"
-                    aria-hidden="true"
-                  >
-                    🔒 Locked
-                  </span>
-                )}
-
-                {/* ✅ Completed pill (only if parent marked it completed) */}
+              <span className="flex items-center gap-2">
+                <span>{mIdx + 1}. {module.title}</span>
+                {/* Optional completed badge (purely visual) */}
                 {isCompleted && (
-                  <span
-                    className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-[11px] px-2 py-0.5 font-medium"
-                    title="Module completed"
-                  >
-                    ✓ Completed
-                  </span>
+                  <span className="text-[11px] font-medium text-emerald-700">✓ Completed</span>
                 )}
               </span>
+              {!isUnlocked && (
+                <span
+                  className="ml-2 inline-flex items-center text-xs font-medium text-gray-600"
+                  aria-hidden="true"
+                >
+                  🔒 Locked
+                </span>
+              )}
             </button>
 
-            {/* Lesson List
-               - Only render if the module is active AND unlocked.
-               - Each lesson is clickable and invokes `onSelectLesson`.
-            */}
+            {/* Lesson List: only render if active AND unlocked. */}
             {isActiveModule && isUnlocked && (
               <ul className="px-4 py-2 space-y-1">
                 {(module.lessons ?? []).map((lesson, lIdx) => {
