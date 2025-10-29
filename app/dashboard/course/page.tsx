@@ -1,20 +1,14 @@
 // app/dashboard/course/page.tsx
 //
-// Finalised course flow (surgical, robust, Vercel-safe)
-// -----------------------------------------------------
+// Finalised course flow (surgical, robust, Vercel-safe) + ONE-TIME LOCAL MIGRATION
+// ---------------------------------------------------------------------------------
 // ✅ Module 1 unlocked by default; other modules remain locked until the previous one is completed.
 // ✅ "Module completed" only renders for modules actually completed (no false positives).
 // ✅ Quiz modules: Submit → "Submitting…" → auto-advance → smooth scroll to top.
 // ✅ No-quiz modules: "Mark module complete" → auto-advance → smooth scroll to top.
 // ✅ No reliance on stale closures for auto-advance (prevents Vercel "stuck" states).
+// ✅ One-time localStorage migration removes legacy keys just for this course and prunes invalid IDs.
 // ✅ No changes to auth, signup, staff, payments, or unrelated flows.
-//
-// IMPORTANT HARDENINGS (to fix inconsistent unlocks locally vs Vercel):
-// - We PRUNE localStorage progress to *known* module IDs.
-// - If the server seed fails *and* the local set suspiciously equals "all modules complete",
-//   we reset to empty so only Module 1 starts unlocked (conservative default).
-//
-// NOTE (progress bar removal): no event dispatches or ring hooks; we still persist progress for UX resume.
 //
 // Pillars: efficiency, robustness, simplicity, security, ease of management.
 
@@ -216,6 +210,77 @@ function pruneToKnownModules(ids: string[], modules: UICourseModule[]): string[]
   return (ids || []).filter((id) => known.has(id));
 }
 
+/** Remove legacy/stale localStorage keys for this course only (run once per course). */
+function runOneTimeLocalStorageMigration(params: {
+  courseId: string;
+  courseSlug: string;
+  modules: UICourseModule[];
+}) {
+  try {
+    const { courseId, courseSlug, modules } = params;
+    const MIGRATION_FLAG = `course:migrated:v1:${courseId}`;
+    if (localStorage.getItem(MIGRATION_FLAG)) return; // already migrated
+
+    // 1) Define *legacy* key shapes we've ever plausibly used (conservative, course-scoped only).
+    const candidatesToRemove = new Set<string>([
+      // keep canonical keys out of this removal list (we handle them separately below)
+      // legacy patterns seen in older experiments:
+      `progress:${courseId}`,
+      `courseProgress_${courseId}`,
+      `course:${courseId}:progress`,
+      `progress:${courseSlug}`,
+      `resume:${courseId}`,
+      `courseResume_${courseId}`,
+      `course:${courseId}:resume`,
+    ]);
+
+    // 2) Remove only if they exist (safe, idempotent).
+    candidatesToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    });
+
+    // 3) Canonical keys: prune to known module IDs so stray/renamed IDs are dropped.
+    const canonicalProgressKey = progressKey(courseId);
+    const raw = localStorage.getItem(canonicalProgressKey);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        const arr: string[] = Array.isArray(parsed?.completedModuleIds)
+          ? parsed.completedModuleIds
+          : [];
+        const pruned = pruneToKnownModules(arr, modules);
+        localStorage.setItem(canonicalProgressKey, JSON.stringify({ completedModuleIds: pruned }));
+      } catch {
+        // Malformed JSON? Reset to empty.
+        localStorage.setItem(canonicalProgressKey, JSON.stringify({ completedModuleIds: [] }));
+      }
+    }
+
+    // 4) Canonical resume key: if malformed, just clear it (does not affect locking).
+    const canonicalResumeKey = resumeKey(courseId);
+    const rawResume = localStorage.getItem(canonicalResumeKey);
+    if (rawResume) {
+      try {
+        const parsed = JSON.parse(rawResume);
+        const moduleId = typeof parsed?.moduleId === "string" ? parsed.moduleId : null;
+        const lessonId = typeof parsed?.lessonId === "string" ? parsed.lessonId : null;
+        if (!moduleId || !lessonId) {
+          localStorage.removeItem(canonicalResumeKey);
+        }
+      } catch {
+        localStorage.removeItem(canonicalResumeKey);
+      }
+    }
+
+    // 5) Mark migrated with a timestamp (so we never repeat work).
+    localStorage.setItem(MIGRATION_FLAG, new Date().toISOString());
+  } catch {
+    // Ignore migration errors; they must never break runtime.
+  }
+}
+
 // =============================================================================
 
 export default function CoursePage() {
@@ -272,6 +337,17 @@ export default function CoursePage() {
     () => normalizeModules(course?.modules),
     [course?.modules]
   );
+
+  // ---------------- ONE-TIME LOCAL STORAGE MIGRATION (safe, per course) ----------------
+  useEffect(() => {
+    // Run once this page knows both courseId & module list (client-only).
+    if (!course?.id || uiModules.length === 0) return;
+    runOneTimeLocalStorageMigration({
+      courseId: course.id,
+      courseSlug: slug,
+      modules: uiModules,
+    });
+  }, [course?.id, slug, uiModules]);
 
   // Current indices
   const [currentModuleIndex, setCurrentModuleIndex] = useState<number>(0);
@@ -351,7 +427,7 @@ export default function CoursePage() {
         const json = await res.json().catch(() => ({}));
 
         if (ok && json?.meta) {
-          // Server is authoritative — use it as-is (still implicitly known IDs).
+          // Server is authoritative — use it as-is (IDs already course-scoped).
           const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
             ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
             : [];
@@ -384,20 +460,17 @@ export default function CoursePage() {
           }
         } else {
           // Server NOT ok (401/500/etc.) → be conservative if local says "everything complete"
-          // This fixes the localhost case where stale localStorage unlocked *all* modules.
           const allModuleIds = new Set(uiModules.map((m) => m.id));
           const localWasAllComplete =
             prunedLocalSet.size > 0 && prunedLocalSet.size === allModuleIds.size;
 
           if (localWasAllComplete) {
-            setCompletedModuleIds(new Set());           // reset to empty
-            saveLocalProgress(course.id, []);           // persist the reset
+            setCompletedModuleIds(new Set()); // reset to empty
+            saveLocalProgress(course.id, []); // persist the reset
           }
         }
       } catch {
-        // Network/server failure:
-        // Keep the pruned local snapshot; if it was suspiciously "all complete",
-        // above branch already reset it.
+        // Network/server failure: keep pruned local snapshot.
       } finally {
         setSeededFromServer(true);
       }
@@ -467,9 +540,8 @@ export default function CoursePage() {
     // 2) Complete the module synchronously (optimistic), persist in background
     const changed = markCurrentModuleComplete();
 
-    // 3) Always set up a SAFETY clear: if we fail to advance for any reason,
-    //    clear `revealed` so the button never gets stuck in “Submitting…”.
-    //    This is *in addition* to the normal advance path below.
+    // 3) Safety clear: if we fail to advance for any reason, clear `revealed` after 2s
+    //    so the button never gets stuck in “Submitting…”.
     const beforeId = lastSeenLessonIdRef.current;
     if (safetyRevealResetTimer.current) clearTimeout(safetyRevealResetTimer.current);
     safetyRevealResetTimer.current = setTimeout(() => {
@@ -487,7 +559,7 @@ export default function CoursePage() {
 
         const crossingModule = next.m !== currentModuleIndex;
 
-        // Completing current module unlocks next by definition — do not consult possibly-stale locks here.
+        // Completing current module unlocks next by definition — no stale lock checks here.
         setCurrentModuleIndex(next.m);
         setCurrentLessonIndex(next.l);
         if (crossingModule) scrollToTopSmooth();
