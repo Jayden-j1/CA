@@ -1,21 +1,17 @@
 // app/dashboard/course/page.tsx
 //
-// Finalised course flow (surgical + robust on Vercel)
-// ---------------------------------------------------
-// ✅ Module 1 unlocked by default; others remain locked until prior module completes.
-// ✅ “Module completed” only appears for modules actually completed.
-// ✅ After completing a quiz: Submit → brief “Submitting…” → auto-advance to next lesson/module → smooth scroll to top.
-// ✅ After completing a no-quiz module: click “Mark module complete” → auto-advance → smooth scroll.
-// ✅ Does NOT rely on stale closure values for locks during auto-advance (prevents Vercel “stuck”).
-// ✅ No changes to auth, signup, staff, payment, or unrelated flows.
+// Finalised course flow (surgical, robust, Vercel-safe)
+// -----------------------------------------------------
+// ✅ Module 1 unlocked by default; other modules remain locked until the previous one is completed.
+// ✅ "Module completed" only renders for modules actually completed (no false positives).
+// ✅ Quiz modules: Submit → "Submitting…" → auto-advance → smooth scroll to top.
+// ✅ No-quiz modules: "Mark module complete" → auto-advance → smooth scroll to top.
+// ✅ No reliance on stale closures for auto-advance (prevents Vercel "stuck" states).
+// ✅ No changes to auth, signup, staff, payments, or unrelated flows.
 //
-// How we ensure robustness:
-// - When a module is marked complete, we optimistically update local state immediately.
-// - For auto-advance, we DO NOT check `unlockedModuleIndices` inside the timer (it can be stale).
-//   Completing the current module *definitionally* unlocks the next module, so we proceed safely.
-// - Progress POST is fire-and-forget; UI never blocks on network.
-//
-// Pillars: efficiency, robustness, simplicity, security, ease of management.
+// NOTE (progress bar removal):
+// - This page no longer dispatches any custom window events or progress-ring hooks.
+// - We still persist progress to the API as before. No bar-specific wiring remains here.
 
 "use client";
 
@@ -88,7 +84,7 @@ function computeAdjacentLesson(
   return { prev, next };
 }
 
-/** Normalize API DTO → UI types (keeps your Video/Body/Quiz components unchanged). */
+/** Normalize API DTO → UI types (keeps Video/Body/Quiz components unchanged). */
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
   return dtoModules.map<UICourseModule>((m) => ({
@@ -203,26 +199,10 @@ function computeUnlocked(
   return unlocked;
 }
 
-/** Compute % complete client-side as a safe fallback. */
-function computePercentClient(totalModules: number, completedCount: number): number {
-  if (totalModules <= 0) return 0;
-  const pct = Math.round((completedCount / totalModules) * 100);
-  return Math.max(0, Math.min(100, pct));
-}
-
 /** Smooth scroll helper for UX polish when changing modules. */
 function scrollToTopSmooth() {
   try {
     window.scrollTo({ top: 0, behavior: "smooth" });
-  } catch {}
-}
-
-/** 🔔 Broadcast a tiny event so any progress bar hook can refresh immediately. */
-function dispatchProgressEvent(courseId: string, percent: number) {
-  try {
-    window.dispatchEvent(
-      new CustomEvent("course-progress-updated", { detail: { courseId, percent } })
-    );
   } catch {}
 }
 
@@ -282,7 +262,6 @@ export default function CoursePage() {
     () => normalizeModules(course?.modules),
     [course?.modules]
   );
-  const totalModules = uiModules.length;
 
   // Current indices
   const [currentModuleIndex, setCurrentModuleIndex] = useState<number>(0);
@@ -392,7 +371,7 @@ export default function CoursePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course?.id, uiModules.length]);
 
-  // Compute unlocked indices based on completion
+  // Compute unlocked indices based on completion (Module 1 always unlocked)
   const unlockedModuleIndices: Set<number> = useMemo(() => {
     return computeUnlocked(uiModules, completedModuleIds);
   }, [uiModules, completedModuleIds]);
@@ -402,13 +381,13 @@ export default function CoursePage() {
     if (!course?.id) return;
 
     const completedArr = Array.from(completedModuleIds);
-    const percent = computePercentClient(totalModules, completedArr.length);
 
     const body = {
       courseId: course.id,
       completedModuleIds: completedArr,
+      // Track where the user last was, for resume UX — not a progress bar.
       lastModuleId: typeof opts?.lastModuleId === "string" ? opts.lastModuleId : null,
-      percent, // explicit so GET has a top-level percent immediately after
+      // No progress-bar event dispatch; API may compute % if it needs.
     };
 
     fetch("/api/course/progress", {
@@ -416,16 +395,9 @@ export default function CoursePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       cache: "no-store",
-    })
-      .then((res) => {
-        if (res.ok) {
-          // Notify any progress bars/hooks to refresh (they can re-fetch GET /progress)
-          dispatchProgressEvent(course.id!, percent);
-        }
-      })
-      .catch(() => {
-        // Swallow; local optimistic state remains and a later action can retry.
-      });
+    }).catch(() => {
+      // Swallow; local optimistic state remains and a later action can retry.
+    });
   }
 
   /**
@@ -462,7 +434,7 @@ export default function CoursePage() {
     // 2) Complete the module synchronously (optimistic), persist in background
     const changed = markCurrentModuleComplete();
 
-    // 3) Auto-advance shortly (regardless of unlocked memo), with smooth scroll on module change
+    // 3) Auto-advance shortly, with smooth scroll on module change
     if (changed) {
       if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
       autoAdvanceTimer.current = setTimeout(() => {
@@ -470,14 +442,14 @@ export default function CoursePage() {
         if (!next) return; // nothing to advance to (end of course)
 
         const crossingModule = next.m !== currentModuleIndex;
-        // We no longer block on `unlockedModuleIndices` here — completing current module unlocks next by definition.
+        // Completing current module unlocks next by definition — no lock check needed here.
         setCurrentModuleIndex(next.m);
         setCurrentLessonIndex(next.l);
         if (crossingModule) scrollToTopSmooth();
       }, 600);
     }
 
-    return true as any; // returns quickly so QuizCard clears button state soon after
+    return true as any; // return quickly so QuizCard clears its button state after rerender
   };
 
   const goPrev = () => {
@@ -568,7 +540,6 @@ export default function CoursePage() {
       <div className="max-w-6xl mx-auto mb-6 text-white">
         <h1 className="text-3xl font-bold">{course.title}</h1>
         {course.summary && <p className="opacity-90 mt-1">{course.summary}</p>}
-        {/* Your progress ring/component can listen to 'course-progress-updated' to refresh instantly. */}
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -585,11 +556,9 @@ export default function CoursePage() {
               setCurrentLessonIndex(0);
               if (crossingModule) scrollToTopSmooth();
             }}
-            // Locking UI/behavior
             unlockedModuleIndices={unlockedModuleIndices}
             onSelectLesson={handleSelectLesson}
-            // Optional: used only for display badges inside ModuleList
-            completedModuleIds={completedIdsArray}
+            completedModuleIds={completedIdsArray} // optional visual badge in the sidebar
           />
         </div>
 
@@ -620,24 +589,20 @@ export default function CoursePage() {
                     ← Prev
                   </button>
                   <button
-                    disabled={!nextLesson || nextWouldEnterLockedModule}
+                    disabled={!nextLesson || (!!nextLesson && nextLesson.m !== currentModuleIndex && !unlockedModuleIndices.has(nextLesson.m))}
                     className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 hover:bg-gray-50"
                     onClick={goNext}
-                    aria-disabled={!nextLesson || nextWouldEnterLockedModule}
-                    aria-label={
-                      nextWouldEnterLockedModule
-                        ? "Next lesson is in a locked module. Complete current module first."
-                        : "Go to next lesson"
-                    }
                   >
                     Next →
                   </button>
                 </div>
-                {nextWouldEnterLockedModule && (
-                  <p className="text-[11px] text-amber-700">
-                    Complete this module to unlock the next one.
-                  </p>
-                )}
+                {!!nextLesson &&
+                  nextLesson.m !== currentModuleIndex &&
+                  !unlockedModuleIndices.has(nextLesson.m) && (
+                    <p className="text-[11px] text-amber-700">
+                      Complete this module to unlock the next one.
+                    </p>
+                  )}
               </div>
             </div>
 

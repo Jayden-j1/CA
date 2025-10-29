@@ -4,13 +4,16 @@
 // - Root dashboard landing page with visually polished main content (Div 1)
 //   plus three complementary panels:
 //     • Div 2: Quick Actions (role-aware, access-aware)
-//     • Div 3: Progress Tracker (circular; wired to server progress)
+//     • Div 3: Learning (neutral panel; NO progress bar or progress logic)
 //     • Div 4: Cultural Highlight (rotating quotes/facts)
 //
 // Important to this fix:
-// - This page renders ONLY the dashboard UI (no Course components).
-// - It may fetch the course ID to compute % progress, but it never renders the course UI.
-// - Ensures no accidental import of CoursePage / ModuleList / QuizCard here.
+// - Progress bar feature and all of its logic have been removed:
+//   • No CircularProgressbar import/usages
+//   • No animateTo helper
+//   • No progress/progressTarget state or effects
+//   • No /api/courses/* progress fetches
+// - All other flows/logic kept intact (auth, access checks, role, layout).
 //
 // Pillars:
 // - Simplicity & Robustness: clear separation of concerns.
@@ -18,39 +21,25 @@
 
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 import FullPageSpinner from "@/components/ui/fullPageSpinner";
 import TextType from "@/components/dashboard/TypingText";
-import { CircularProgressbar, buildStyles } from "react-circular-progressbar";
 
-// ---- Canonical course slug used to compute dashboard progress ----
-const COURSE_SLUG = "cultural-awareness-training";
-
-// Small helper: animate a number from current -> target smoothly.
-function animateTo(
-  from: number,
-  to: number,
-  durationMs: number,
-  onTick: (value: number) => void
-) {
-  const start = performance.now();
-  const delta = to - from;
-  let raf = 0;
-
-  const step = (t: number) => {
-    const elapsed = t - start;
-    const p = Math.min(1, elapsed / durationMs);
-    const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
-    onTick(Math.round(from + delta * eased));
-    if (p < 1) raf = requestAnimationFrame(step);
-  };
-
-  raf = requestAnimationFrame(step);
-  return () => cancelAnimationFrame(raf);
-}
+// 🔒 PROGRESS BAR REMOVAL NOTES
+// ----------------------------
+// Removed:
+//   import { CircularProgressbar, buildStyles } from "react-circular-progressbar";
+//   const COURSE_SLUG = "cultural-awareness-training";
+//   animateTo(...) helper
+//   progress/progressTarget state, refs, effects
+//   fetches for course id and /api/.../progress
+//   Progress Tracker panel content
+//
+// Kept:
+//   Session/access logic, quick actions, cultural highlights, layout grid.
 
 export default function DashboardPage() {
   // ---------------- Session & Navigation ----------------
@@ -62,8 +51,8 @@ export default function DashboardPage() {
   const businessId = session?.user?.businessId ?? null;
   const sessionHasPaid = Boolean(session?.user?.hasPaid);
   const isOwnerOrAdmin = role === "BUSINESS_OWNER" || role === "ADMIN";
-  const isStaffSeatUser = role === "USER" && businessId !== null;
-  const isIndividualUser = role === "USER" && businessId === null;
+  const isStaffSeatUser = role === "USER" && businessId !== null; // kept for parity (not used elsewhere here)
+  const isIndividualUser = role === "USER" && businessId === null; // kept for parity
 
   // ---------------- Server Access Probe ----------------
   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
@@ -83,74 +72,6 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, []);
-
-  // ---------------- Progress (wired to server) ----------------
-  const [progress, setProgress] = useState<number>(0);
-  const [progressTarget, setProgressTarget] = useState<number>(0);
-  const animateCancelRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (animateCancelRef.current) {
-      animateCancelRef.current();
-      animateCancelRef.current = null;
-    }
-    animateCancelRef.current = animateTo(progress, progressTarget, 600, setProgress);
-    return () => {
-      if (animateCancelRef.current) {
-        animateCancelRef.current();
-        animateCancelRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progressTarget]);
-
-  // Fetch courseId by slug → then progress percent by courseId (with proper abort handling)
-  useEffect(() => {
-    if (status !== "authenticated") return;
-
-    let cancelled = false;
-    const courseController = new AbortController();
-    let progressController: AbortController | null = null;
-
-    (async () => {
-      try {
-        // 1) Fetch the course to get its stable `id` (we DO NOT render the course UI here)
-        const resCourse = await fetch(
-          `/api/courses/${encodeURIComponent(COURSE_SLUG)}`,
-          { cache: "no-store", signal: courseController.signal }
-        );
-        if (!resCourse.ok) throw new Error("Failed to load course");
-        const courseData = await resCourse.json().catch(() => null);
-        const courseId: string | undefined = courseData?.course?.id;
-        if (!courseId) throw new Error("Course id missing");
-        if (cancelled) return;
-
-        // 2) Now fetch server-stored progress by courseId
-        progressController = new AbortController();
-        const resProg = await fetch(
-          `/api/courses/progress?courseId=${encodeURIComponent(courseId)}`,
-          { cache: "no-store", signal: progressController.signal }
-        );
-        const progJson = await resProg.json().catch(() => ({}));
-
-        const rawPercent = progJson?.meta?.percent;
-        const percent =
-          typeof rawPercent === "number"
-            ? Math.max(0, Math.min(100, Math.round(rawPercent)))
-            : 0;
-
-        if (!cancelled) setProgressTarget(percent);
-      } catch {
-        if (!cancelled) setProgressTarget((p) => p || 0);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      courseController.abort();
-      if (progressController) progressController.abort();
-    };
-  }, [status]);
 
   // ---------------- Rotating Cultural Highlights ----------------
   const highlights = useMemo(
@@ -354,33 +275,13 @@ export default function DashboardPage() {
         </section>
       </div>
 
-      {/* Div 3 — Progress Tracker */}
+      {/* Div 3 — Learning (neutral panel; NO progress bar) */}
       <div className="col-span-1 md:col-span-3 row-span-3 row-start-auto md:row-start-3">
         <section className="h-full w-full flex flex-col items-center justify-center text-center bg-white/85 backdrop-blur-sm rounded-2xl shadow-lg p-6 sm:p-8">
-          <h2 className="text-2xl font-bold text-blue-900 mb-4">
-            Your Progress
-          </h2>
-
-          <div className="w-40 h-40 sm:w-48 sm:h-48">
-            <CircularProgressbar
-              value={progress}
-              text={`${progress}%`}
-              styles={buildStyles({
-                textColor: "#1e3a8a",
-                pathColor: "#2563eb",
-                trailColor: "#dbeafe",
-                textSize: "16px",
-                pathTransition: "stroke-dashoffset 0.6s ease 0s",
-              })}
-            />
-          </div>
-
-          <p className="mt-4 text-sm text-gray-700 max-w-sm">
-            You’re making steady progress, Keep going!
-            <br />
-            <b>Gangga Nuhma — To learn and understand.</b>
+          <h2 className="text-2xl font-bold text-blue-900 mb-3">Learning</h2>
+          <p className="text-sm text-gray-700 max-w-sm">
+            Pick up where you left off, or review earlier modules at any time.
           </p>
-
           <a
             href={LINKS.continueLearning}
             className="mt-5 inline-block text-white bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
@@ -414,12 +315,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
