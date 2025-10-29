@@ -39,6 +39,7 @@
     "@upstash/redis": "^1.35.4",
     "@vis.gl/react-google-maps": "^1.5.5",
     "bcryptjs": "^3.0.2",
+    "clsx": "^2.1.1",
     "framer-motion": "^12.23.12",
     "groq": "^3.49.0",
     "gsap": "^3.13.0",

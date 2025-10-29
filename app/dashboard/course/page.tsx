@@ -1,9 +1,16 @@
 // app/dashboard/course/page.tsx
 //
-// Surgical change in this revision:
-//  • Smooth scroll to page top whenever navigation crosses into a new module.
-//  • All existing progress and locking logic preserved.
-//  • No changes to auth, signup, staff, payment, or unrelated flows.
+// Surgical changes in this revision:
+//  • Broadcast a tiny "course-progress-updated" CustomEvent *after* successful POST,
+//    carrying { courseId, percent } so any progress bars/hooks can refresh immediately.
+//  • Keep smooth scroll to top when crossing into a new module (already present).
+//  • Do not modify auth, signup, staff, payment, Sanity content, or other flows.
+//
+// Notes:
+//  - This file alone doesn't *render* a progress bar. It only guarantees that whenever
+//    progress is saved, any client UI listening for "course-progress-updated" can update
+//    instantly (e.g., a header progress bar using a hook).
+//  - Percent is computed client-side (safe fallback) and also persisted server-side.
 
 "use client";
 
@@ -57,6 +64,7 @@ type QuizAnswers = Record<string, number | null>;
 
 // ---------------- Helpers ----------------
 
+/** Compute previous/next lesson across *all* modules linearly. */
 function computeAdjacentLesson(
   modules: UICourseModule[],
   moduleIndex: number,
@@ -75,6 +83,7 @@ function computeAdjacentLesson(
   return { prev, next };
 }
 
+/** Normalize API DTO → UI types (keeps downstream components unchanged). */
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
   return dtoModules.map<UICourseModule>((m) => ({
@@ -102,6 +111,7 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
   }));
 }
 
+/** Local storage keys for optimistic progress + resume. */
 const progressKey = (courseId: string) => `courseProgress:${courseId}`;
 const resumeKey = (courseId: string) => `courseResume:${courseId}`;
 
@@ -119,12 +129,16 @@ function loadLocalProgress(courseId: string): { completedModuleIds: string[] } {
 function saveLocalProgress(courseId: string, completedModuleIds: string[]) {
   try {
     localStorage.setItem(progressKey(courseId), JSON.stringify({ completedModuleIds }));
-  } catch {}
+  } catch {
+    // ignore storage errors (private mode, quota, etc.)
+  }
 }
 function saveResume(courseId: string, moduleId: string, lessonId: string) {
   try {
     localStorage.setItem(resumeKey(courseId), JSON.stringify({ moduleId, lessonId }));
-  } catch {}
+  } catch {
+    // ignore
+  }
 }
 function loadResume(courseId: string): { moduleId?: string; lessonId?: string } {
   try {
@@ -139,6 +153,8 @@ function loadResume(courseId: string): { moduleId?: string; lessonId?: string } 
     return {};
   }
 }
+
+/** True if current lesson is last within its module. */
 function isOnModuleLastLesson(
   modules: UICourseModule[],
   moduleIndex: number,
@@ -148,6 +164,13 @@ function isOnModuleLastLesson(
   if (!m || !Array.isArray(m.lessons) || m.lessons.length === 0) return false;
   return lessonIndex === m.lessons.length - 1;
 }
+
+/**
+ * Sequential locking:
+ *  - Always unlock module index 0
+ *  - Unlock completed modules
+ *  - Unlock the module immediately after the highest completed index
+ */
 function computeUnlocked(
   modules: UICourseModule[],
   completedModuleIds: Set<string>
@@ -170,15 +193,36 @@ function computeUnlocked(
 
   return unlocked;
 }
+
+/** Safe client-side percent (fallback; server also stores a percent). */
 function computePercentClient(totalModules: number, completedCount: number): number {
   if (totalModules <= 0) return 0;
   const pct = Math.round((completedCount / totalModules) * 100);
   return Math.max(0, Math.min(100, pct));
 }
+
+/** Smooth scroll helper for UX polish when changing modules. */
 function scrollToTopSmooth() {
   try {
     window.scrollTo({ top: 0, behavior: "smooth" });
-  } catch {}
+  } catch {
+    // ignore SSR/window issues
+  }
+}
+
+/**
+ * 🔔 Broadcast a tiny event after we persist progress so any UI
+ * (e.g., a progress bar hook) can refresh immediately.
+ * We keep the payload minimal and generic: { courseId, percent }.
+ */
+function dispatchProgressEvent(courseId: string, percent: number) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent("course-progress-updated", { detail: { courseId, percent } })
+    );
+  } catch {
+    // ignore if CustomEvent unsupported
+  }
 }
 
 // =============================================================================
@@ -187,6 +231,7 @@ export default function CoursePage() {
   const router = useRouter();
   const access = usePaidAccess();
 
+  // Access check — unchanged
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -194,9 +239,11 @@ export default function CoursePage() {
     }
   }, [access.loading, access.hasAccess, router]);
 
+  // Canonical slug param
   const searchParams = useSearchParams();
   const slug = (searchParams?.get("slug") || "cultural-awareness-training").trim();
 
+  // Course load state (server source of truth for content)
   const [course, setCourse] = useState<CourseDTO | null>(null);
   const [loadingCourse, setLoadingCourse] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string>("");
@@ -228,19 +275,23 @@ export default function CoursePage() {
     };
   }, [access.loading, access.hasAccess, slug]);
 
+  // Normalize modules for UI
   const uiModules: UICourseModule[] = useMemo(
     () => normalizeModules(course?.modules),
     [course?.modules]
   );
   const totalModules = uiModules.length;
 
+  // Current indices
   const [currentModuleIndex, setCurrentModuleIndex] = useState<number>(0);
   const [currentLessonIndex, setCurrentLessonIndex] = useState<number>(0);
 
+  // Reset lesson index when module changes
   useEffect(() => {
     setCurrentLessonIndex(0);
   }, [currentModuleIndex]);
 
+  // Current derived refs
   const currentModule = useMemo(() => {
     if (!uiModules.length) return null;
     return uiModules[currentModuleIndex] || uiModules[0] || null;
@@ -255,10 +306,12 @@ export default function CoursePage() {
     return computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
   }, [uiModules, currentModuleIndex, currentLessonIndex]);
 
+  // Quiz UI state
   const [answers, setAnswers] = useState<QuizAnswers>({});
   const [revealed, setRevealed] = useState<boolean>(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Reset quiz state on lesson change + persist resume pointer
   useEffect(() => {
     setAnswers({});
     setRevealed(false);
@@ -269,13 +322,14 @@ export default function CoursePage() {
     if (course?.id && currentModule && currentLesson) {
       saveResume(course.id, currentModule.id, currentLesson.id);
     }
-  }, [currentLesson?.id, currentModule?.id]);
+  }, [currentLesson?.id, currentModule?.id, course?.id]);
 
   // -------- server progress + unlocks --------
 
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
+  // Seed optimistic local, then hydrate from server (if available)
   useEffect(() => {
     if (!course?.id) return;
 
@@ -285,7 +339,6 @@ export default function CoursePage() {
 
     (async () => {
       try {
-        // NOTE: Either plural or singular will now work (shim added).
         const res = await fetch(
           `/api/course/progress?courseId=${encodeURIComponent(course.id)}`,
           { cache: "no-store" }
@@ -299,6 +352,7 @@ export default function CoursePage() {
           setCompletedModuleIds(serverSet);
           saveLocalProgress(course.id, Array.from(serverSet));
 
+          // Try restoring from server-side lastModuleId first; else local resume
           const lastModuleId: string | null =
             typeof json.meta.lastModuleId === "string" ? json.meta.lastModuleId : null;
           if (lastModuleId && uiModules.length) {
@@ -322,7 +376,7 @@ export default function CoursePage() {
           }
         }
       } catch {
-        // keep local fallback
+        // Network/server failure → keep local fallback
       } finally {
         setSeededFromServer(true);
       }
@@ -330,10 +384,15 @@ export default function CoursePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course?.id, uiModules.length]);
 
+  // Compute unlocked modules based on completion
   const unlockedModuleIndices: Set<number> = useMemo(() => {
     return computeUnlocked(uiModules, completedModuleIds);
   }, [uiModules, completedModuleIds]);
 
+  /**
+   * Persist a snapshot to the server.
+   * We also broadcast a client event after success so progress bars refresh immediately.
+   */
   async function saveProgressSnapshot(opts?: { lastModuleId?: string | null }) {
     if (!course?.id) return;
 
@@ -344,20 +403,27 @@ export default function CoursePage() {
       courseId: course.id,
       completedModuleIds: completedArr,
       lastModuleId: typeof opts?.lastModuleId === "string" ? opts.lastModuleId : null,
-      percent, // explicit so any progress bar reading GET will reflect this on next request
+      percent, // Explicit to ensure server mirrors the same value; GET returns top-level percent.
     };
 
     try {
-      // Either path works; using canonical singular here.
-      await fetch("/api/course/progress", {
+      const res = await fetch("/api/course/progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         cache: "no-store",
       });
-    } catch {}
+
+      // 🔔 If persisted, notify any listeners (e.g., a header progress bar) to refresh immediately.
+      if (res.ok) {
+        dispatchProgressEvent(course.id, percent);
+      }
+    } catch {
+      // Swallow errors; local optimistic state remains and future actions can retry.
+    }
   }
 
+  /** Idempotently mark the *current* module complete, save to server, and unlock next. */
   async function markCurrentModuleComplete(): Promise<boolean> {
     if (!currentModule || !course?.id) return false;
     const id = currentModule.id;
@@ -378,13 +444,18 @@ export default function CoursePage() {
   };
 
   const handleQuizSubmit = async () => {
+    // 1) Reveal green/red feedback (handled inside <QuizCard/>)
     setRevealed(true);
+
+    // 2) Complete the module and persist progress
     await markCurrentModuleComplete();
 
+    // 3) Auto-advance shortly (UX: give a moment to see reveal), respecting locks
     if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
     autoAdvanceTimer.current = setTimeout(() => {
       const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
       if (!next) return;
+
       const crossingModule = next.m !== currentModuleIndex;
       if (crossingModule && !unlockedModuleIndices.has(next.m)) return;
 
@@ -412,10 +483,13 @@ export default function CoursePage() {
   const goNext = () => {
     if (!nextLesson) return;
     const crossingModule = nextLesson.m !== currentModuleIndex;
+
+    // Hard block if "next" would enter a locked module.
     if (nextWouldEnterLockedModule) {
       console.warn("Blocked: Next would enter a locked module. Complete current module first.");
       return;
     }
+
     setCurrentModuleIndex(nextLesson.m);
     setCurrentLessonIndex(nextLesson.l);
     if (crossingModule) scrollToTopSmooth();
@@ -477,6 +551,8 @@ export default function CoursePage() {
       <div className="max-w-6xl mx-auto mb-6 text-white">
         <h1 className="text-3xl font-bold">{course.title}</h1>
         {course.summary && <p className="opacity-90 mt-1">{course.summary}</p>}
+        {/* If you already have a ProgressBar component elsewhere, it will now
+            receive 'course-progress-updated' events immediately after POST. */}
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -603,6 +679,7 @@ export default function CoursePage() {
     </section>
   );
 }
+
 
 
 
