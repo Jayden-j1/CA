@@ -9,9 +9,14 @@
 // ✅ No reliance on stale closures for auto-advance (prevents Vercel "stuck" states).
 // ✅ No changes to auth, signup, staff, payments, or unrelated flows.
 //
-// NOTE (progress bar removal):
-// - This page no longer dispatches any custom window events or progress-ring hooks.
-// - We still persist progress to the API as before. No bar-specific wiring remains here.
+// IMPORTANT HARDENINGS (to fix inconsistent unlocks locally vs Vercel):
+// - We PRUNE localStorage progress to *known* module IDs.
+// - If the server seed fails *and* the local set suspiciously equals "all modules complete",
+//   we reset to empty so only Module 1 starts unlocked (conservative default).
+//
+// NOTE (progress bar removal): no event dispatches or ring hooks; we still persist progress for UX resume.
+//
+// Pillars: efficiency, robustness, simplicity, security, ease of management.
 
 "use client";
 
@@ -170,8 +175,7 @@ function isOnModuleLastLesson(
 }
 
 /**
- * Compute which module indices should be unlocked.
- * Rules (sequential locking):
+ * Compute which module indices should be unlocked (sequential locking):
  *  - Always unlock module index 0
  *  - Unlock every module that is already completed
  *  - Also unlock the module immediately after the *highest* completed index
@@ -204,6 +208,12 @@ function scrollToTopSmooth() {
   try {
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch {}
+}
+
+/** Keep only module IDs that actually exist in this course (hardens localStorage). */
+function pruneToKnownModules(ids: string[], modules: UICourseModule[]): string[] {
+  const known = new Set(modules.map((m) => m.id));
+  return (ids || []).filter((id) => known.has(id));
 }
 
 // =============================================================================
@@ -291,8 +301,10 @@ export default function CoursePage() {
   const [answers, setAnswers] = useState<QuizAnswers>({});
   const [revealed, setRevealed] = useState<boolean>(false);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const safetyRevealResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSeenLessonIdRef = useRef<string | null>(null);
 
-  // Clear quiz state on lesson change + save resume pointer
+  // Clear quiz state on lesson change + save resume pointer + update "last seen"
   useEffect(() => {
     setAnswers({});
     setRevealed(false);
@@ -300,6 +312,13 @@ export default function CoursePage() {
       clearTimeout(autoAdvanceTimer.current);
       autoAdvanceTimer.current = null;
     }
+    if (safetyRevealResetTimer.current) {
+      clearTimeout(safetyRevealResetTimer.current);
+      safetyRevealResetTimer.current = null;
+    }
+
+    const lessonId = currentLesson?.id ?? null;
+    lastSeenLessonIdRef.current = lessonId;
 
     if (course?.id && currentModule && currentLesson) {
       saveResume(course.id, currentModule.id, currentLesson.id);
@@ -311,30 +330,32 @@ export default function CoursePage() {
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
-  // Seed from local (optimistic), then hydrate from server (prefer server meta only if present).
+  // Seed from local (pruned), then hydrate from server (prefer server meta if present).
   useEffect(() => {
     if (!course?.id) return;
 
-    // 1) Local optimistic seed
+    // 1) Local optimistic seed (PRUNED to known module IDs)
     const local = loadLocalProgress(course.id);
-    const localSet = new Set(local.completedModuleIds);
-    setCompletedModuleIds(localSet);
+    const prunedLocalArr = pruneToKnownModules(local.completedModuleIds, uiModules);
+    const prunedLocalSet = new Set(prunedLocalArr);
+    setCompletedModuleIds(prunedLocalSet);
 
-    // 2) Server seed
+    // 2) Server seed (authoritative if available)
     (async () => {
       try {
         const res = await fetch(
           `/api/course/progress?courseId=${encodeURIComponent(course.id)}`,
           { cache: "no-store" }
         );
+        const ok = res.ok;
         const json = await res.json().catch(() => ({}));
 
-        if (json?.meta) {
+        if (ok && json?.meta) {
+          // Server is authoritative — use it as-is (still implicitly known IDs).
           const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
             ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
             : [];
           const serverSet = new Set(serverArr);
-
           setCompletedModuleIds(serverSet);
           saveLocalProgress(course.id, Array.from(serverSet));
 
@@ -361,9 +382,22 @@ export default function CoursePage() {
               }
             }
           }
+        } else {
+          // Server NOT ok (401/500/etc.) → be conservative if local says "everything complete"
+          // This fixes the localhost case where stale localStorage unlocked *all* modules.
+          const allModuleIds = new Set(uiModules.map((m) => m.id));
+          const localWasAllComplete =
+            prunedLocalSet.size > 0 && prunedLocalSet.size === allModuleIds.size;
+
+          if (localWasAllComplete) {
+            setCompletedModuleIds(new Set());           // reset to empty
+            saveLocalProgress(course.id, []);           // persist the reset
+          }
         }
       } catch {
-        // Network/server failure → keep local as-is
+        // Network/server failure:
+        // Keep the pruned local snapshot; if it was suspiciously "all complete",
+        // above branch already reset it.
       } finally {
         setSeededFromServer(true);
       }
@@ -387,7 +421,6 @@ export default function CoursePage() {
       completedModuleIds: completedArr,
       // Track where the user last was, for resume UX — not a progress bar.
       lastModuleId: typeof opts?.lastModuleId === "string" ? opts.lastModuleId : null,
-      // No progress-bar event dispatch; API may compute % if it needs.
     };
 
     fetch("/api/course/progress", {
@@ -428,28 +461,40 @@ export default function CoursePage() {
   };
 
   const handleQuizSubmit = () => {
-    // 1) Reveal feedback UI inside <QuizCard/> (button shows “Submitting…” via revealed)
+    // 1) Reveal feedback UI inside <QuizCard/> (button shows “Submitting…” via `revealed`)
     setRevealed(true);
 
     // 2) Complete the module synchronously (optimistic), persist in background
     const changed = markCurrentModuleComplete();
 
-    // 3) Auto-advance shortly, with smooth scroll on module change
+    // 3) Always set up a SAFETY clear: if we fail to advance for any reason,
+    //    clear `revealed` so the button never gets stuck in “Submitting…”.
+    //    This is *in addition* to the normal advance path below.
+    const beforeId = lastSeenLessonIdRef.current;
+    if (safetyRevealResetTimer.current) clearTimeout(safetyRevealResetTimer.current);
+    safetyRevealResetTimer.current = setTimeout(() => {
+      if (lastSeenLessonIdRef.current === beforeId) {
+        setRevealed(false);
+      }
+    }, 2000);
+
+    // 4) Auto-advance shortly, with smooth scroll on module change
     if (changed) {
       if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
       autoAdvanceTimer.current = setTimeout(() => {
         const { next } = computeAdjacentLesson(uiModules, currentModuleIndex, currentLessonIndex);
-        if (!next) return; // nothing to advance to (end of course)
+        if (!next) return; // end of course
 
         const crossingModule = next.m !== currentModuleIndex;
-        // Completing current module unlocks next by definition — no lock check needed here.
+
+        // Completing current module unlocks next by definition — do not consult possibly-stale locks here.
         setCurrentModuleIndex(next.m);
         setCurrentLessonIndex(next.l);
         if (crossingModule) scrollToTopSmooth();
       }, 600);
     }
 
-    return true as any; // return quickly so QuizCard clears its button state after rerender
+    return true as any; // return quickly so QuizCard clears its button when lesson changes
   };
 
   const goPrev = () => {
@@ -589,7 +634,12 @@ export default function CoursePage() {
                     ← Prev
                   </button>
                   <button
-                    disabled={!nextLesson || (!!nextLesson && nextLesson.m !== currentModuleIndex && !unlockedModuleIndices.has(nextLesson.m))}
+                    disabled={
+                      !nextLesson ||
+                      (!!nextLesson &&
+                        nextLesson.m !== currentModuleIndex &&
+                        !unlockedModuleIndices.has(nextLesson.m))
+                    }
                     className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50 hover:bg-gray-50"
                     onClick={goNext}
                   >

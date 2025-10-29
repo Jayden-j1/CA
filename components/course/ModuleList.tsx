@@ -8,8 +8,7 @@
 // 1) Modules are visually locked until prior completes (driven by unlockedModuleIndices).
 // 2) Clear locked styling and prevents clicking locked lessons.
 // 3) Supports clicking lessons via onSelectLesson(mIdx, lIdx).
-// 4) NEW (optional): show a small "✓ Completed" badge on completed modules,
-//    if parent passes `completedModuleIds` (purely presentational).
+// 4) Optional: show a small "✓ Completed" badge on modules if parent passes `completedModuleIds`.
 //
 // Props:
 // - modules: CourseModule[]
@@ -57,7 +56,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
   onSelectLesson,
   completedModuleIds,
 }) => {
-  // ✅ Defensive default:
+  // ✅ Defensive defaults:
   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
   const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
