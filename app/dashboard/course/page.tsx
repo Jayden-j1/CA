@@ -1,16 +1,18 @@
 // app/dashboard/course/page.tsx
 //
-// Cross-device exact resume (surgical; course flow unchanged)
-// -----------------------------------------------------------
-// Root cause fixed: early "position ping" could overwrite the server-saved
-// lastLessonId when modules weren't loaded yet. We now:
-//   • Fetch server progress → store resume ids in refs (do NOT apply yet)
-//   • Wait until uiModules are loaded → apply resume once (then open ping gate)
-//   • Only after hydration is open do we POST position pings on lesson changes
+// Fix: progress lost after logout/login (surgical; course flow unchanged)
+// ----------------------------------------------------------------------
+// Root cause: we were persisting an OVERWRITE snapshot of completedModuleIds
+// using state that could still be stale (React setState is async). That could
+// drop the just-completed module from the server row. After re-login, server
+// truth showed 0 completed → next module locked.
 //
-// ✅ Keeps existing locking, completion, and auto-advance behavior intact.
-// ✅ Exact-lesson resume works across logout/login and devices.
-// ✅ No changes to auth, signup, staff, payments, or unrelated flows.
+// What we changed, without touching course flow or other app flows:
+// 1) Write path → use { addModuleId } on completion (atomic on server).
+// 2) Hydration path → union(local, server) to avoid regressions, and reconcile
+//    the union back to the server explicitly (no state reads in the payload).
+// 3) Keep the previously added two-stage resume gate so position pings never
+//    overwrite pointers before modules are ready.
 //
 // Pillars: efficiency, robustness, simplicity, ease of management, security.
 
@@ -117,6 +119,7 @@ function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseMo
 const progressKey = (courseId: string) => `courseProgress:${courseId}`;
 const resumeKey = (courseId: string) => `courseResume:${courseId}`;
 
+/** Load optimistic local progress. */
 function loadLocalProgress(courseId: string): { completedModuleIds: string[] } {
   try {
     const raw = localStorage.getItem(progressKey(courseId));
@@ -128,16 +131,22 @@ function loadLocalProgress(courseId: string): { completedModuleIds: string[] } {
     return { completedModuleIds: [] };
   }
 }
+
+/** Save optimistic local progress. */
 function saveLocalProgress(courseId: string, completedModuleIds: string[]) {
   try {
     localStorage.setItem(progressKey(courseId), JSON.stringify({ completedModuleIds }));
   } catch {}
 }
+
+/** Save a tiny resume pointer locally (moduleId + lessonId). */
 function saveResume(courseId: string, moduleId: string, lessonId: string) {
   try {
     localStorage.setItem(resumeKey(courseId), JSON.stringify({ moduleId, lessonId }));
   } catch {}
 }
+
+/** Load resume pointer from local storage. */
 function loadResume(courseId: string): { moduleId?: string; lessonId?: string } {
   try {
     const raw = localStorage.getItem(resumeKey(courseId));
@@ -212,7 +221,7 @@ export default function CoursePage() {
   const serverLastLessonIdRef = useRef<string | null>(null);
   const serverLastModuleIdRef = useRef<string | null>(null);
 
-  // Access check — unchanged
+  // Access check — unchanged (keep hooks above all conditional returns)
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -297,13 +306,18 @@ export default function CoursePage() {
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
-  // POST helper: persist a snapshot of completions + optional lastModuleId/lastLessonId
-  function postProgress(body: Record<string, unknown>) {
-    if (!course?.id) return;
+  // POST helper: persist a payload EXACTLY as provided (no state reads here).
+  function postProgressExplicit(payload: {
+    courseId: string;
+    addModuleId?: string;
+    completedModuleIds?: string[];
+    lastModuleId?: string | null;
+    lastLessonId?: string | null;
+  }) {
     fetch("/api/course/progress", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ courseId: course.id, ...body }),
+      body: JSON.stringify(payload),
       cache: "no-store",
     }).catch(() => {
       // Fire-and-forget; local optimistic state remains.
@@ -312,10 +326,15 @@ export default function CoursePage() {
 
   // Position ping (exact-lesson resume) — called only after hydration is open
   function postPositionPing(moduleId: string, lessonId: string) {
-    postProgress({ lastModuleId: moduleId, lastLessonId: lessonId });
+    if (!course?.id) return;
+    postProgressExplicit({
+      courseId: course.id,
+      lastModuleId: moduleId,
+      lastLessonId: lessonId,
+    });
   }
 
-  // 1) Seed completions from local, then fetch server row and store resume IDs in refs.
+  // 1) Seed from local; fetch server; take UNION(local, server); reconcile to server.
   useEffect(() => {
     if (!course?.id) return;
 
@@ -328,10 +347,11 @@ export default function CoursePage() {
     }
 
     // Local optimistic seed (useful offline)
-    const local = loadLocalProgress(course.id);
-    setCompletedModuleIds(new Set(local.completedModuleIds));
+    const localCompleted = loadLocalProgress(course.id).completedModuleIds;
+    const localSet = new Set(localCompleted);
+    setCompletedModuleIds(localSet);
 
-    // Server fetch — store resume pointers in refs; don't apply yet.
+    // Server fetch — compute union with local; reconcile back to server explicitly.
     (async () => {
       try {
         const res = await fetch(
@@ -341,24 +361,36 @@ export default function CoursePage() {
         const json = await res.json().catch(() => ({}));
 
         if (json?.meta) {
-          const serverIds: string[] = Array.isArray(json.meta.completedModuleIds)
+          const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
             ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
             : [];
-          const serverSet = new Set(serverIds);
-          setCompletedModuleIds(serverSet);
-          saveLocalProgress(course.id, Array.from(serverSet));
+          const serverSet = new Set(serverArr);
 
-          // Store resume pointers; mapping to indices happens later when modules are ready.
+          // --- UNION to avoid regressions if either side is ahead ---
+          const union = new Set<string>([...localSet, ...serverSet]);
+          setCompletedModuleIds(union);
+          saveLocalProgress(course.id, Array.from(union));
+
+          // Store resume pointers for stage-2 application
           serverLastLessonIdRef.current =
             typeof json.meta.lastLessonId === "string" ? json.meta.lastLessonId : null;
           serverLastModuleIdRef.current =
             typeof json.meta.lastModuleId === "string" ? json.meta.lastModuleId : null;
+
+          // Reconcile server to the union explicitly (avoid relying on state reads).
+          postProgressExplicit({
+            courseId: course.id,
+            completedModuleIds: Array.from(union),
+            // Keep latest known pointers (if present). Harmless if null/undefined.
+            lastModuleId: serverLastModuleIdRef.current ?? null,
+            lastLessonId: serverLastLessonIdRef.current ?? null,
+          });
         }
       } catch {
         // Keep local as-is if network error
       } finally {
         setSeededFromServer(true);
-        // NOTE: We intentionally do NOT open didHydrateRef here — we wait for uiModules below.
+        // NOTE: we still wait for modules before applying the resume indices.
       }
     })();
   }, [course?.id]);
@@ -368,7 +400,6 @@ export default function CoursePage() {
     if (!course?.id) return;
     if (didHydrateRef.current) return;              // already applied
     if (uiModules.length === 0) return;             // nothing to map yet
-    // At this point: we have modules, can safely map ids → indices.
 
     let applied = false;
 
@@ -441,17 +472,6 @@ export default function CoursePage() {
     postPositionPing(currentModule.id, currentLesson.id);
   }, [currentLesson?.id, currentModule?.id, course?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Persist completions + optional lastModuleId/lastLessonId (non-blocking). */
-  function saveProgressSnapshot(opts?: { lastModuleId?: string | null; lastLessonId?: string | null }) {
-    const completedArr = Array.from(completedModuleIds);
-    const body: Record<string, unknown> = {
-      completedModuleIds: completedArr, // overwrite branch
-    };
-    if (typeof opts?.lastModuleId === "string") body.lastModuleId = opts.lastModuleId;
-    if (typeof opts?.lastLessonId === "string") body.lastLessonId = opts.lastLessonId;
-    postProgress(body);
-  }
-
   /** Mark current module complete (idempotent) and persist in background. */
   function markCurrentModuleComplete(): boolean {
     if (!currentModule || !course?.id) return false;
@@ -459,16 +479,23 @@ export default function CoursePage() {
     const id = currentModule.id;
     if (completedModuleIds.has(id)) return false;
 
+    // 1) Update local set optimistically
     const next = new Set(completedModuleIds);
     next.add(id);
     setCompletedModuleIds(next);
     saveLocalProgress(course.id, Array.from(next));
 
-    // Persist: overwrite completions + keep position pointers
-    saveProgressSnapshot({ lastModuleId: id, lastLessonId: currentLesson?.id ?? null });
+    // 2) Persist ATOMICALLY on server (no stale overwrite)
+    //    Use the { addModuleId } branch so the server appends safely.
+    postProgressExplicit({
+      courseId: course.id,
+      addModuleId: id,
+      // Keep pointers to improve resume; harmless if null.
+      lastModuleId: id,
+      lastLessonId: currentLesson?.id ?? null,
+    });
 
     return true;
-    // Note: course flow (auto-advance) is handled below and unchanged.
   }
 
   // ---------------- Handlers (course flow unchanged) ----------------
