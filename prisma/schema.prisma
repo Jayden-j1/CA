@@ -195,6 +195,7 @@ model UserCourseProgress {
   completedModuleIds String[]
   lastModuleId       String?
   percent            Int?
+  lastLessonId       String?  @db.Text  
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 

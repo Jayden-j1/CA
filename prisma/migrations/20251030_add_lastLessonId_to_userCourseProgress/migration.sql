@@ -1,0 +1,1 @@
+ALTER TABLE "UserCourseProgress" ADD COLUMN "lastLessonId" TEXT;

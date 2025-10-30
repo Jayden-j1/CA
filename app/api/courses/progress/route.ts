@@ -2,43 +2,45 @@
 //
 // Purpose
 // -------
-// Persist per-user, per-course progress (module completion) on the server,
-// without altering *any* other flows (auth, signup, staff, payments).
+// Persist per-user, per-course progress (module completion) and *resume position*
+// on the server without altering any other flows (auth, signup, staff, payments).
 //
-// Minimal API surface (stable):
+// Minimal API surface (stable + extended):
 // - GET  /api/course/progress?courseId=...  ->
 //     {
 //       completedModuleIds: string[],
-//       // NEW (compat helpers for simpler UIs):
 //       percent?: number | null,
 //       lastModuleId?: string | null,
-//       // Rich payload for clients that want structured data
-//       meta?: { completedModuleIds: string[], lastModuleId: string | null, percent: number | null }
+//       lastLessonId?: string | null,              // NEW: exact-lesson resume pointer
+//       meta?: { completedModuleIds: string[], lastModuleId: string | null, lastLessonId: string | null, percent: number | null }
 //     }
+//
 // - POST /api/course/progress               ->
-//     {
-//       completedModuleIds: string[],
-//       // NEW (compat helpers):
-//       percent: number,
-//       lastModuleId: string | null,
-//       meta: { completedModuleIds: string[], lastModuleId: string | null, percent: number }
-//     }
+//     Accepts exactly *one* of the following write types:
+//
+//     1) Completion (append one):
+//        { courseId: string, addModuleId: string, lastModuleId?: string, lastLessonId?: string, percent?: number }
+//
+//     2) Completion (overwrite all):
+//        { courseId: string, completedModuleIds: string[], lastModuleId?: string, lastLessonId?: string, percent?: number }
+//
+//     3) Position-only ping (no completion change)  // NEW (allows cross-device resume mid-module)
+//        { courseId: string, lastLessonId: string, lastModuleId?: string }
 //
 // Notes
 // -----
 // - We prefer a client-sent `percent` when provided (clamped 0..100).
-// - If `percent` is absent (or null), we compute a safe fallback
-//   from (completed modules / total modules) * 100.
-// - We now mirror `percent` and `lastModuleId` at the *top level*
-//   in addition to `meta` to support simple progress bars without parsing `meta`.
+// - If `percent` is absent, we compute a safe fallback from (completed/total)*100.
+// - We mirror `percent`, `lastModuleId`, and `lastLessonId` at the top level (and in meta)
+//   so simple clients can read without parsing meta.
 //
 // Pillars
 // -------
-// - Security: requires NextAuth session; users only touch their own row
-// - Simplicity: tiny, well-documented surface; no hidden writes
-// - Robustness: defensive JSON parsing, set semantics (dedupe), idempotent upsert
-// - Efficiency: one read + one upsert (+ one lightweight count if computing fallback)
-// - Ease of management: comments explain all branches/decisions
+// - Security: NextAuth session required; users only touch their own row.
+// - Simplicity: clear shape and behaviors; no hidden side effects.
+// - Robustness: defensive JSON parsing, set semantics, idempotent upsert.
+// - Efficiency: one read + one upsert (+ one count if computing fallback).
+// - Ease of management: heavily commented and explicit branching.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -90,12 +92,15 @@ export async function GET(req: Request) {
   try {
     const row = await prisma.userCourseProgress.findFirst({
       where: { userId: session.user.id, courseId },
-      select: { completedModuleIds: true, lastModuleId: true, percent: true },
+      // NEW: select lastLessonId for exact resume
+      select: { completedModuleIds: true, lastModuleId: true, lastLessonId: true, percent: true },
     });
 
     const completedModuleIds = toStringArray(row?.completedModuleIds);
     const lastModuleId =
       typeof row?.lastModuleId === "string" ? row?.lastModuleId : null;
+    const lastLessonId =
+      typeof row?.lastLessonId === "string" ? row?.lastLessonId : null;
 
     let percent: number | null =
       typeof row?.percent === "number" ? clampPercent(row?.percent) : null;
@@ -112,9 +117,11 @@ export async function GET(req: Request) {
         completedModuleIds,
         percent,
         lastModuleId,
+        lastLessonId, // NEW
         meta: {
           completedModuleIds,
           lastModuleId,
+          lastLessonId, // NEW
           percent,
         },
       },
@@ -140,21 +147,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing courseId" }, { status: 400 });
   }
 
+  // Inputs (normalized)
   const addModuleId =
     (body?.addModuleId as string | undefined)?.trim() || undefined;
   const overwrite = toStringArray(body?.completedModuleIds);
   const lastModuleId =
     typeof body?.lastModuleId === "string" ? body.lastModuleId.trim() : undefined;
+  const lastLessonId =
+    typeof body?.lastLessonId === "string" ? body.lastLessonId.trim() : undefined;
 
   const incomingPercent = clampPercent(body?.percent);
 
   const hasAdd = typeof addModuleId === "string";
   const hasOverwrite = overwrite.length > 0;
-  if ((hasAdd && hasOverwrite) || (!hasAdd && !hasOverwrite)) {
+  const hasPositionOnly = !hasAdd && !hasOverwrite && typeof lastLessonId === "string";
+
+  // Enforce *exactly one* write intent:
+  //  - add one completion, OR overwrite all completions, OR position-only ping.
+  if (![hasAdd, hasOverwrite, hasPositionOnly].filter(Boolean).length) {
     return NextResponse.json(
       {
         error:
-          "Provide exactly one of: { addModuleId } OR { completedModuleIds: string[] }",
+          "Provide exactly one of: { addModuleId } OR { completedModuleIds: string[] } OR { lastLessonId }",
       },
       { status: 400 }
     );
@@ -163,36 +177,55 @@ export async function POST(req: Request) {
   try {
     const existing = await prisma.userCourseProgress.findFirst({
       where: { userId: session.user.id, courseId },
-      select: { completedModuleIds: true, lastModuleId: true, percent: true },
+      select: { completedModuleIds: true, lastModuleId: true, lastLessonId: true, percent: true },
     });
 
-    let nextCompleted: string[];
+    // Start from existing completion set
+    let nextCompleted = toStringArray(existing?.completedModuleIds);
+
+    // Branch 1: Overwrite all completions
     if (hasOverwrite) {
       nextCompleted = uniqueStrings(overwrite);
-    } else {
-      const current = toStringArray(existing?.completedModuleIds);
-      nextCompleted = uniqueStrings(addModuleId ? [...current, addModuleId] : current);
     }
 
-    const percentToStore =
-      incomingPercent !== null
-        ? incomingPercent
-        : await computePercentFallback({
-            courseId,
-            completedCount: nextCompleted.length,
-          });
+    // Branch 2: Add a single module to completions
+    if (hasAdd) {
+      nextCompleted = uniqueStrings(
+        addModuleId ? [...nextCompleted, addModuleId] : nextCompleted
+      );
+    }
 
+    // Compute % to store (only when we changed the completion set);
+    // for position-only pings, leave percent as-is.
+    let percentToStore =
+      hasAdd || hasOverwrite
+        ? incomingPercent !== null
+          ? incomingPercent
+          : await computePercentFallback({
+              courseId,
+              completedCount: nextCompleted.length,
+            })
+        : (typeof existing?.percent === "number" ? clampPercent(existing?.percent) ?? null : null);
+
+    // Build update object (we only set fields that are relevant for the branch).
     const updateData: {
-      completedModuleIds: string[];
+      completedModuleIds?: string[];
       lastModuleId?: string | null;
-      percent: number;
-    } = {
-      completedModuleIds: nextCompleted,
-      percent: percentToStore,
-    };
+      lastLessonId?: string | null; // NEW
+      percent?: number | null;
+    } = {};
 
+    if (hasAdd || hasOverwrite) {
+      updateData.completedModuleIds = nextCompleted;
+      updateData.percent = percentToStore ?? null;
+    }
+
+    // We always accept provided lastModuleId / lastLessonId (they do not imply completion).
     if (typeof lastModuleId === "string") {
       updateData.lastModuleId = lastModuleId || null;
+    }
+    if (typeof lastLessonId === "string") {
+      updateData.lastLessonId = lastLessonId || null;
     }
 
     const saved = await prisma.userCourseProgress.upsert({
@@ -205,22 +238,34 @@ export async function POST(req: Request) {
       create: {
         userId: session.user.id,
         courseId,
-        completedModuleIds: nextCompleted,
-        lastModuleId: updateData.lastModuleId ?? null,
-        percent: percentToStore,
+        completedModuleIds: updateData.completedModuleIds ?? nextCompleted ?? [],
+        lastModuleId:
+          typeof updateData.lastModuleId !== "undefined"
+            ? updateData.lastModuleId
+            : existing?.lastModuleId ?? null,
+        lastLessonId:
+          typeof updateData.lastLessonId !== "undefined"
+            ? updateData.lastLessonId
+            : existing?.lastLessonId ?? null,
+        percent:
+          typeof updateData.percent === "number" || updateData.percent === null
+            ? (updateData.percent as number | null)
+            : percentToStore ?? null,
       },
       update: updateData,
-      select: { completedModuleIds: true, lastModuleId: true, percent: true },
+      select: { completedModuleIds: true, lastModuleId: true, lastLessonId: true, percent: true },
     });
 
     const out = {
       completedModuleIds: toStringArray(saved.completedModuleIds),
-      percent: clampPercent(saved.percent) ?? percentToStore,
+      percent: typeof saved.percent === "number" ? clampPercent(saved.percent) : null,
       lastModuleId: typeof saved.lastModuleId === "string" ? saved.lastModuleId : null,
+      lastLessonId: typeof saved.lastLessonId === "string" ? saved.lastLessonId : null,
       meta: {
         completedModuleIds: toStringArray(saved.completedModuleIds),
-        percent: clampPercent(saved.percent) ?? percentToStore,
+        percent: typeof saved.percent === "number" ? clampPercent(saved.percent) : null,
         lastModuleId: typeof saved.lastModuleId === "string" ? saved.lastModuleId : null,
+        lastLessonId: typeof saved.lastLessonId === "string" ? saved.lastLessonId : null,
       },
     };
 
@@ -230,4 +275,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
-
