@@ -1,20 +1,15 @@
 // app/dashboard/course/page.tsx
 //
-// Fix: progress lost after logout/login (surgical; course flow unchanged)
-// ----------------------------------------------------------------------
-// Root cause: we were persisting an OVERWRITE snapshot of completedModuleIds
-// using state that could still be stale (React setState is async). That could
-// drop the just-completed module from the server row. After re-login, server
-// truth showed 0 completed → next module locked.
+// Final: progress survives logout/login (atomic append + confirm)
+// ---------------------------------------------------------------
+// • No changes to course flow, payments, signup, staff.
+// • Keep { addModuleId } for atomic server append.
+// • NEW: After add, do a background GET to confirm persist; if not present,
+//   retry once with an explicit overwrite payload using our local union.
+// • Hydration still unions (local ⊎ server) and reconciles back to server.
+// • Two-stage resume gate preserved (prevents early pointer overwrite).
 //
-// What we changed, without touching course flow or other app flows:
-// 1) Write path → use { addModuleId } on completion (atomic on server).
-// 2) Hydration path → union(local, server) to avoid regressions, and reconcile
-//    the union back to the server explicitly (no state reads in the payload).
-// 3) Keep the previously added two-stage resume gate so position pings never
-//    overwrite pointers before modules are ready.
-//
-// Pillars: efficiency, robustness, simplicity, ease of management, security.
+// Pillars: efficiency • robustness • simplicity • ease of management • security
 
 "use client";
 
@@ -87,7 +82,7 @@ function computeAdjacentLesson(
   return { prev, next };
 }
 
-/** Normalize API DTO → UI types (keeps Video/Body/Quiz components unchanged). */
+/** Normalize API DTO → UI types. */
 function normalizeModules(dtoModules: CourseModuleDTO[] | undefined): UICourseModule[] {
   if (!Array.isArray(dtoModules)) return [];
   return dtoModules.map<UICourseModule>((m) => ({
@@ -221,7 +216,7 @@ export default function CoursePage() {
   const serverLastLessonIdRef = useRef<string | null>(null);
   const serverLastModuleIdRef = useRef<string | null>(null);
 
-  // Access check — unchanged (keep hooks above all conditional returns)
+  // Access check — unchanged
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -306,7 +301,7 @@ export default function CoursePage() {
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
-  // POST helper: persist a payload EXACTLY as provided (no state reads here).
+  // POST helper: send an explicit payload (never read state mid-build).
   function postProgressExplicit(payload: {
     courseId: string;
     addModuleId?: string;
@@ -314,24 +309,56 @@ export default function CoursePage() {
     lastModuleId?: string | null;
     lastLessonId?: string | null;
   }) {
-    fetch("/api/course/progress", {
+    return fetch("/api/course/progress", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       cache: "no-store",
-    }).catch(() => {
-      // Fire-and-forget; local optimistic state remains.
+      keepalive: true, // helps during tab close/logout edges in some browsers
     });
+  }
+
+  // Background confirmation of a just-added module; retries once with overwrite if needed.
+  async function confirmPersistOrRepair(moduleId: string, lessonId: string | null) {
+    if (!course?.id) return;
+    try {
+      // 1) Read back the server row to confirm it contains moduleId
+      const chk = await fetch(
+        `/api/course/progress?courseId=${encodeURIComponent(course.id)}`,
+        { cache: "no-store" }
+      );
+      const json = await chk.json();
+      const serverIds: string[] = Array.isArray(json?.meta?.completedModuleIds)
+        ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
+        : [];
+
+      if (serverIds.includes(moduleId)) {
+        // All good — nothing to do.
+        return;
+      }
+
+      // 2) If missing, repair once by overwriting with our local union (cannot regress).
+      const union = Array.from(new Set<string>([...serverIds, ...Array.from(completedModuleIds)]));
+      await postProgressExplicit({
+        courseId: course.id,
+        completedModuleIds: union,
+        lastModuleId: moduleId,
+        lastLessonId: lessonId,
+      });
+    } catch {
+      // Silent; the UI already shows progress and local resume prevents UX loss.
+    }
   }
 
   // Position ping (exact-lesson resume) — called only after hydration is open
   function postPositionPing(moduleId: string, lessonId: string) {
     if (!course?.id) return;
+    // Fire-and-forget; we don't block navigation on this.
     postProgressExplicit({
       courseId: course.id,
       lastModuleId: moduleId,
       lastLessonId: lessonId,
-    });
+    }).catch(() => {});
   }
 
   // 1) Seed from local; fetch server; take UNION(local, server); reconcile to server.
@@ -381,10 +408,9 @@ export default function CoursePage() {
           postProgressExplicit({
             courseId: course.id,
             completedModuleIds: Array.from(union),
-            // Keep latest known pointers (if present). Harmless if null/undefined.
             lastModuleId: serverLastModuleIdRef.current ?? null,
             lastLessonId: serverLastLessonIdRef.current ?? null,
-          });
+          }).catch(() => {});
         }
       } catch {
         // Keep local as-is if network error
@@ -393,7 +419,7 @@ export default function CoursePage() {
         // NOTE: we still wait for modules before applying the resume indices.
       }
     })();
-  }, [course?.id]);
+  }, [course?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2) When uiModules are loaded AND we haven't hydrated yet, apply resume exactly once.
   useEffect(() => {
@@ -446,7 +472,7 @@ export default function CoursePage() {
 
     // Open the ping gate only AFTER we’ve attempted to apply resume with modules ready.
     didHydrateRef.current = true;
-  }, [course?.id, uiModules]);
+  }, [course?.id, uiModules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Compute unlocked indices based on completion (Module 1 always unlocked)
   const unlockedModuleIndices: Set<number> = useMemo(() => {
@@ -472,7 +498,7 @@ export default function CoursePage() {
     postPositionPing(currentModule.id, currentLesson.id);
   }, [currentLesson?.id, currentModule?.id, course?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Mark current module complete (idempotent) and persist in background. */
+  /** Mark current module complete (idempotent) and persist with confirmation. */
   function markCurrentModuleComplete(): boolean {
     if (!currentModule || !course?.id) return false;
 
@@ -485,15 +511,17 @@ export default function CoursePage() {
     setCompletedModuleIds(next);
     saveLocalProgress(course.id, Array.from(next));
 
-    // 2) Persist ATOMICALLY on server (no stale overwrite)
-    //    Use the { addModuleId } branch so the server appends safely.
+    // 2) Persist ATOMICALLY on server (append, not overwrite)
     postProgressExplicit({
       courseId: course.id,
       addModuleId: id,
       // Keep pointers to improve resume; harmless if null.
       lastModuleId: id,
       lastLessonId: currentLesson?.id ?? null,
-    });
+    })
+      // 3) Confirm in background and repair once if needed (does NOT block UI)
+      .then(() => confirmPersistOrRepair(id, currentLesson?.id ?? null))
+      .catch(() => confirmPersistOrRepair(id, currentLesson?.id ?? null));
 
     return true;
   }
