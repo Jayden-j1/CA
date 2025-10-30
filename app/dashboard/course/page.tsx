@@ -2,15 +2,15 @@
 //
 // Cross-device exact resume (surgical; course flow unchanged)
 // -----------------------------------------------------------
-// FIX: Prevent early "position ping" from overwriting server resume on first mount.
-// We add a tiny hydration gate so we only POST { lastLessonId } AFTER the
-// initial server seed has run and we've applied the resume pointer.
+// Root cause fixed: early "position ping" could overwrite the server-saved
+// lastLessonId when modules weren't loaded yet. We now:
+//   • Fetch server progress → store resume ids in refs (do NOT apply yet)
+//   • Wait until uiModules are loaded → apply resume once (then open ping gate)
+//   • Only after hydration is open do we POST position pings on lesson changes
 //
-// ✅ Keeps your existing locking, completion, and auto-advance behavior.
-// ✅ Adds: hydration guard (no pings until server resume is applied).
-// ✅ Prefers server lastLessonId on GET to restore precise lesson after logout/login.
-// ✅ Still persists completedModuleIds and lastModuleId when completing.
-// ✅ No changes to auth, signup, staff, payments.
+// ✅ Keeps existing locking, completion, and auto-advance behavior intact.
+// ✅ Exact-lesson resume works across logout/login and devices.
+// ✅ No changes to auth, signup, staff, payments, or unrelated flows.
 //
 // Pillars: efficiency, robustness, simplicity, ease of management, security.
 
@@ -206,12 +206,13 @@ export default function CoursePage() {
   const router = useRouter();
   const access = usePaidAccess();
 
-  // ---- Hydration gate to prevent early overwrites ---------------------------
-  // We block resume writes (local + server) until the first server hydrate finishes.
-  const didHydrateRef = useRef<boolean>(false);
-  const lastCourseIdRef = useRef<string | null>(null);
+  // ---- Hydration & resume control (prevents early overwrites) ---------------
+  const didHydrateRef = useRef<boolean>(false);           // opens only after we apply resume
+  const lastCourseIdRef = useRef<string | null>(null);    // reset gate if course changes
+  const serverLastLessonIdRef = useRef<string | null>(null);
+  const serverLastModuleIdRef = useRef<string | null>(null);
 
-  // Access check — unchanged (keep hooks above all conditional returns)
+  // Access check — unchanged
   useEffect(() => {
     if (access.loading) return;
     if (!access.hasAccess) {
@@ -296,7 +297,7 @@ export default function CoursePage() {
   const [completedModuleIds, setCompletedModuleIds] = useState<Set<string>>(new Set());
   const [seededFromServer, setSeededFromServer] = useState<boolean>(false);
 
-  // Helper: persist a snapshot of completions + optional lastModuleId/lastLessonId
+  // POST helper: persist a snapshot of completions + optional lastModuleId/lastLessonId
   function postProgress(body: Record<string, unknown>) {
     if (!course?.id) return;
     fetch("/api/course/progress", {
@@ -309,27 +310,28 @@ export default function CoursePage() {
     });
   }
 
-  // Position ping (exact-lesson resume)
+  // Position ping (exact-lesson resume) — called only after hydration is open
   function postPositionPing(moduleId: string, lessonId: string) {
     postProgress({ lastModuleId: moduleId, lastLessonId: lessonId });
   }
 
-  // Seed from local (optimistic), then hydrate from server (prefer server meta).
+  // 1) Seed completions from local, then fetch server row and store resume IDs in refs.
   useEffect(() => {
     if (!course?.id) return;
 
-    // Reset hydration gate when switching to a new/different course
+    // If course changed, close hydration gate and clear server resume refs.
     if (lastCourseIdRef.current !== course.id) {
-      didHydrateRef.current = false; // block pings until hydrate finishes
+      didHydrateRef.current = false;
+      serverLastLessonIdRef.current = null;
+      serverLastModuleIdRef.current = null;
       lastCourseIdRef.current = course.id;
     }
 
-    // 1) Local optimistic seed (still useful if offline)
+    // Local optimistic seed (useful offline)
     const local = loadLocalProgress(course.id);
-    const localSet = new Set(local.completedModuleIds);
-    setCompletedModuleIds(localSet);
+    setCompletedModuleIds(new Set(local.completedModuleIds));
 
-    // 2) Server seed
+    // Server fetch — store resume pointers in refs; don't apply yet.
     (async () => {
       try {
         const res = await fetch(
@@ -339,74 +341,88 @@ export default function CoursePage() {
         const json = await res.json().catch(() => ({}));
 
         if (json?.meta) {
-          const serverArr: string[] = Array.isArray(json.meta.completedModuleIds)
+          const serverIds: string[] = Array.isArray(json.meta.completedModuleIds)
             ? json.meta.completedModuleIds.filter((s: unknown) => typeof s === "string")
             : [];
-          const serverSet = new Set(serverArr);
-
+          const serverSet = new Set(serverIds);
           setCompletedModuleIds(serverSet);
           saveLocalProgress(course.id, Array.from(serverSet));
 
-          // Prefer exact-lesson resume if present:
-          const serverLastLessonId: string | null =
+          // Store resume pointers; mapping to indices happens later when modules are ready.
+          serverLastLessonIdRef.current =
             typeof json.meta.lastLessonId === "string" ? json.meta.lastLessonId : null;
-          const serverLastModuleId: string | null =
+          serverLastModuleIdRef.current =
             typeof json.meta.lastModuleId === "string" ? json.meta.lastModuleId : null;
-
-          let applied = false;
-
-          if (serverLastLessonId && uiModules.length) {
-            // Find module/lesson indices by id
-            for (let m = 0; m < uiModules.length && !applied; m++) {
-              const lIdx = (uiModules[m].lessons ?? []).findIndex((l) => l.id === serverLastLessonId);
-              if (lIdx >= 0) {
-                setCurrentModuleIndex(m);
-                setCurrentLessonIndex(lIdx);
-                applied = true;
-              }
-            }
-          }
-          if (!applied && serverLastModuleId && uiModules.length) {
-            const mIdx = uiModules.findIndex((mm) => mm.id === serverLastModuleId);
-            if (mIdx >= 0) {
-              setCurrentModuleIndex(mIdx);
-              setCurrentLessonIndex(0);
-              applied = true;
-            }
-          }
-          if (!applied) {
-            // Fallback to local resume (if any)
-            const { moduleId, lessonId } = loadResume(course.id);
-            if (moduleId) {
-              const mIdx = uiModules.findIndex((mm) => mm.id === moduleId);
-              if (mIdx >= 0) {
-                setCurrentModuleIndex(mIdx);
-                if (lessonId && uiModules[mIdx]?.lessons?.length) {
-                  const lIdx = uiModules[mIdx].lessons.findIndex((l) => l.id === lessonId);
-                  if (lIdx >= 0) setCurrentLessonIndex(lIdx);
-                }
-                applied = true;
-              }
-            }
-          }
         }
       } catch {
-        // Network/server failure → keep local as-is
+        // Keep local as-is if network error
       } finally {
-        // HYDRATION COMPLETE: allow pings from now on
-        didHydrateRef.current = true;
         setSeededFromServer(true);
+        // NOTE: We intentionally do NOT open didHydrateRef here — we wait for uiModules below.
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [course?.id, uiModules.length]);
+  }, [course?.id]);
+
+  // 2) When uiModules are loaded AND we haven't hydrated yet, apply resume exactly once.
+  useEffect(() => {
+    if (!course?.id) return;
+    if (didHydrateRef.current) return;              // already applied
+    if (uiModules.length === 0) return;             // nothing to map yet
+    // At this point: we have modules, can safely map ids → indices.
+
+    let applied = false;
+
+    const serverLastLessonId = serverLastLessonIdRef.current;
+    const serverLastModuleId = serverLastModuleIdRef.current;
+
+    // Prefer server's exact lesson if available
+    if (serverLastLessonId) {
+      for (let m = 0; m < uiModules.length && !applied; m++) {
+        const lIdx = (uiModules[m].lessons ?? []).findIndex((l) => l.id === serverLastLessonId);
+        if (lIdx >= 0) {
+          setCurrentModuleIndex(m);
+          setCurrentLessonIndex(lIdx);
+          applied = true;
+        }
+      }
+    }
+
+    // Else prefer server's last module
+    if (!applied && serverLastModuleId) {
+      const mIdx = uiModules.findIndex((mm) => mm.id === serverLastModuleId);
+      if (mIdx >= 0) {
+        setCurrentModuleIndex(mIdx);
+        setCurrentLessonIndex(0);
+        applied = true;
+      }
+    }
+
+    // Else fallback to local resume pointer (if present)
+    if (!applied) {
+      const { moduleId, lessonId } = loadResume(course.id);
+      if (moduleId) {
+        const mIdx = uiModules.findIndex((mm) => mm.id === moduleId);
+        if (mIdx >= 0) {
+          setCurrentModuleIndex(mIdx);
+          if (lessonId && uiModules[mIdx]?.lessons?.length) {
+            const lIdx = uiModules[mIdx].lessons.findIndex((l) => l.id === lessonId);
+            if (lIdx >= 0) setCurrentLessonIndex(lIdx);
+          }
+          applied = true;
+        }
+      }
+    }
+
+    // Open the ping gate only AFTER we’ve attempted to apply resume with modules ready.
+    didHydrateRef.current = true;
+  }, [course?.id, uiModules]);
 
   // Compute unlocked indices based on completion (Module 1 always unlocked)
   const unlockedModuleIndices: Set<number> = useMemo(() => {
     return computeUnlocked(uiModules, completedModuleIds);
   }, [uiModules, completedModuleIds]);
 
-  // Clear quiz state on lesson change + save resume + (conditionally) server position ping
+  // On lesson change: reset quiz UI, then (iff hydrated) save local + POST position ping.
   useEffect(() => {
     setAnswers({});
     setRevealed(false);
@@ -415,13 +431,13 @@ export default function CoursePage() {
       autoAdvanceTimer.current = null;
     }
 
-    // --- IMPORTANT: Do not post or write local resume until hydration finished.
+    // Block until hydration has applied resume (prevents early overwrite).
     if (!didHydrateRef.current) return;
     if (!(course?.id && currentModule && currentLesson)) return;
 
-    // Local pointer for offline convenience
+    // Local pointer (for offline)
     saveResume(course.id, currentModule.id, currentLesson.id);
-    // Server pointer for cross-device/logout resume
+    // Server pointer (for cross-device/logout)
     postPositionPing(currentModule.id, currentLesson.id);
   }, [currentLesson?.id, currentModule?.id, course?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -452,6 +468,7 @@ export default function CoursePage() {
     saveProgressSnapshot({ lastModuleId: id, lastLessonId: currentLesson?.id ?? null });
 
     return true;
+    // Note: course flow (auto-advance) is handled below and unchanged.
   }
 
   // ---------------- Handlers (course flow unchanged) ----------------
