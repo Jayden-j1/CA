@@ -1,21 +1,18 @@
 // app/api/courses/progress/route.ts
 //
-// Robust, production-safe progress API.
-// --------------------------------------------------------------
-// What changed (surgical):
-// • Added runtime feature-detection for the DB column `UserCourseProgress.lastLessonId`.
-// • If the column is missing in production (migration not yet applied), we gracefully
-//   fall back (no crash) and continue to persist completions + lastModuleId.
-// • Once the migration is applied, the same code auto-enables exact-lesson resume.
+// Production-solid progress API:
+// - Gracefully handles missing `lastLessonId` column (feature-detection + fallback).
+// - Replaces fragile `upsert` with a safe "update-then-create" write path.
+// - Emits structured error JSON on 500 to aid debugging via Network tab.
 //
-// Pillars: efficiency, robustness, simplicity, ease of management, security.
+// No other flows are changed (auth, payments, locking, auto-advance, etc).
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// --------- tiny utils --------------------------------------------------------
+// ---------- helpers -----------------------------------------------------------
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -35,46 +32,52 @@ async function computePercentFallback(opts: { courseId: string; completedCount: 
   return Math.max(0, Math.min(100, pct));
 }
 
-/**
- * Detect if an error likely came from a missing column (e.g., `lastLessonId`).
- * Prisma's error codes can vary by engine/driver; we conservatively key off message text too.
- */
+// Prisma/Postgres error sniffers (conservative)
 function looksLikeMissingColumnError(err: unknown, columnName: string): boolean {
-  const msg = String((err as any)?.message ?? "");
+  const e: any = err;
+  const msg = String(e?.message ?? "");
   return (
-    msg.includes("does not exist") && msg.toLowerCase().includes(columnName.toLowerCase())
-  ) || (err as any)?.code === "P2022"; // P2022 is "The column does not exist" in some contexts.
+    msg.toLowerCase().includes("does not exist") &&
+    msg.toLowerCase().includes(columnName.toLowerCase())
+  ) || e?.code === "P2022"; // Column does not exist (some engines)
+}
+function isNotFoundError(err: unknown): boolean {
+  return (err as any)?.code === "P2025"; // Record not found
+}
+function sanitizeErrorForClient(err: unknown) {
+  const e: any = err;
+  return {
+    code: e?.code ?? "UNKNOWN",
+    message:
+      typeof e?.message === "string"
+        ? e.message.slice(0, 300) // avoid giant payloads
+        : "Unexpected error",
+  };
 }
 
-// --------- runtime feature switch (cached per lambda instance) ---------------
+// ---------- lastLessonId runtime feature flag --------------------------------
 //
-// null   => unknown; try with column, and cache result
-// true   => column exists; always use it
-// false  => column missing; never select/write it
-//
+// null  => unknown; first attempt will detect & cache
+// true  => column exists
+// false => column missing (omit from selects/writes)
 let SUPPORTS_LAST_LESSON: boolean | null = null;
 
-/** Safe select shape based on feature flag. */
 function selectShape() {
   return SUPPORTS_LAST_LESSON
     ? { completedModuleIds: true, lastModuleId: true, lastLessonId: true, percent: true }
-    : { completedModuleIds: true, lastModuleId: true, /* lastLessonId omitted */ percent: true };
+    : { completedModuleIds: true, lastModuleId: true, /* lastLessonId */ percent: true };
 }
 
-/** Read progress row with graceful fallback if the column is missing. */
 async function safeFindProgress(userId: string, courseId: string) {
-  // First attempt: include lastLessonId if not explicitly disabled
   if (SUPPORTS_LAST_LESSON !== false) {
     try {
       const row = await prisma.userCourseProgress.findFirst({
         where: { userId, courseId },
         select: selectShape(),
       });
-      // If we got here, lastLessonId exists (or was omitted). Cache true if we included it.
       if (SUPPORTS_LAST_LESSON === null) SUPPORTS_LAST_LESSON = true;
       return { row, usedLastLesson: SUPPORTS_LAST_LESSON === true };
     } catch (err) {
-      // If this is a "lastLessonId column missing" scenario, fall back once and cache false.
       if (looksLikeMissingColumnError(err, "lastLessonId")) {
         SUPPORTS_LAST_LESSON = false;
         const row = await prisma.userCourseProgress.findFirst({
@@ -83,12 +86,9 @@ async function safeFindProgress(userId: string, courseId: string) {
         });
         return { row, usedLastLesson: false };
       }
-      // Any other error: bubble up.
       throw err;
     }
   }
-
-  // Explicitly disabled: no lastLessonId
   const row = await prisma.userCourseProgress.findFirst({
     where: { userId, courseId },
     select: selectShape(),
@@ -96,81 +96,97 @@ async function safeFindProgress(userId: string, courseId: string) {
   return { row, usedLastLesson: false };
 }
 
-/** Upsert with graceful fallback if lastLessonId column is missing. */
-async function safeUpsertProgress(args: {
+function buildWriteData(opts: {
+  nextCompleted?: string[];
+  lastModuleId?: string | null;
+  lastLessonId?: string | null;
+  percent?: number | null;
+  includeLastLesson: boolean;
+}) {
+  const { nextCompleted, lastModuleId, lastLessonId, percent, includeLastLesson } = opts;
+  const data: any = {};
+  if (nextCompleted) data.completedModuleIds = nextCompleted;
+  if (typeof percent !== "undefined") data.percent = percent ?? null;
+  if (typeof lastModuleId !== "undefined") data.lastModuleId = lastModuleId ?? null;
+  if (includeLastLesson && typeof lastLessonId !== "undefined") {
+    data.lastLessonId = lastLessonId ?? null;
+  }
+  return data;
+}
+
+/**
+ * Safe write (update-then-create) with column fallback.
+ * This avoids `upsert` edge-cases on some Postgres/data-proxy setups.
+ */
+async function safeWriteProgress(args: {
   userId: string;
   courseId: string;
   nextCompleted?: string[];
   lastModuleId?: string | null;
-  lastLessonId?: string | null; // ignored if column unsupported
+  lastLessonId?: string | null;
   percent?: number | null;
 }) {
   const { userId, courseId, nextCompleted, lastModuleId, lastLessonId, percent } = args;
 
-  // Build update/create payloads conditionally.
-  const mkData = (includeLastLesson: boolean) => {
-    const updateData: {
-      completedModuleIds?: string[];
-      lastModuleId?: string | null;
-      lastLessonId?: string | null;
-      percent?: number | null;
-    } = {};
-    if (nextCompleted) updateData.completedModuleIds = nextCompleted;
-    if (typeof percent !== "undefined") updateData.percent = percent ?? null;
-    if (typeof lastModuleId !== "undefined") updateData.lastModuleId = lastModuleId ?? null;
-    if (includeLastLesson && typeof lastLessonId !== "undefined") {
-      updateData.lastLessonId = lastLessonId ?? null;
-    }
-    return updateData;
-  };
+  const tryWrite = async (includeLastLesson: boolean) => {
+    const updateData = buildWriteData({
+      nextCompleted,
+      lastModuleId,
+      lastLessonId,
+      percent,
+      includeLastLesson,
+    });
 
-  const includeLast = SUPPORTS_LAST_LESSON !== false;
-  // Try once with lastLessonId (unless known to be unsupported)
-  if (includeLast) {
+    // 1) Try UPDATE first
     try {
-      const saved = await prisma.userCourseProgress.upsert({
+      const updated = await prisma.userCourseProgress.update({
         where: { userId_courseId: { userId, courseId } },
-        create: {
-          userId,
-          courseId,
-          ...mkData(true),
-        },
-        update: mkData(true),
+        data: updateData,
         select: selectShape(),
       });
+      return updated;
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+
+    // 2) If no row, CREATE
+    const createData = buildWriteData({
+      nextCompleted: nextCompleted ?? [],
+      lastModuleId,
+      lastLessonId,
+      percent,
+      includeLastLesson,
+    });
+
+    const created = await prisma.userCourseProgress.create({
+      data: {
+        userId,
+        courseId,
+        ...createData,
+      },
+      select: selectShape(),
+    });
+    return created;
+  };
+
+  // If we don't know yet, try with lastLessonId; if missing, retry without and cache.
+  if (SUPPORTS_LAST_LESSON !== false) {
+    try {
+      const saved = await tryWrite(true);
       if (SUPPORTS_LAST_LESSON === null) SUPPORTS_LAST_LESSON = true;
       return { saved, usedLastLesson: true };
     } catch (err) {
       if (looksLikeMissingColumnError(err, "lastLessonId")) {
-        // Column is missing in production DB. Cache and retry without it.
         SUPPORTS_LAST_LESSON = false;
-        const saved = await prisma.userCourseProgress.upsert({
-          where: { userId_courseId: { userId, courseId } },
-          create: {
-            userId,
-            courseId,
-            ...mkData(false),
-          },
-          update: mkData(false),
-          select: selectShape(),
-        });
+        const saved = await tryWrite(false);
         return { saved, usedLastLesson: false };
       }
       throw err;
     }
   }
 
-  // Known unsupported: do not write lastLessonId at all.
-  const saved = await prisma.userCourseProgress.upsert({
-    where: { userId_courseId: { userId, courseId } },
-    create: {
-      userId,
-      courseId,
-      ...mkData(false),
-    },
-    update: mkData(false),
-    select: selectShape(),
-  });
+  // Known unsupported: do not touch lastLessonId
+  const saved = await tryWrite(false);
   return { saved, usedLastLesson: false };
 }
 
@@ -189,8 +205,8 @@ export async function GET(req: Request) {
 
     const completedModuleIds = toStringArray(row?.completedModuleIds);
     const lastModuleId = typeof row?.lastModuleId === "string" ? row?.lastModuleId : null;
-    // If column unsupported, row will not have lastLessonId selected → treat as null.
-    const lastLessonId = typeof (row as any)?.lastLessonId === "string" ? (row as any)?.lastLessonId : null;
+    const lastLessonId =
+      typeof (row as any)?.lastLessonId === "string" ? (row as any).lastLessonId : null;
 
     let percent: number | null = typeof row?.percent === "number" ? clampPercent(row?.percent) : null;
     if (percent === null) {
@@ -209,7 +225,10 @@ export async function GET(req: Request) {
     );
   } catch (err) {
     console.error("[GET /api/courses/progress] error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error", details: sanitizeErrorForClient(err) },
+      { status: 500 }
+    );
   }
 }
 
@@ -233,6 +252,7 @@ export async function POST(req: Request) {
   const hasAdd = typeof addModuleId === "string";
   const hasOverwrite = overwrite.length > 0;
   const hasPositionOnly = !hasAdd && !hasOverwrite && typeof lastLessonId === "string";
+
   if (![hasAdd, hasOverwrite, hasPositionOnly].filter(Boolean).length) {
     return NextResponse.json(
       {
@@ -244,11 +264,10 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Read existing (tolerant to missing lastLessonId column)
+    // Read existing (tolerant to missing lastLessonId)
     const { row } = await safeFindProgress(session.user.id, courseId);
     let nextCompleted = toStringArray(row?.completedModuleIds);
 
-    // Branching exactly as before
     if (hasOverwrite) nextCompleted = uniqueStrings(overwrite);
     if (hasAdd) nextCompleted = uniqueStrings(addModuleId ? [...nextCompleted, addModuleId] : nextCompleted);
 
@@ -259,14 +278,13 @@ export async function POST(req: Request) {
           : await computePercentFallback({ courseId, completedCount: nextCompleted.length })
         : (typeof row?.percent === "number" ? clampPercent(row?.percent) ?? null : null);
 
-    // IMPORTANT: If DB doesn't support lastLessonId yet, safeUpsertProgress will ignore it.
-    const { saved } = await safeUpsertProgress({
+    const { saved } = await safeWriteProgress({
       userId: session.user.id,
       courseId,
       nextCompleted: (hasAdd || hasOverwrite) ? nextCompleted : undefined,
-      lastModuleId,                         // harmless if only position ping
-      lastLessonId,                         // auto-ignored if column missing
-      percent: (hasAdd || hasOverwrite) ? percentToStore ?? null : undefined,
+      lastModuleId,
+      lastLessonId, // ignored automatically if the column is missing
+      percent: (hasAdd || hasOverwrite) ? (percentToStore ?? null) : undefined,
     });
 
     const out = {
@@ -285,6 +303,9 @@ export async function POST(req: Request) {
     return NextResponse.json(out, { status: 200 });
   } catch (err) {
     console.error("[POST /api/courses/progress] error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error", details: sanitizeErrorForClient(err) },
+      { status: 500 }
+    );
   }
 }
