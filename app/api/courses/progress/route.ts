@@ -1,11 +1,13 @@
 // app/api/courses/progress/route.ts
 //
-// Production-solid progress API:
-// - Gracefully handles missing `lastLessonId` column (feature-detection + fallback).
-// - Replaces fragile `upsert` with a safe "update-then-create" write path.
-// - Emits structured error JSON on 500 to aid debugging via Network tab.
+// Progress API (hardened):
+// - Validates that `courseId` exists in `Course` (prevents FK P2003).
+// - If missing, returns 422 with code "COURSE_NOT_FOUND_FOR_ID" and a helpful message.
+// - Keeps runtime detection for `lastLessonId` column (safe on older DBs).
+// - Uses safe "update-then-create" to avoid `upsert` edge cases.
+// - Emits structured error JSON for quick diagnosis in the Network tab.
 //
-// No other flows are changed (auth, payments, locking, auto-advance, etc).
+// No other flows changed (auth, payments, UI, locking).
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -32,14 +34,14 @@ async function computePercentFallback(opts: { courseId: string; completedCount: 
   return Math.max(0, Math.min(100, pct));
 }
 
-// Prisma/Postgres error sniffers (conservative)
+// Prisma/Postgres error sniffers
 function looksLikeMissingColumnError(err: unknown, columnName: string): boolean {
   const e: any = err;
   const msg = String(e?.message ?? "");
   return (
     msg.toLowerCase().includes("does not exist") &&
     msg.toLowerCase().includes(columnName.toLowerCase())
-  ) || e?.code === "P2022"; // Column does not exist (some engines)
+  ) || e?.code === "P2022"; // Column does not exist
 }
 function isNotFoundError(err: unknown): boolean {
   return (err as any)?.code === "P2025"; // Record not found
@@ -50,16 +52,13 @@ function sanitizeErrorForClient(err: unknown) {
     code: e?.code ?? "UNKNOWN",
     message:
       typeof e?.message === "string"
-        ? e.message.slice(0, 300) // avoid giant payloads
+        ? e.message.slice(0, 300)
         : "Unexpected error",
   };
 }
 
 // ---------- lastLessonId runtime feature flag --------------------------------
-//
-// null  => unknown; first attempt will detect & cache
-// true  => column exists
-// false => column missing (omit from selects/writes)
+
 let SUPPORTS_LAST_LESSON: boolean | null = null;
 
 function selectShape() {
@@ -115,8 +114,8 @@ function buildWriteData(opts: {
 }
 
 /**
- * Safe write (update-then-create) with column fallback.
- * This avoids `upsert` edge-cases on some Postgres/data-proxy setups.
+ * Safe write (update-then-create), avoiding `upsert` pitfalls.
+ * Honors runtime support for lastLessonId.
  */
 async function safeWriteProgress(args: {
   userId: string;
@@ -149,7 +148,7 @@ async function safeWriteProgress(args: {
       if (!isNotFoundError(err)) throw err;
     }
 
-    // 2) If no row, CREATE
+    // 2) CREATE if not found
     const createData = buildWriteData({
       nextCompleted: nextCompleted ?? [],
       lastModuleId,
@@ -169,7 +168,6 @@ async function safeWriteProgress(args: {
     return created;
   };
 
-  // If we don't know yet, try with lastLessonId; if missing, retry without and cache.
   if (SUPPORTS_LAST_LESSON !== false) {
     try {
       const saved = await tryWrite(true);
@@ -185,9 +183,18 @@ async function safeWriteProgress(args: {
     }
   }
 
-  // Known unsupported: do not touch lastLessonId
   const saved = await tryWrite(false);
   return { saved, usedLastLesson: false };
+}
+
+// ---------- course existence preflight ---------------------------------------
+
+async function ensureCourseExists(courseId: string) {
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { id: true },
+  });
+  return !!course;
 }
 
 // ---------------------------- GET -------------------------------------------
@@ -201,6 +208,9 @@ export async function GET(req: Request) {
   if (!courseId) return NextResponse.json({ error: "Missing courseId" }, { status: 400 });
 
   try {
+    // Optional: expose course existence for quick telemetry in Network tab
+    const courseExists = await ensureCourseExists(courseId);
+
     const { row } = await safeFindProgress(session.user.id, courseId);
 
     const completedModuleIds = toStringArray(row?.completedModuleIds);
@@ -215,6 +225,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json(
       {
+        courseExists, // ← helpful signal (true/false)
         completedModuleIds,
         percent,
         lastModuleId,
@@ -242,6 +253,24 @@ export async function POST(req: Request) {
   const courseId = (body?.courseId as string | undefined)?.trim() || "";
   if (!courseId) return NextResponse.json({ error: "Missing courseId" }, { status: 400 });
 
+  // ✅ PRE-FLIGHT: ensure the FK target exists to avoid P2003
+  const exists = await ensureCourseExists(courseId);
+  if (!exists) {
+    // Return actionable 422 with a crisp code and guidance
+    return NextResponse.json(
+      {
+        error: "COURSE_NOT_FOUND_FOR_ID",
+        message:
+          "The provided courseId does not exist in the Course table for this environment. Seed/sync the Course row in the same database used by Vercel (DATABASE_URL).",
+        hint: {
+          courseId,
+          next: "Verify Vercel → Project → Settings → Environment Variables → DATABASE_URL. Ensure Course (and its modules) are present in that database.",
+        },
+      },
+      { status: 422 }
+    );
+  }
+
   // Inputs (normalized)
   const addModuleId = (body?.addModuleId as string | undefined)?.trim() || undefined;
   const overwrite = toStringArray(body?.completedModuleIds);
@@ -264,7 +293,6 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Read existing (tolerant to missing lastLessonId)
     const { row } = await safeFindProgress(session.user.id, courseId);
     let nextCompleted = toStringArray(row?.completedModuleIds);
 
@@ -301,7 +329,21 @@ export async function POST(req: Request) {
     };
 
     return NextResponse.json(out, { status: 200 });
-  } catch (err) {
+  } catch (err: any) {
+    // Special-case FK violations to keep diagnostics crisp
+    if (err?.code === "P2003") {
+      console.error("[POST /api/courses/progress] FK violation:", err?.meta ?? err);
+      return NextResponse.json(
+        {
+          error: "FK_VIOLATION",
+          message:
+            "Foreign key constraint failed while saving progress. This usually means the courseId is not in the Course table for this database.",
+          details: sanitizeErrorForClient(err),
+        },
+        { status: 422 }
+      );
+    }
+
     console.error("[POST /api/courses/progress] error:", err);
     return NextResponse.json(
       { error: "Internal server error", details: sanitizeErrorForClient(err) },
