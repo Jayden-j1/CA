@@ -8,26 +8,24 @@
 // Rules
 // 1. ADMIN and BUSINESS_OWNER → always has access.
 // 2. STAFF (role=USER + businessId ≠ null) → inherits access from its business owner.
+//    ✅ Hardened (surgical): If owner's hasPaid=false *but* the owner has a recorded
+//       PACKAGE Payment, we "self-heal": flip owner.hasPaid=true and grant access.
 // 3. INDIVIDUAL (role=USER + businessId=null) → hasPaid=true or a PACKAGE Payment (self-heal).
 //
-// 🔧 Fix (targeted, minimal):
-// ---------------------------
-// The previous implementation tried to look up the business owner like this:
-//   await prisma.user.findFirst({ where: { id: user.businessId, role: "BUSINESS_OWNER" } })
-// But `user.businessId` is a Business.id (not a User.id), so that lookup never matched.
-// Result: staff never inherited paid access → Map/Course stayed locked.
-//
-// We now resolve the owner via the Business relation (same approach used in lib/auth.ts):
-//   await prisma.business.findUnique({ where: { id: user.businessId }, select: { owner: { select: { hasPaid: true }}}})
+// Why this change (minimal & targeted)
+// ------------------------------------
+// In rare cases (e.g., webhook timing/retry), the owner’s `hasPaid` may not flip even though
+// there *is* a Payment row. That causes staff to appear locked. We fix that *only here*,
+// on the read-path, by checking for a PACKAGE payment and syncing `hasPaid`.
+// No payment or signup flows were altered.
 //
 // Pillars
 // -------
-// - Efficiency: single, indexed queries; no N+1; no extra joins.
-// - Robustness: mirrors your existing `lib/auth.ts` logic exactly.
-// - Simplicity: only one small section changed; everything else untouched.
-// - Ease of management: comments explain the why and where.
-// - Security: read-only; server is source of truth.
-//
+// - Efficiency: minimal, indexed lookups; narrow selects.
+// - Robustness: self-heals rare webhook misses for both staff owners & individuals.
+// - Simplicity: tiny addition in the staff branch; response shape unchanged.
+// - Ease of mgmt: comments explain exactly what and why.
+// - Security: write is limited to flipping `hasPaid=true` when an authoritative Payment exists.
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -35,7 +33,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  // 0) Session probe: we deliberately return 200 for unauthenticated (quiet UX)
+  // 0) Session probe: return 200 for unauthenticated (quiet UX)
   const session = await getServerSession(authOptions);
   const userId = session?.user?.id;
   const role = session?.user?.role || "USER";
@@ -49,7 +47,7 @@ export async function GET() {
     return NextResponse.json({ hasAccess: true }, { status: 200 });
   }
 
-  // 2) Load the minimal fields we need for the current user
+  // 2) Load minimal fields for current user
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { hasPaid: true, businessId: true },
@@ -61,26 +59,52 @@ export async function GET() {
   }
 
   // 3) STAFF (role USER with a businessId): inherit from business owner
-  //    ✨ FIXED: resolve owner via Business relation (not user.id)
+  //    ✨ FIXED previously: resolve owner via Business relation (not user.id)
+  //    🔧 HARDENED now: if owner.hasPaid=false but owner has a PACKAGE Payment, self-heal.
   if (user.businessId) {
-    const owner = await prisma.business.findUnique({
+    // We need owner's id + hasPaid (id is required for the self-heal check)
+    const business = await prisma.business.findUnique({
       where: { id: user.businessId },
       select: {
         owner: {
-          select: { hasPaid: true },
+          select: { id: true, hasPaid: true },
         },
       },
     });
 
-    if (owner?.owner?.hasPaid) {
-      // Let the client optionally show a small note like "Access inherited from your business owner"
+    const owner = business?.owner;
+
+    // Happy path: owner already has access → staff inherits
+    if (owner?.hasPaid) {
       return NextResponse.json(
         { hasAccess: true, inheritedFrom: "business" as const },
         { status: 200 }
       );
     }
 
-    // If owner hasn't paid, staff does not have access
+    // Self-heal: If owner exists but hasPaid=false, check for any PACKAGE payment by the owner.
+    // This covers rare webhook race/miss without changing your payment flows.
+    if (owner?.id) {
+      const ownerHasPackagePayment = await prisma.payment.findFirst({
+        where: { userId: owner.id, purpose: "PACKAGE" },
+        select: { id: true },
+      });
+
+      if (ownerHasPackagePayment) {
+        // Bring DB in sync so future checks are fast (and all staff unlock immediately)
+        await prisma.user.update({
+          where: { id: owner.id },
+          data: { hasPaid: true },
+        });
+
+        return NextResponse.json(
+          { hasAccess: true, inheritedFrom: "business" as const, healed: true },
+          { status: 200 }
+        );
+      }
+    }
+
+    // If owner hasn't paid (and no PACKAGE payment to self-heal), staff has no access
     return NextResponse.json({ hasAccess: false }, { status: 200 });
   }
 
