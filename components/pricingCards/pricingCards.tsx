@@ -51,7 +51,7 @@ const PricingCardSection: React.FC = () => {
   const pricingCards: PricingCardProps[] = [
     {
       name: "Individual Package",
-      price: `$${INDIVIDUAL_PRICE}.00`,
+      price: `$${INDIVIDUAL_PRICE}.00 / Year`,
       packageType: "individual",
       services: [
         "Overview of Nyanbul culture",
@@ -62,7 +62,7 @@ const PricingCardSection: React.FC = () => {
     },
     {
       name: "Business Package",
-      price: `$${BUSINESS_PRICE}.00`,
+      price: `$${BUSINESS_PRICE}.00 / Year`,
       packageType: "business",
       services: [
         "All Individual features",
@@ -71,17 +71,6 @@ const PricingCardSection: React.FC = () => {
         "Billing dashboard",
       ],
     },
-    // Optional future staff seat plan (kept for reference)
-    // {
-    //   name: "Staff Seat (per user)",
-    //   price: `$${STAFF_SEAT_PRICE}.00`,
-    //   packageType: "staff_seat",
-    //   services: [
-    //     "Adds an extra staff account",
-    //     "Access to all business resources",
-    //     "Same dashboard + course access",
-    //   ],
-    // },
   ];
 
   return (
