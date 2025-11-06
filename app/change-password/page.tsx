@@ -18,17 +18,16 @@
 // - The API re-checks everything server-side (old password, strength, etc.).
 // - This form stores nothing sensitive beyond the local component state.
 //
-// 🔧 What changed (surgical):
-// - After a successful password update, we re-login using NextAuth Credentials
-//   and check `signInRes.error` (matching your Login/Signup patterns).
-// - If re-login succeeds → router.replace('/dashboard').
-// - If re-login fails → toast + router.replace('/login?changed=1').
-// - Guard when session email is missing (rare), fall back to /login.
+// 🔧 What changed (surgical & robust):
+// 1) After a successful password update we call `signIn("credentials")` with the NEW password.
+// 2) We then force-refresh the NextAuth session cookie by GET /api/auth/session?update=1
+//    (no-store) so middleware reads the new JWT on the next navigation.
+// 3) We navigate via router.replace('/dashboard') and immediately call router.refresh().
+// 4) We add a tiny async tick + a hard redirect fallback (window.location.assign('/dashboard'))
+//    to cover edge cases where SPA state lags behind cookie writes in some browsers.
 //
-// ⚠️ API path note:
-// - This page calls POST /api/change-password.
-//   If your API route lives at /api/auth/change-password instead, just
-//   change the `CHANGE_PW_PATH` constant below. No other logic changes.
+// 💡 If your API route lives at /api/auth/change-password, just flip CHANGE_PW_PATH.
+//    No other logic is altered.
 
 "use client";
 
@@ -38,16 +37,16 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { isStrongPassword } from "@/lib/validator";
 
-const CHANGE_PW_PATH = "/api/change-password"; // change to "/api/auth/change-password" if applicable
+const CHANGE_PW_PATH = "/api/change-password"; // change to "/api/auth/change-password" if your API lives there
 
 export default function ChangePasswordPage() {
   const { data: session } = useSession();
   const router = useRouter();
 
-  // We use session email to silently re-authenticate after changing the password.
+  // Email from the current session; used for silent re-login
   const email = session?.user?.email || "";
 
-  // Local form state
+  // Local state
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
@@ -55,10 +54,9 @@ export default function ChangePasswordPage() {
   const [showOld, setShowOld] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Live complexity validation (client-side convenience; server re-validates)
+  // Validate complexity live (server still re-validates)
   const newIsStrong = useMemo(() => isStrongPassword(newPassword), [newPassword]);
 
-  // Enable submit only when the form is valid
   const canSubmit =
     !loading &&
     !!oldPassword &&
@@ -67,7 +65,6 @@ export default function ChangePasswordPage() {
     newPassword === confirmNewPassword &&
     newIsStrong;
 
-  // Small helper to safely extract a message from an error response
   async function safeMessage(res: Response): Promise<string | null> {
     try {
       const data = await res.json();
@@ -84,9 +81,7 @@ export default function ChangePasswordPage() {
     setLoading(true);
     try {
       // ---------------------------------------------------------
-      // 1) Change password server-side
-      //    - Server should validate old password, strength, etc.
-      //    - Server should set mustChangePassword=false on success.
+      // 1) Change password on the server
       // ---------------------------------------------------------
       const res = await fetch(CHANGE_PW_PATH, {
         method: "POST",
@@ -102,12 +97,11 @@ export default function ChangePasswordPage() {
       }
 
       // ---------------------------------------------------------
-      // 2) Immediately re-authenticate with the NEW password.
-      //    This refreshes the NextAuth JWT in the browser so the
-      //    middleware no longer sees mustChangePassword=true.
+      // 2) Silent re-login with the NEW password to refresh JWT
+      //    (so middleware no longer sees mustChangePassword=true)
       // ---------------------------------------------------------
       if (!email) {
-        // Extremely rare: session exists but no email in token.
+        // Extremely rare: session present but no email in token
         toast.success("Password changed. Please sign in again.");
         router.replace("/login?changed=1");
         return;
@@ -119,20 +113,35 @@ export default function ChangePasswordPage() {
         password: newPassword,
       });
 
-      // Follow your existing pattern: treat `.error` as failure
       if (!signInRes || signInRes.error) {
-        // If the silent sign-in failed, send user to login page gracefully
+        // If we couldn't silently re-login, guide the user explicitly
         toast.success("Password changed. Please sign in again.");
         router.replace("/login?changed=1");
         return;
       }
 
       // ---------------------------------------------------------
-      // 3) Success UX
+      // 3) Force the browser/session to pick up the new cookie
+      //    This prevents the middleware from trapping the user
+      //    on /change-password due to a stale JWT.
       // ---------------------------------------------------------
+      await fetch("/api/auth/session?update=1", { cache: "no-store" });
+
+      // A tiny async tick helps ensure cookie write -> nav ordering
+      await new Promise((r) => setTimeout(r, 30));
+
       toast.success("Password changed successfully!");
-      // Use replace() so back button won't return to /change-password
+
+      // 4) Navigate to dashboard and refresh client-side cache
       router.replace("/dashboard");
+      router.refresh();
+
+      // 5) Hard-redirect fallback (covers rare SPA staleness)
+      setTimeout(() => {
+        if (typeof window !== "undefined" && window.location.pathname.includes("change-password")) {
+          window.location.assign("/dashboard");
+        }
+      }, 400);
     } catch (err) {
       console.error("[ChangePassword] unexpected error:", err);
       toast.error("Something went wrong. Please try again.");
