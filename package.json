@@ -18,7 +18,8 @@
     "jest-test": "jest",
     "test:ci": "jest --ci --reporters=default --reporters=jest-junit",
     "e2e": "playwright test",
-    "token:maintain": "tsx scripts/passwordResetToken.maintain.ts"
+    "token:maintain": "tsx scripts/passwordResetToken.maintain.ts",
+    "cms:dev": "sanity dev --studio-dir=cms"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.0.1",
