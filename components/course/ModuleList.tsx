@@ -1,28 +1,24 @@
 // components/course/ModuleList.tsx
 //
 // Purpose (surgical, UI-only):
-// - Keep circular thumbnails, make them look clean with transparent PNGs,
-//   and add a gentle hover micro-animation (scale) ONLY on the avatar.
+// - Keep circular thumbnails, with transparent PNGs looking clean,
+//   a gentle hover micro-animation, and now **sharper image quality**.
 // - Do NOT alter ANY course/progress/payment/navigation logic.
 //
 // What changed in THIS revision:
-// 1) Removed `bg-white` from the thumbnail wrapper so transparent PNGs
-//    don't show a forced white disc behind them. This lets your Sanity
-//    uploads with transparent backgrounds look truly circular.
-// 2) Added a hover micro-animation on the avatar only:
-//    - Wrap the header button in `group`
-//    - Apply `group-hover:scale-[1.03]` (subtle) + smooth `transition-transform`
-//    - Keep `flex-none` sizing to avoid layout shifts
-// 3) Left sizing from prior step: 60px (mobile) / 72px (sm+), crisp via CDN params.
-//
-// Everything else remains unchanged (selection, locking, completion, API).
+// 1) `sizedSanityThumb` now:
+//    - Requests **2× pixel density** (w/h = size * 2) for retina displays.
+//    - Sets `q=90` on Sanity's CDN to improve compression quality.
+//    This makes thumbnails look crisper without touching your data or logic.
+// 2) All layout, sizing, hover animation, and text remain exactly
+//    as in your last working version.
 //
 // Pillars:
-// - Efficiency: request only displayed pixels via Sanity CDN params.
-// - Robustness: changes isolated to thumbnail wrapper + classes.
-// - Simplicity: tiny, well-commented updates; no new deps.
-// - Ease of mgmt: single helper + utilities; easy to tweak later.
-// - Security: no data/logic changes—purely presentational.
+// - Efficiency: still only request what we need (just higher DPI).
+// - Robustness: URL helper guards non-Sanity URLs & invalid strings.
+// - Simplicity: single helper change; rest of the component is untouched.
+// - Ease of mgmt: clearly commented so you can tweak quality or density later.
+// - Security: no data shape changes, no new external calls—purely presentational.
 
 "use client";
 
@@ -45,27 +41,46 @@ interface ModuleListProps {
  * Build a square Sanity CDN URL at the requested pixel size.
  * Ensures sharp thumbnails (no blurry upscaling) and efficient payloads.
  *
+ * In THIS revision we:
+ *  - Request **2× the intended display size** (retina-friendly):
+ *      w = size * 2, h = size * 2
+ *    so a 72px on-screen avatar gets ~144px worth of pixels.
+ *  - Add `q=90` for better quality from Sanity's image pipeline.
+ *
  * Appends:
- *   - w=<size> & h=<size>  → exact square
- *   - fit=crop             → center crop (we then render as a circle)
- *   - auto=format          → modern formats where supported
+ *   - w=<size * 2> & h=<size * 2>  → square, high-DPI
+ *   - fit=crop                    → center crop (we then render as a circle)
+ *   - auto=format                 → modern formats where supported
+ *   - q=90                        → higher compression quality (sharper)
  *
  * Note: If the URL isn't clearly a Sanity CDN URL, we return it unchanged.
  */
 function sizedSanityThumb(raw: string, size: number): string {
   try {
     const url = new URL(raw);
+
+    // Only mutate clearly Sanity-hosted images; otherwise return original URL.
     if (!/(\.|\/)sanity\.io\/?/.test(url.hostname + url.pathname)) return raw;
 
     const params = url.searchParams;
-    params.set("w", String(size));
-    params.set("h", String(size));
+
+    // ✅ Request 2× pixel density for crispness on high-DPI displays
+    const effectiveSize = size * 2;
+    params.set("w", String(effectiveSize));
+    params.set("h", String(effectiveSize));
+
+    // ✅ Keep square crop & automatic modern format selection
     params.set("fit", "crop");
     params.set("auto", "format");
+
+    // ✅ Bump quality for better visual clarity
+    params.set("q", "90");
+
     url.search = params.toString();
     return url.toString();
   } catch {
-    return raw; // if not a valid URL, pass-through safely
+    // If `raw` isn't a valid URL (edge case), fall back to the original string.
+    return raw;
   }
 }
 
@@ -85,7 +100,8 @@ const ModuleList: React.FC<ModuleListProps> = ({
   // - 60px on mobile
   // - 72px on small screens and up (sm:)
   //
-  // We request the larger size from the CDN; Next/Image + `sizes` picks correctly.
+  // We still request the larger size from the CDN; Next/Image + `sizes` pick correctly.
+  // `sizedSanityThumb` now internally multiplies this by 2 for retina sharpness.
   const THUMB_MOBILE = 60; // px
   const THUMB_SM_UP = 72;  // px
 
@@ -133,7 +149,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
                     aria-hidden="true"
                   >
                     <Image
-                      // Request the largest needed display size to avoid upscaling blur
+                      // Request the largest needed display size (helper applies 2× DPI)
                       src={sizedSanityThumb(module.thumbnail, THUMB_SM_UP)}
                       alt={`${module.title} thumbnail`}
                       fill
@@ -142,6 +158,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
                       // - 60px on smaller screens
                       sizes="(min-width: 640px) 72px, 60px"
                       className="object-cover"
+                      // Keeping 85 for a good balance; main quality boost is from Sanity's `q=90` & 2× res
                       quality={85}
                       loading="lazy"
                     />
@@ -230,27 +247,24 @@ export default ModuleList;
 // // components/course/ModuleList.tsx
 // //
 // // Purpose (surgical, UI-only):
-// // - Make the module thumbnail circular and a *little* larger (still compact).
-// // - Scale the "✓ Completed" badge in step with the title for visual harmony.
+// // - Keep circular thumbnails, with transparent PNGs looking clean,
+// //   a gentle hover micro-animation, and now **sharper image quality**.
 // // - Do NOT alter ANY course/progress/payment/navigation logic.
 // //
 // // What changed in THIS revision:
-// // 1) Thumbnail:
-// //    • Shape → circular via `rounded-full`
-// //    • Size  → +small bump: 60px (mobile) → 72px (sm+)
-// //    • Still sharp via Sanity CDN params (no blur, no heavy payloads)
-// // 2) Title + Badge:
-// //    • Title remains: 15px → 16px (sm) → 17px (md), `leading-tight`
-// //    • Badge now scales in step: 11px → 12px (sm) → 13px (md)
-// //
-// // Everything else (selection, locking, completion, API) is unchanged.
+// // 1) `sizedSanityThumb` now:
+// //    - Requests **2× pixel density** (w/h = size * 2) for retina displays.
+// //    - Sets `q=90` on Sanity's CDN to improve compression quality.
+// //    This makes thumbnails look crisper without touching your data or logic.
+// // 2) All layout, sizing, hover animation, and text remain exactly
+// //    as in your last working version.
 // //
 // // Pillars:
-// // - Efficiency: request only the pixels we display (Sanity CDN params).
-// // - Robustness: scoped to thumbnail + text spans; no cross-component impact.
-// // - Simplicity: small, well-commented changes; easy to tweak later.
-// // - Ease of mgmt: single helper + utility classes; no new deps.
-// // - Security: no data/logic changes—purely presentational.
+// // - Efficiency: still only request what we need (just higher DPI).
+// // - Robustness: URL helper guards non-Sanity URLs & invalid strings.
+// // - Simplicity: single helper change; rest of the component is untouched.
+// // - Ease of mgmt: clearly commented so you can tweak quality or density later.
+// // - Security: no data shape changes, no new external calls—purely presentational.
 
 // "use client";
 
@@ -273,27 +287,46 @@ export default ModuleList;
 //  * Build a square Sanity CDN URL at the requested pixel size.
 //  * Ensures sharp thumbnails (no blurry upscaling) and efficient payloads.
 //  *
+//  * In THIS revision we:
+//  *  - Request **2× the intended display size** (retina-friendly):
+//  *      w = size * 2, h = size * 2
+//  *    so a 72px on-screen avatar gets ~144px worth of pixels.
+//  *  - Add `q=90` for better quality from Sanity's image pipeline.
+//  *
 //  * Appends:
-//  *   - w=<size> & h=<size>  → exact square
-//  *   - fit=crop             → center crop (we then render as a circle)
-//  *   - auto=format          → modern formats where supported
+//  *   - w=<size * 2> & h=<size * 2>  → square, high-DPI
+//  *   - fit=crop                    → center crop (we then render as a circle)
+//  *   - auto=format                 → modern formats where supported
+//  *   - q=90                        → higher compression quality (sharper)
 //  *
 //  * Note: If the URL isn't clearly a Sanity CDN URL, we return it unchanged.
 //  */
 // function sizedSanityThumb(raw: string, size: number): string {
 //   try {
 //     const url = new URL(raw);
+
+//     // Only mutate clearly Sanity-hosted images; otherwise return original URL.
 //     if (!/(\.|\/)sanity\.io\/?/.test(url.hostname + url.pathname)) return raw;
 
 //     const params = url.searchParams;
-//     params.set("w", String(size));
-//     params.set("h", String(size));
+
+//     // ✅ Request 2× pixel density for crispness on high-DPI displays
+//     const effectiveSize = size * 2;
+//     params.set("w", String(effectiveSize));
+//     params.set("h", String(effectiveSize));
+
+//     // ✅ Keep square crop & automatic modern format selection
 //     params.set("fit", "crop");
 //     params.set("auto", "format");
+
+//     // ✅ Bump quality for better visual clarity
+//     params.set("q", "90");
+
 //     url.search = params.toString();
 //     return url.toString();
 //   } catch {
-//     return raw; // if not a valid URL, pass-through safely
+//     // If `raw` isn't a valid URL (edge case), fall back to the original string.
+//     return raw;
 //   }
 // }
 
@@ -309,11 +342,12 @@ export default ModuleList;
 //   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
 //   const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
-//   // Visual thumbnail sizes (slight bump from previous step):
+//   // Visual thumbnail sizes (unchanged from previous step):
 //   // - 60px on mobile
 //   // - 72px on small screens and up (sm:)
 //   //
-//   // We request the larger size from the CDN; Next/Image + `sizes` picks correctly.
+//   // We still request the larger size from the CDN; Next/Image + `sizes` pick correctly.
+//   // `sizedSanityThumb` now internally multiplies this by 2 for retina sharpness.
 //   const THUMB_MOBILE = 60; // px
 //   const THUMB_SM_UP = 72;  // px
 
@@ -339,7 +373,7 @@ export default ModuleList;
 //             {/* Module Header */}
 //             <button
 //               onClick={() => isUnlocked && onSelectModule(mIdx)}
-//               className={`w-full text-left px-4 py-3 font-semibold rounded-t-xl transition-colors flex items-center justify-between ${
+//               className={`group w-full text-left px-4 py-3 font-semibold rounded-t-xl transition-colors flex items-center justify-between ${
 //                 isActiveModule ? "text-blue-900 bg-blue-100" : "text-gray-800 hover:bg-gray-50"
 //               } ${!isUnlocked ? "cursor-not-allowed" : ""}`}
 //               aria-current={isActiveModule ? "true" : undefined}
@@ -348,14 +382,20 @@ export default ModuleList;
 //             >
 //               {/* LEFT: Circular Thumbnail + Title */}
 //               <span className="flex items-center gap-3">
-//                 {/* ✅ Circular, slightly larger, crisp thumbnail (with graceful fallback) */}
+//                 {/* ✅ Circular, crisp thumbnail with subtle hover micro-animation */}
 //                 {module.thumbnail ? (
 //                   <span
-//                     className="relative w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full overflow-hidden border border-blue-200 bg-white flex-none"
+//                     className="
+//                       relative w-[60px] h-[60px] sm:w-[72px] sm:h-[72px]
+//                       rounded-full overflow-hidden border border-blue-200
+//                       flex-none
+//                       transition-transform duration-150 ease-out
+//                       group-hover:scale-[1.03]
+//                     "
 //                     aria-hidden="true"
 //                   >
 //                     <Image
-//                       // Request the largest needed display size to avoid upscaling blur
+//                       // Request the largest needed display size (helper applies 2× DPI)
 //                       src={sizedSanityThumb(module.thumbnail, THUMB_SM_UP)}
 //                       alt={`${module.title} thumbnail`}
 //                       fill
@@ -364,23 +404,32 @@ export default ModuleList;
 //                       // - 60px on smaller screens
 //                       sizes="(min-width: 640px) 72px, 60px"
 //                       className="object-cover"
+//                       // Keeping 85 for a good balance; main quality boost is from Sanity's `q=90` & 2× res
 //                       quality={85}
 //                       loading="lazy"
 //                     />
 //                   </span>
 //                 ) : (
 //                   // Circular placeholder, matching final size and theme
-//                   <span className="w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full bg-gradient-to-br from-blue-100 to-blue-200 border border-blue-100 flex-none" />
+//                   <span
+//                     className="
+//                       w-[60px] h-[60px] sm:w-[72px] sm:h-[72px]
+//                       rounded-full bg-gradient-to-br from-blue-100 to-blue-200
+//                       border border-blue-100 flex-none
+//                       transition-transform duration-150 ease-out
+//                       group-hover:scale-[1.03]
+//                     "
+//                   />
 //                 )}
 
 //                 {/* Title + Completed badge */}
 //                 <span className="flex items-center gap-2">
-//                   {/* Title kept subtle but clearer with responsive bump */}
+//                   {/* Title: subtle responsive bump */}
 //                   <span className="text-[15px] sm:text-base md:text-[17px] leading-tight">
 //                     {mIdx + 1}. {module.title}
 //                   </span>
 
-//                   {/* ✅ Badge scales in step with the title for balance */}
+//                   {/* Badge scales in step with the title */}
 //                   {isCompleted && (
 //                     <span className="text-[11px] sm:text-[12px] md:text-[13px] font-medium text-emerald-700">
 //                       ✓ Completed
@@ -395,7 +444,7 @@ export default ModuleList;
 //                   className="ml-2 inline-flex items-center text-xs font-medium text-gray-600"
 //                   aria-hidden="true"
 //                 >
-//                   🔒 Locked
+//                   Locked
 //                 </span>
 //               )}
 //             </button>
@@ -432,6 +481,24 @@ export default ModuleList;
 // };
 
 // export default ModuleList;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
