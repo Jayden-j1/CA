@@ -1,26 +1,27 @@
 // components/course/ModuleList.tsx
 //
 // Purpose (surgical, UI-only):
-// - Make the module thumbnail circular and a *little* larger (still compact).
-// - Scale the "✓ Completed" badge in step with the title for visual harmony.
+// - Keep circular thumbnails, make them look clean with transparent PNGs,
+//   and add a gentle hover micro-animation (scale) ONLY on the avatar.
 // - Do NOT alter ANY course/progress/payment/navigation logic.
 //
 // What changed in THIS revision:
-// 1) Thumbnail:
-//    • Shape → circular via `rounded-full`
-//    • Size  → +small bump: 60px (mobile) → 72px (sm+)
-//    • Still sharp via Sanity CDN params (no blur, no heavy payloads)
-// 2) Title + Badge:
-//    • Title remains: 15px → 16px (sm) → 17px (md), `leading-tight`
-//    • Badge now scales in step: 11px → 12px (sm) → 13px (md)
+// 1) Removed `bg-white` from the thumbnail wrapper so transparent PNGs
+//    don't show a forced white disc behind them. This lets your Sanity
+//    uploads with transparent backgrounds look truly circular.
+// 2) Added a hover micro-animation on the avatar only:
+//    - Wrap the header button in `group`
+//    - Apply `group-hover:scale-[1.03]` (subtle) + smooth `transition-transform`
+//    - Keep `flex-none` sizing to avoid layout shifts
+// 3) Left sizing from prior step: 60px (mobile) / 72px (sm+), crisp via CDN params.
 //
-// Everything else (selection, locking, completion, API) is unchanged.
+// Everything else remains unchanged (selection, locking, completion, API).
 //
 // Pillars:
-// - Efficiency: request only the pixels we display (Sanity CDN params).
-// - Robustness: scoped to thumbnail + text spans; no cross-component impact.
-// - Simplicity: small, well-commented changes; easy to tweak later.
-// - Ease of mgmt: single helper + utility classes; no new deps.
+// - Efficiency: request only displayed pixels via Sanity CDN params.
+// - Robustness: changes isolated to thumbnail wrapper + classes.
+// - Simplicity: tiny, well-commented updates; no new deps.
+// - Ease of mgmt: single helper + utilities; easy to tweak later.
 // - Security: no data/logic changes—purely presentational.
 
 "use client";
@@ -80,7 +81,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
   const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
-  // Visual thumbnail sizes (slight bump from previous step):
+  // Visual thumbnail sizes (unchanged from previous step):
   // - 60px on mobile
   // - 72px on small screens and up (sm:)
   //
@@ -110,7 +111,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
             {/* Module Header */}
             <button
               onClick={() => isUnlocked && onSelectModule(mIdx)}
-              className={`w-full text-left px-4 py-3 font-semibold rounded-t-xl transition-colors flex items-center justify-between ${
+              className={`group w-full text-left px-4 py-3 font-semibold rounded-t-xl transition-colors flex items-center justify-between ${
                 isActiveModule ? "text-blue-900 bg-blue-100" : "text-gray-800 hover:bg-gray-50"
               } ${!isUnlocked ? "cursor-not-allowed" : ""}`}
               aria-current={isActiveModule ? "true" : undefined}
@@ -119,10 +120,16 @@ const ModuleList: React.FC<ModuleListProps> = ({
             >
               {/* LEFT: Circular Thumbnail + Title */}
               <span className="flex items-center gap-3">
-                {/* ✅ Circular, slightly larger, crisp thumbnail (with graceful fallback) */}
+                {/* ✅ Circular, crisp thumbnail with subtle hover micro-animation */}
                 {module.thumbnail ? (
                   <span
-                    className="relative w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full overflow-hidden border border-blue-200 bg-white flex-none"
+                    className="
+                      relative w-[60px] h-[60px] sm:w-[72px] sm:h-[72px]
+                      rounded-full overflow-hidden border border-blue-200
+                      flex-none
+                      transition-transform duration-150 ease-out
+                      group-hover:scale-[1.03]
+                    "
                     aria-hidden="true"
                   >
                     <Image
@@ -141,17 +148,25 @@ const ModuleList: React.FC<ModuleListProps> = ({
                   </span>
                 ) : (
                   // Circular placeholder, matching final size and theme
-                  <span className="w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full bg-gradient-to-br from-blue-100 to-blue-200 border border-blue-100 flex-none" />
+                  <span
+                    className="
+                      w-[60px] h-[60px] sm:w-[72px] sm:h-[72px]
+                      rounded-full bg-gradient-to-br from-blue-100 to-blue-200
+                      border border-blue-100 flex-none
+                      transition-transform duration-150 ease-out
+                      group-hover:scale-[1.03]
+                    "
+                  />
                 )}
 
                 {/* Title + Completed badge */}
                 <span className="flex items-center gap-2">
-                  {/* Title kept subtle but clearer with responsive bump */}
+                  {/* Title: subtle responsive bump */}
                   <span className="text-[15px] sm:text-base md:text-[17px] leading-tight">
                     {mIdx + 1}. {module.title}
                   </span>
 
-                  {/* ✅ Badge scales in step with the title for balance */}
+                  {/* Badge scales in step with the title */}
                   {isCompleted && (
                     <span className="text-[11px] sm:text-[12px] md:text-[13px] font-medium text-emerald-700">
                       ✓ Completed
@@ -215,27 +230,27 @@ export default ModuleList;
 // // components/course/ModuleList.tsx
 // //
 // // Purpose (surgical, UI-only):
-// // - Keep the improved, slightly larger thumbnails from the last step
-// // - Add a *small, responsive* font-size bump to the module title text so it
-// //   visually balances the larger image and improves readability.
-// // - Do NOT change any course/progress/payment logic.
+// // - Make the module thumbnail circular and a *little* larger (still compact).
+// // - Scale the "✓ Completed" badge in step with the title for visual harmony.
+// // - Do NOT alter ANY course/progress/payment/navigation logic.
 // //
-// // What changed in THIS revision (vs your last working file):
-// // 1) The title <span> now has responsive text utilities:
-// //      - text-[15px] on very small screens (keeps things compact)
-// //      - sm:text-base (16px) on small screens and up
-// //      - md:text-[17px] on medium screens and up
-// //    This is a subtle bump, not “big”. It maintains a modern, clean look.
-// // 2) We also add `leading-tight` to tighten line-height for a crisper look.
+// // What changed in THIS revision:
+// // 1) Thumbnail:
+// //    • Shape → circular via `rounded-full`
+// //    • Size  → +small bump: 60px (mobile) → 72px (sm+)
+// //    • Still sharp via Sanity CDN params (no blur, no heavy payloads)
+// // 2) Title + Badge:
+// //    • Title remains: 15px → 16px (sm) → 17px (md), `leading-tight`
+// //    • Badge now scales in step: 11px → 12px (sm) → 13px (md)
 // //
-// // Everything else (locking, completion, navigation, data) remains identical.
+// // Everything else (selection, locking, completion, API) is unchanged.
 // //
 // // Pillars:
-// // - Efficiency: purely presentational; no extra runtime cost.
-// // - Robustness: isolated to one span; safe across breakpoints.
-// // - Simplicity: single-class change; easy to tweak later.
-// // - Ease of mgmt: richly commented; clear intent.
-// // - Security: no data/logic changes—UI only.
+// // - Efficiency: request only the pixels we display (Sanity CDN params).
+// // - Robustness: scoped to thumbnail + text spans; no cross-component impact.
+// // - Simplicity: small, well-commented changes; easy to tweak later.
+// // - Ease of mgmt: single helper + utility classes; no new deps.
+// // - Security: no data/logic changes—purely presentational.
 
 // "use client";
 
@@ -260,13 +275,14 @@ export default ModuleList;
 //  *
 //  * Appends:
 //  *   - w=<size> & h=<size>  → exact square
-//  *   - fit=crop             → center crop
-//  *   - auto=format          → modern formats when supported
+//  *   - fit=crop             → center crop (we then render as a circle)
+//  *   - auto=format          → modern formats where supported
+//  *
+//  * Note: If the URL isn't clearly a Sanity CDN URL, we return it unchanged.
 //  */
 // function sizedSanityThumb(raw: string, size: number): string {
 //   try {
 //     const url = new URL(raw);
-//     // Only mutate clearly Sanity-hosted images; otherwise return original URL.
 //     if (!/(\.|\/)sanity\.io\/?/.test(url.hostname + url.pathname)) return raw;
 
 //     const params = url.searchParams;
@@ -277,8 +293,7 @@ export default ModuleList;
 //     url.search = params.toString();
 //     return url.toString();
 //   } catch {
-//     // If `raw` isn't a valid URL (edge case), fall back to the original string.
-//     return raw;
+//     return raw; // if not a valid URL, pass-through safely
 //   }
 // }
 
@@ -294,11 +309,13 @@ export default ModuleList;
 //   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
 //   const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
-//   // Visual thumbnail sizes (unchanged from previous step—just for reference):
-//   // - 56px on mobile
-//   // - 64px on small screens and up (sm:)
-//   const THUMB_MOBILE = 56; // px
-//   const THUMB_SM_UP = 64;  // px
+//   // Visual thumbnail sizes (slight bump from previous step):
+//   // - 60px on mobile
+//   // - 72px on small screens and up (sm:)
+//   //
+//   // We request the larger size from the CDN; Next/Image + `sizes` picks correctly.
+//   const THUMB_MOBILE = 60; // px
+//   const THUMB_SM_UP = 72;  // px
 
 //   return (
 //     <aside
@@ -329,41 +346,45 @@ export default ModuleList;
 //               aria-disabled={!isUnlocked}
 //               title={!isUnlocked ? "Complete the previous module to unlock" : undefined}
 //             >
-//               {/* LEFT: Thumbnail + Title */}
+//               {/* LEFT: Circular Thumbnail + Title */}
 //               <span className="flex items-center gap-3">
-//                 {/* Thumbnail (slightly larger, sharp) */}
+//                 {/* ✅ Circular, slightly larger, crisp thumbnail (with graceful fallback) */}
 //                 {module.thumbnail ? (
 //                   <span
-//                     className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-md overflow-hidden border border-blue-200 bg-white flex-none"
+//                     className="relative w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full overflow-hidden border border-blue-200 bg-white flex-none"
 //                     aria-hidden="true"
 //                   >
 //                     <Image
+//                       // Request the largest needed display size to avoid upscaling blur
 //                       src={sizedSanityThumb(module.thumbnail, THUMB_SM_UP)}
 //                       alt={`${module.title} thumbnail`}
 //                       fill
-//                       sizes="(min-width: 640px) 64px, 56px"
+//                       // Let Next/Image serve an appropriate width per viewport:
+//                       // - 72px on >= sm
+//                       // - 60px on smaller screens
+//                       sizes="(min-width: 640px) 72px, 60px"
 //                       className="object-cover"
 //                       quality={85}
 //                       loading="lazy"
 //                     />
 //                   </span>
 //                 ) : (
-//                   <span className="w-14 h-14 sm:w-16 sm:h-16 rounded-md bg-gradient-to-br from-blue-100 to-blue-200 border border-blue-100 flex-none" />
+//                   // Circular placeholder, matching final size and theme
+//                   <span className="w-[60px] h-[60px] sm:w-[72px] sm:h-[72px] rounded-full bg-gradient-to-br from-blue-100 to-blue-200 border border-blue-100 flex-none" />
 //                 )}
 
 //                 {/* Title + Completed badge */}
 //                 <span className="flex items-center gap-2">
-//                   {/* ✅ NEW: subtle, responsive font-size bump + tighter line-height.
-//                       - Very small screens: ~15px keeps row compact.
-//                       - Small screens and up: 16px (base).
-//                       - Medium screens and up: 17px for a touch more presence.
-//                    */}
+//                   {/* Title kept subtle but clearer with responsive bump */}
 //                   <span className="text-[15px] sm:text-base md:text-[17px] leading-tight">
 //                     {mIdx + 1}. {module.title}
 //                   </span>
 
+//                   {/* ✅ Badge scales in step with the title for balance */}
 //                   {isCompleted && (
-//                     <span className="text-[11px] font-medium text-emerald-700">✓ Completed</span>
+//                     <span className="text-[11px] sm:text-[12px] md:text-[13px] font-medium text-emerald-700">
+//                       ✓ Completed
+//                     </span>
 //                   )}
 //                 </span>
 //               </span>
@@ -411,6 +432,7 @@ export default ModuleList;
 // };
 
 // export default ModuleList;
+
 
 
 
