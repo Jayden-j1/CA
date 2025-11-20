@@ -65,6 +65,8 @@ export default function AboutPage() {
         paragraphContent="Jingela (Hello), this website is dedicated to fostering cultural awareness, understanding, and respect for First Nations Peoples of Australia."
         linkOne="See more"
         onClick={openAbout}
+        imageSrc="/images/sea eagle logo.png"
+        imageAlt="Aborinal style image of an Eagle"
       />
 
       <PopUpMessage heading={title} message={message} isOpen={isModalOpen} onClose={closeAbout} />

@@ -11,6 +11,8 @@ export default function LoginPage() {
           paragraphContent="Get an insight into the local Aboriginal Community (placeholder text for now)"
           linkOne="No Account? Sign up Now!"
           href="/signup"  //  redirect to signup page
+          imageSrc="/images/great white shark logo.png"
+          imageAlt="Aboriginal style image of a Shark"
         />
       </main>
 

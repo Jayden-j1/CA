@@ -173,6 +173,8 @@ function ServicesContent() {
         linkOne="Prices Below"
         href="#pricing"
         onClick={handleScrollToPricing}
+        imageSrc="/images/stingray and green sea turtle logo.png"
+        imageAlt="Aboriginal style image of a Stingray"
       />
 
       {/* 

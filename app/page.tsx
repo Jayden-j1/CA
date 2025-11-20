@@ -43,6 +43,8 @@ export default function Home() {
         paragraphContent="Cultural Awareness training from the Grass-Roots Community"
         linkOne="Acknowledgement of Country"
         onClick={openAcknowledge}
+        imageSrc="/images/dolphin logo.png"
+        imageAlt="Aboriginal Style Image of a Dolphin"
       />
 
       <PopUpMessage
