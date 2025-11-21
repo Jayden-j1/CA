@@ -168,6 +168,8 @@ export default function DashboardPage() {
     billing: "/dashboard/billing",
     adminPanel: "/dashboard/admin",
     getAccess: "/dashboard/upgrade",
+    // ✅ New route for the dedicated account deletion page
+    deleteAccount: "/dashboard/delete-account",
   };
 
   // ---------------- Greeting ----------------
@@ -187,7 +189,7 @@ export default function DashboardPage() {
   //  - Div 1: main hero panel
   //  - Div 2: quick actions (top-right)
   //  - Div 3: cultural highlight (bottom-left, 3 columns wide)
-  //  - Div 4: learning panel (bottom-right, 2 columns wide)
+  //  - Div 4: learning / delete account panel (bottom-right, 2 columns wide)
   return (
     <div
       className="
@@ -347,18 +349,26 @@ export default function DashboardPage() {
         </section>
       </div>
 
-      {/* Div 4 — Learning (moved here; content swapped with Div 3) */}
+      {/* Div 4 — Learning / Account Deletion entry point */}
       <div className="col-span-1 md:col-span-2 row-span-3 col-start-auto md:col-start-4 row-start-auto md:row-start-3">
         <section className="h-full w-full flex flex-col items-center justify-center text-center bg-white/85 backdrop-blur-sm rounded-2xl shadow-lg p-6 sm:p-8">
-          <h2 className="text-2xl font-bold text-blue-900 mb-3">Learning</h2>
+          <h2 className="text-2xl font-bold text-blue-900 mb-3">
+            Learning & Account
+          </h2>
           <p className="text-sm text-gray-700 max-w-sm">
-            Pick up where you left off, or review earlier modules at any time.
+            Manage your learning journey and, if needed, deactivate your
+            account.
           </p>
+          {/* 
+            Red button for account deletion, following your requirement:
+            - Red to signify destructive action.
+            - Uses internal <Link /> to dedicated delete-account page.
+          */}
           <Link
-            href={LINKS.continueLearning}
-            className="mt-5 inline-block text-white bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
+            href={LINKS.deleteAccount}
+            className="mt-5 inline-block text-white bg-red-600 hover:bg-red-500 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
           >
-            Continue where you left off
+            Delete Account
           </Link>
         </section>
       </div>
@@ -380,8 +390,8 @@ export default function DashboardPage() {
 // // - Root dashboard landing page with visually polished main content (Div 1)
 // //   plus three complementary panels:
 // //     • Div 2: Quick Actions (role-aware, access-aware)
-// //     • Div 3: Learning (neutral panel; NO progress bar or progress logic)
-// //     • Div 4: Cultural Highlight (rotating quotes/facts)
+// //     • Div 3: Cultural Highlight (rotating quotes/facts)
+// //     • Div 4: Learning (neutral panel; NO progress bar or progress logic)
 // //
 // // Important to this fix:
 // // - Progress bar feature and all of its logic have been removed:
@@ -400,6 +410,7 @@ export default function DashboardPage() {
 // import React, { useEffect, useMemo, useState } from "react";
 // import { useSession } from "next-auth/react";
 // import { useRouter } from "next/navigation";
+// import Link from "next/link"; // ✅ Next.js client-side navigation for internal links
 
 // import FullPageSpinner from "@/components/ui/fullPageSpinner";
 // import TextType from "@/components/dashboard/TypingText";
@@ -419,37 +430,56 @@ export default function DashboardPage() {
 
 // export default function DashboardPage() {
 //   // ---------------- Session & Navigation ----------------
+//   // Grab the authenticated session and auth status.
 //   const { data: session, status } = useSession();
+//   // Next.js app-router navigation hook.
 //   const router = useRouter();
 
 //   // ---------------- Derived Role Info ----------------
+//   // Safely derive role and related flags from the session.
 //   const role = session?.user?.role ?? "USER";
 //   const businessId = session?.user?.businessId ?? null;
 //   const sessionHasPaid = Boolean(session?.user?.hasPaid);
+
+//   // Role helpers for clarity in the UI logic.
 //   const isOwnerOrAdmin = role === "BUSINESS_OWNER" || role === "ADMIN";
 //   const isStaffSeatUser = role === "USER" && businessId !== null; // kept for parity (not used elsewhere here)
 //   const isIndividualUser = role === "USER" && businessId === null; // kept for parity
 
 //   // ---------------- Server Access Probe ----------------
+//   // This checks with the backend whether the user has access (e.g. payment state),
+//   // independent of what the session says (extra robustness).
 //   const [serverHasAccess, setServerHasAccess] = useState<boolean | null>(null);
+
 //   useEffect(() => {
 //     let cancelled = false;
+
 //     const probe = async () => {
 //       try {
+//         // We explicitly avoid caching so the access state is always fresh.
 //         const res = await fetch("/api/payments/check", { cache: "no-store" });
 //         const data = await res.json();
-//         if (!cancelled) setServerHasAccess(Boolean(res.ok && data?.hasAccess));
+
+//         if (!cancelled) {
+//           // We only treat it as "has access" if the response is OK and the payload says so.
+//           setServerHasAccess(Boolean(res.ok && data?.hasAccess));
+//         }
 //       } catch {
+//         // On any error, we conservatively mark access as false (but do not crash).
 //         if (!cancelled) setServerHasAccess(false);
 //       }
 //     };
+
 //     probe();
+
+//     // Cleanup flag to avoid updating state on an unmounted component.
 //     return () => {
 //       cancelled = true;
 //     };
 //   }, []);
 
 //   // ---------------- Rotating Cultural Highlights ----------------
+//   // These are the rotating cultural quotes/facts shown in what is now Div 3.
 //   const highlights = useMemo(
 //     () => [
 //       {
@@ -477,34 +507,45 @@ export default function DashboardPage() {
 //   );
 
 //   const [highlightIndex, setHighlightIndex] = useState(0);
+
 //   useEffect(() => {
+//     // Rotate the highlight every 10 seconds in a simple, robust way.
 //     const id = setInterval(() => {
 //       setHighlightIndex((i: number) => (i + 1) % highlights.length);
 //     }, 10000);
+
+//     // Clear interval on unmount to avoid memory leaks.
 //     return () => clearInterval(id);
 //   }, [highlights.length]);
 
 //   const currentHighlight = highlights[highlightIndex];
 
 //   // ---------------- Access Logic ----------------
+//   // Effective access is determined by either role or payment/access flags.
 //   const effectiveHasAccess =
 //     isOwnerOrAdmin || sessionHasPaid || serverHasAccess === true;
 
 //   // ---------------- Early Redirects ----------------
+//   // If the user is unauthenticated, send them to login.
 //   useEffect(() => {
 //     if (status === "unauthenticated") {
 //       router.push("/login");
 //     }
 //   }, [status, router]);
 
+//   // While we don't yet know the auth status, show a full-page spinner.
 //   if (status === "loading") {
 //     return <FullPageSpinner message="Loading your dashboard..." />;
 //   }
+
+//   // If there is no session user (edge-safety), render nothing.
 //   if (!session?.user) {
 //     return null;
 //   }
 
 //   // ---------------- Links ----------------
+//   // Centralised route paths for internal navigation.
+//   // These are used with Next.js <Link> for efficient client-side routing.
 //   const LINKS = {
 //     continueLearning: "/dashboard/course",
 //     exploreMap: "/dashboard/map",
@@ -516,6 +557,7 @@ export default function DashboardPage() {
 //   };
 
 //   // ---------------- Greeting ----------------
+//   // Animated greeting text using the existing TextType component.
 //   const greeting = (
 //     <TextType
 //       text={["JINGELA!"]}
@@ -527,6 +569,11 @@ export default function DashboardPage() {
 //   );
 
 //   // ---------------- Layout ----------------
+//   // Layout grid:
+//   //  - Div 1: main hero panel
+//   //  - Div 2: quick actions (top-right)
+//   //  - Div 3: cultural highlight (bottom-left, 3 columns wide)
+//   //  - Div 4: learning panel (bottom-right, 2 columns wide)
 //   return (
 //     <div
 //       className="
@@ -589,105 +636,119 @@ export default function DashboardPage() {
 //             Continue your learning or explore key areas at your own pace.
 //           </p>
 
+//           {/* 
+//             Main action buttons.
+//             Switched from <a> to <Link> for internal navigation to use
+//             Next.js client-side routing (better performance and UX).
+//           */}
 //           <div className="w-full flex flex-col sm:flex-row gap-4 justify-center">
 //             {effectiveHasAccess ? (
 //               <>
-//                 <a
+//                 <Link
 //                   href={LINKS.continueLearning}
 //                   className="flex-1 text-center bg-slate-800/90 hover:bg-slate-800 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
 //                 >
 //                   Continue Learning
-//                 </a>
-//                 <a
+//                 </Link>
+//                 <Link
 //                   href={LINKS.exploreMap}
 //                   className="flex-1 text-center bg-slate-800/90 hover:bg-slate-800 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
 //                 >
 //                   Explore Map
-//                 </a>
+//                 </Link>
 //               </>
 //             ) : (
-//               <a
+//               <Link
 //                 href={LINKS.getAccess}
 //                 className="flex-1 text-center bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
 //               >
 //                 Get Access
-//               </a>
+//               </Link>
 //             )}
 //           </div>
 
+//           {/* Secondary action for cultural resources */}
 //           <div className="w-full mt-4">
-//             <a
+//             <Link
 //               href={LINKS.resources}
 //               className="block text-center bg-yellow-500 hover:bg-yellow-400 text-white font-semibold px-6 py-3 rounded-xl shadow transition-transform hover:scale-[1.02]"
 //             >
 //               Cultural Resources
-//             </a>
+//             </Link>
 //           </div>
 
+//           {/* Owner/Admin only actions remain unchanged logically, but use <Link> now */}
 //           {isOwnerOrAdmin && (
 //             <div className="w-full mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-//               <a
+//               <Link
 //                 href={LINKS.manageStaff}
 //                 className="text-center bg-rose-600 hover:bg-rose-500 text-white font-semibold px-4 py-2 rounded-lg shadow transition-transform hover:scale-[1.02]"
 //               >
 //                 Manage Staff
-//               </a>
-//               <a
+//               </Link>
+//               <Link
 //                 href={LINKS.billing}
 //                 className="text-center bg-rose-600 hover:bg-rose-500 text-white font-semibold px-4 py-2 rounded-lg shadow transition-transform hover:scale-[1.02]"
 //               >
 //                 Billing
-//               </a>
+//               </Link>
 //               {role === "ADMIN" && (
-//                 <a
+//                 <Link
 //                   href={LINKS.adminPanel}
 //                   className="text-center bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg shadow transition-transform hover:scale-[1.02] sm:col-span-2"
 //                 >
 //                   Admin Panel
-//                 </a>
+//                 </Link>
 //               )}
 //             </div>
 //           )}
 //         </section>
 //       </div>
 
-//       {/* Div 3 — Learning (neutral panel; NO progress bar) */}
+//       {/* Div 3 — Cultural Highlight (moved here; content swapped with Div 4) */}
 //       <div className="col-span-1 md:col-span-3 row-span-3 row-start-auto md:row-start-3">
-//         <section className="h-full w-full flex flex-col items-center justify-center text-center bg-white/85 backdrop-blur-sm rounded-2xl shadow-lg p-6 sm:p-8">
-//           <h2 className="text-2xl font-bold text-blue-900 mb-3">Learning</h2>
-//           <p className="text-sm text-gray-700 max-w-sm">
-//             Pick up where you left off, or review earlier modules at any time.
-//           </p>
-//           <a
-//             href={LINKS.continueLearning}
-//             className="mt-5 inline-block text-white bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
-//           >
-//             Continue where you left off
-//           </a>
-//         </section>
-//       </div>
-
-//       {/* Div 4 — Cultural Highlight */}
-//       <div className="col-span-1 md:col-span-2 row-span-3 col-start-auto md:col-start-4 row-start-auto md:row-start-3">
 //         <section className="h-full w-full flex flex-col items-center justify-center text-center rounded-2xl shadow-lg p-6 sm:p-8 bg-linear-to-br from-yellow-100 to-orange-100">
 //           <h2 className="text-xl font-bold text-gray-800 mb-2">
 //             Cultural Highlight
 //           </h2>
+//           {/* 
+//             We keep the rotating highlight behavior exactly the same
+//             and simply render it in this wider (3-column) panel.
+//           */}
 //           <p
 //             className="italic text-gray-700 leading-relaxed max-w-sm transition-opacity duration-500 ease-in-out"
 //             key={highlightIndex}
 //           >
 //             “{currentHighlight.quote}”
 //           </p>
-//           <p className="text-sm text-gray-600 mt-3">{currentHighlight.author}</p>
-//           <a
+//           <p className="text-sm text-gray-600 mt-3">
+//             {currentHighlight.author}
+//           </p>
+//           <Link
 //             href={LINKS.resources}
 //             className="mt-5 inline-block text-gray-900 bg-yellow-300 hover:bg-yellow-200 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
 //           >
 //             Learn more
-//           </a>
+//           </Link>
+//         </section>
+//       </div>
+
+//       {/* Div 4 — Learning (moved here; content swapped with Div 3) */}
+//       <div className="col-span-1 md:col-span-2 row-span-3 col-start-auto md:col-start-4 row-start-auto md:row-start-3">
+//         <section className="h-full w-full flex flex-col items-center justify-center text-center bg-white/85 backdrop-blur-sm rounded-2xl shadow-lg p-6 sm:p-8">
+//           <h2 className="text-2xl font-bold text-blue-900 mb-3">Learning</h2>
+//           <p className="text-sm text-gray-700 max-w-sm">
+//             Pick up where you left off, or review earlier modules at any time.
+//           </p>
+//           <Link
+//             href={LINKS.continueLearning}
+//             className="mt-5 inline-block text-white bg-red-600 hover:bg-red-500 px-5 py-2 rounded-lg font-semibold shadow transition-transform hover:scale-[1.02]"
+//           >
+//             Delete Account
+//           </Link>
 //         </section>
 //       </div>
 //     </div>
 //   );
 // }
+
