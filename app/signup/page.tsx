@@ -42,7 +42,7 @@ export default async function SignupPage(props: {
         />
       </main>
 
-      <section className="w-full flex flex-col justify-center items-center bg-linear-to-b from-blue-700 to-blue-300 mt-40">
+      <section className="w-full flex flex-col justify-center items-center bg-linear-to-b from-blue-700 to-blue-300 my-40">
         <h2 className="text-white font-bold text-3xl sm:text-4xl md:text-5xl tracking-wide px-4 sm:px-0 py-8 text-center text-shadow-2xl">
           Sign Up
         </h2>

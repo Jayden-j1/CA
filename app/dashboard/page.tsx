@@ -163,7 +163,7 @@ export default function DashboardPage() {
   const LINKS = {
     continueLearning: "/dashboard/course",
     exploreMap: "/dashboard/map",
-    resources: "/dashboard/resources",
+    resources: "/dashboard/cultural-resources",
     manageStaff: "/dashboard/staff",
     billing: "/dashboard/billing",
     adminPanel: "/dashboard/admin",
