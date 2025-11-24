@@ -1,24 +1,33 @@
 // components/course/ModuleList.tsx
 //
-// Purpose (surgical, UI-only):
-// - Keep circular thumbnails, with transparent PNGs looking clean,
-//   a gentle hover micro-animation, and now **sharper image quality**.
-// - Do NOT alter ANY course/progress/payment/navigation logic.
+// Purpose (surgical, UI + certificate download):
+// - Display the list of course modules and lessons with clean thumbnails,
+//   current module highlighting, and "Completed" badge.
+// - Additionally, once *all* modules are completed, expose a single
+//   "Download Certificate" button that:
+//     • Calls /api/certificate?courseTitle=... in a new tab
+//     • Triggers the browser's normal PDF download behaviour
+// - Do NOT alter ANY underlying course/progress/payment/navigation logic.
 //
 // What changed in THIS revision:
-// 1) `sizedSanityThumb` now:
-//    - Requests **2× pixel density** (w/h = size * 2) for retina displays.
-//    - Sets `q=90` on Sanity's CDN to improve compression quality.
-//    This makes thumbnails look crisper without touching your data or logic.
-// 2) All layout, sizing, hover animation, and text remain exactly
-//    as in your last working version.
+// 1) Added an OPTIONAL `courseTitle` prop so the certificate filename
+//    and content can reflect the actual course name (without breaking
+//    existing callers that don't pass it yet).
+// 2) Derived `allModulesCompleted` from the existing `completedModuleIds`
+//    prop and module IDs.
+// 3) When `allModulesCompleted` is true, a "Download Certificate" button
+//    appears at the bottom of the sidebar. Clicking it opens
+//    `/api/certificate?courseTitle=...` in a new tab, which:
+//       - uses your already-working /api/certificate route
+//       - returns a PDF with Content-Disposition: attachment, so the
+//         browser downloads the file.
 //
 // Pillars:
-// - Efficiency: still only request what we need (just higher DPI).
-// - Robustness: URL helper guards non-Sanity URLs & invalid strings.
-// - Simplicity: single helper change; rest of the component is untouched.
-// - Ease of mgmt: clearly commented so you can tweak quality or density later.
-// - Security: no data shape changes, no new external calls—purely presentational.
+// - Efficiency : reuse existing progress state; no extra API calls until click.
+// - Robustness : no changes to progress logic or completion flows.
+// - Simplicity : one extra button, one small click handler.
+// - Ease of mgmt : clearly commented, certificate-only change.
+// - Security : still requires auth via /api/certificate; no extra surface area.
 
 "use client";
 
@@ -35,6 +44,16 @@ interface ModuleListProps {
   unlockedModuleIndices?: Set<number>;
   onSelectLesson: (moduleIndex: number, lessonIndex: number) => void;
   completedModuleIds?: string[];
+
+  /**
+   * OPTIONAL: Course title used for the certificate
+   * -----------------------------------------------
+   * - If provided, we pass this along to /api/certificate so the
+   *   generated PDF (and download filename) can reflect the course.
+   * - If omitted, we fall back to a sensible default name.
+   * - This is optional to avoid breaking existing callers.
+   */
+  courseTitle?: string;
 }
 
 /**
@@ -92,8 +111,12 @@ const ModuleList: React.FC<ModuleListProps> = ({
   unlockedModuleIndices,
   onSelectLesson,
   completedModuleIds,
+  courseTitle,
 }) => {
+  // Ensure we always have a set for unlocked modules; default to module 0.
   const safeUnlocked = unlockedModuleIndices ?? new Set<number>([0]);
+
+  // Convert completed IDs into a Set for quick lookup.
   const completedIdSet = new Set<string>(completedModuleIds ?? []);
 
   // Visual thumbnail sizes (unchanged from previous step):
@@ -103,7 +126,52 @@ const ModuleList: React.FC<ModuleListProps> = ({
   // We still request the larger size from the CDN; Next/Image + `sizes` pick correctly.
   // `sizedSanityThumb` now internally multiplies this by 2 for retina sharpness.
   const THUMB_MOBILE = 60; // px
-  const THUMB_SM_UP = 72;  // px
+  const THUMB_SM_UP = 72; // px
+
+  // ------------------------------------------------------------
+  // Certificate download state (derived, no new global logic)
+  // ------------------------------------------------------------
+  //
+  // We only expose the download button when:
+  // - There is at least one module.
+  // - EVERY module's id appears in the completedIdSet.
+  //
+  // This reuses existing progress state; we do not change how modules
+  // are marked complete—only how we *react* once they are.
+  const allModulesCompleted =
+    modules.length > 0 &&
+    modules.every((module) => completedIdSet.has(module.id));
+
+  // The course title we send to /api/certificate:
+  // - Prefer the optional `courseTitle` prop if present and non-blank.
+  // - Otherwise, fall back to a stable default label.
+  const effectiveCourseTitle =
+    typeof courseTitle === "string" && courseTitle.trim().length > 0
+      ? courseTitle.trim()
+      : "Cultural Awareness Training";
+
+  /**
+   * Trigger certificate PDF download
+   * --------------------------------
+   * - Uses window.open() to GET `/api/certificate?courseTitle=...`
+   *   in a new tab. Because the API route:
+   *     • requires auth, and
+   *     • returns `Content-Disposition: attachment`
+   *   the browser will:
+   *     • either prompt the user
+   *     • or silently place the PDF into the downloads area,
+   *       depending on browser settings.
+   *
+   * - We keep this logic tiny and UI-only:
+   *   no changes to course progression, payments, or auth flows.
+   */
+  const handleDownloadCertificate = () => {
+    // "use client" ensures this only runs in the browser (window is defined).
+    const url = `/api/certificate?courseTitle=${encodeURIComponent(
+      effectiveCourseTitle
+    )}`;
+    window.open(url, "_blank");
+  };
 
   return (
     <aside
@@ -128,11 +196,17 @@ const ModuleList: React.FC<ModuleListProps> = ({
             <button
               onClick={() => isUnlocked && onSelectModule(mIdx)}
               className={`group w-full text-left px-4 py-3 font-semibold rounded-t-xl transition-colors flex items-center justify-between ${
-                isActiveModule ? "text-blue-900 bg-blue-100" : "text-gray-800 hover:bg-gray-50"
+                isActiveModule
+                  ? "text-blue-900 bg-blue-100"
+                  : "text-gray-800 hover:bg-gray-50"
               } ${!isUnlocked ? "cursor-not-allowed" : ""}`}
               aria-current={isActiveModule ? "true" : undefined}
               aria-disabled={!isUnlocked}
-              title={!isUnlocked ? "Complete the previous module to unlock" : undefined}
+              title={
+                !isUnlocked
+                  ? "Complete the previous module to unlock"
+                  : undefined
+              }
             >
               {/* LEFT: Circular Thumbnail + Title */}
               <span className="flex items-center gap-3">
@@ -198,7 +272,7 @@ const ModuleList: React.FC<ModuleListProps> = ({
                   className="ml-2 inline-flex items-center text-xs font-medium text-gray-600"
                   aria-hidden="true"
                 >
-                  🔒 Locked
+                  Locked
                 </span>
               )}
             </button>
@@ -207,7 +281,8 @@ const ModuleList: React.FC<ModuleListProps> = ({
             {isActiveModule && isUnlocked && (
               <ul className="px-4 py-2 space-y-1">
                 {(module.lessons ?? []).map((lesson, lIdx) => {
-                  const isActiveLesson = isActiveModule && lIdx === currentLessonIndex;
+                  const isActiveLesson =
+                    isActiveModule && lIdx === currentLessonIndex;
 
                   return (
                     <li
@@ -230,6 +305,33 @@ const ModuleList: React.FC<ModuleListProps> = ({
           </div>
         );
       })}
+
+      {/* -------------------------------------------------------- */}
+      {/* Certificate download CTA (ONLY when all modules complete) */}
+      {/* -------------------------------------------------------- */}
+      {allModulesCompleted && (
+        <div className="pt-2 mt-2 border-t border-gray-200">
+          <button
+            type="button"
+            onClick={handleDownloadCertificate}
+            className="
+              w-full mt-2
+              bg-blue-600 hover:bg-blue-700
+              text-white font-semibold
+              py-2.5
+              rounded-lg
+              shadow-sm
+              transition-colors
+            "
+          >
+            Download Certificate
+          </button>
+          <p className="mt-1 text-xs text-gray-600 text-center">
+            Your course is complete. Click to download your Certificate of
+            Completion as a PDF.
+          </p>
+        </div>
+      )}
     </aside>
   );
 };
@@ -444,7 +546,7 @@ export default ModuleList;
 //                   className="ml-2 inline-flex items-center text-xs font-medium text-gray-600"
 //                   aria-hidden="true"
 //                 >
-//                   Locked
+//                   🔒 Locked
 //                 </span>
 //               )}
 //             </button>
@@ -481,6 +583,15 @@ export default ModuleList;
 // };
 
 // export default ModuleList;
+
+
+
+
+
+
+
+
+
 
 
 
