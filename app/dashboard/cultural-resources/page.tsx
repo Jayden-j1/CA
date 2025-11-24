@@ -94,10 +94,10 @@ export default function CulturalResourcesPage() {
   // - Keeps logic simple and robust: one interval + cleanup.
   // - Modulo (%) ensures we loop cleanly through the words.
   useEffect(() => {
-    // Change word every 6 seconds (6000ms).
+    // Change word every 3 seconds (3000ms).
     const intervalId = setInterval(() => {
       setWordIndex((prev) => (prev + 1) % rotatingWords.length);
-    }, 6000);
+    }, 3000);
 
     // Cleanup: clear the interval when the component unmounts to avoid
     // memory leaks or updates on an unmounted component.

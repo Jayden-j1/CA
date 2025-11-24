@@ -13,19 +13,23 @@
 // built-in fonts like Helvetica. In some deployments (serverless,
 // Windows paths, bundlers), that path breaks, causing ENOENT.
 // The standalone build ships with standard font metrics embedded,
-// avoiding any filesystem access.
+// avoiding any filesystem access for fonts.
 //
 // API Shape
 // ---------
 // Input : { userName, courseTitle, completionDate }
+//         - completionDate: if passed as a non-empty string, it is used as-is.
+//         - if an empty/blank string is passed, we fall back to "today"
+//           when generating the PDF.
 // Output: Buffer (PDF bytes)
 //
 // Pillars
 // -------
-// - Simplicity : one function, returns Buffer
-// - Robustness : no FS reads (standalone build), typed handlers
-// - Security   : memory-only, no temp files
+// - Simplicity    : one function, returns Buffer
+// - Robustness    : no FS reads for fonts (standalone build), typed handlers
+// - Security      : memory-only, no temp files
 // - Compatibility : works with Node runtime in Next.js
+// - Visual polish : optional background image support + blue border
 // ============================================================
 
 /**
@@ -33,7 +37,7 @@
  * This prevents ENOENT for Helvetica.afm and similar issues.
  *
  * We also include a type shim in types/pdfkit-standalone.d.ts so TS
- * understands this import (see file below).
+ * understands this import.
  */
 import PDFDocument from "pdfkit/js/pdfkit.standalone.js"; // <-- key change
 
@@ -49,7 +53,7 @@ export async function generateCertificatePDF({
   return new Promise((resolve, reject) => {
     try {
       // 1) Create a new PDF document (A4 with comfortable margins).
-      //    Standalone build includes standard fonts; no disk access.
+      //    Standalone build includes standard fonts; no disk access for font metrics.
       const doc = new PDFDocument({ size: "A4", margin: 50 });
 
       // 2) Collect bytes emitted by PDFKit; we'll concat when the stream closes.
@@ -58,18 +62,92 @@ export async function generateCertificatePDF({
       doc.on("error", (err: unknown) => reject(err));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      // 3) (Optional) explicitly use a standard font. Standalone has metrics inline.
+      // ------------------------------------------------------------
+      // 3) Page-level helpers: dimensions, optional background image,
+      //    and deep blue border.
+      // ------------------------------------------------------------
+
+      // 3a) Capture current page dimensions for layout helpers (border, background).
+      //
+      // PDFKit *does* expose `page` at runtime, but the TypeScript typings for the
+      // standalone build often do not include it. To keep TS happy while still
+      // using the real runtime API, we:
+      //   - cast `doc` to `any`
+      //   - then read `.page` off that value
+      //
+      // This keeps the implementation correct without fighting the type definitions.
+      const page = (doc as any).page;
+      const width: number = page.width;
+      const height: number = page.height;
+
+      // 3b) OPTIONAL background image (behind all text).
+      //
+      // If you want a full-page background image for the certificate:
+      // - Place an image file in your project (e.g. `/public/images/certificate-bg.png`)
+      // - Use an absolute or relative path that is resolvable from the server runtime.
+      //
+      // Example (uncomment and update the path as needed):
+      //
+      // import path from "path";
+      // const backgroundPath = path.join(
+      //   process.cwd(),
+      //   "public",
+      //   "images",
+      //   "certificate-bg.png"
+      // );
+      // doc.image(backgroundPath, 0, 0, { width, height });
+      //
+      // Or, for a simple relative path (if your runtime can resolve it):
+      //
+      // doc.image("public/images/certificate-bg.png", 0, 0, { width, height });
+      //
+      // NOTE:
+      // - This call *does* read the image file from disk, which is normal for images.
+      //   We still avoid disk access for font metrics via the standalone build.
+
+      // 3c) Deep blue border around the edge of the certificate.
+      //
+      // We draw a rectangle inset slightly from the page edges so it doesn't get
+      // cut off by printers. We also wrap the drawing in save()/restore() so
+      // stroke settings do not affect later text rendering.
+      doc
+        .save() // Save current graphics state (colors, line width, etc.)
+        .lineWidth(6) // Border thickness
+        .strokeColor("#1e3a8a") // Deep blue (Tailwind-like 'blue-900')
+        .rect(15, 15, width - 30, height - 30) // x, y, w, h — inset 15 units from each side
+        .stroke()
+        .restore(); // Restore previous state so text colors/fonts remain as intended
+
+      // ------------------------------------------------------------
+      // 4) Compute "effective" completion date
+      // ------------------------------------------------------------
+      //
+      // We want the certificate to always show a sensible completion date:
+      // - If the caller passes a non-empty string (e.g. from DB), we trust it.
+      // - If the caller passes an empty/blank string, we fall back to "today".
+      //
+      // This means you don't *have* to pre-format the date in the caller.
+      const effectiveCompletionDate =
+        typeof completionDate === "string" && completionDate.trim().length > 0
+          ? completionDate
+          : new Date().toLocaleDateString("en-AU", {
+              day: "2-digit",
+              month: "long",
+              year: "numeric",
+            });
+
+      // 5) (Optional) explicitly use a standard font. Standalone has metrics inline.
       //    If you later use custom .ttf/.otf files, call doc.registerFont() with a Buffer.
       doc.font("Helvetica");
 
-      // 4) Content — header
+      // 6) Content — header
       doc
         .fontSize(28)
         .fillColor("#1e3a8a")
         .text("Certificate of Completion", { align: "center" });
       doc.moveDown(2);
 
-      // 5) Recipient name
+      // 7) Recipient name block
       doc
         .fontSize(20)
         .fillColor("black")
@@ -82,7 +160,7 @@ export async function generateCertificatePDF({
         .text(userName, { align: "center", underline: true });
       doc.moveDown(2);
 
-      // 6) Course title
+      // 8) Course title and description
       doc
         .fontSize(18)
         .fillColor("black")
@@ -95,13 +173,17 @@ export async function generateCertificatePDF({
         .text(courseTitle, { align: "center" });
       doc.moveDown(2);
 
-      // 7) Completion date
+      // 9) Completion date line
+      //
+      // Uses the "effectiveCompletionDate" computed above, which is either:
+      // - the caller-provided string, or
+      // - a nicely formatted "today" date if the string was blank.
       doc
         .fontSize(16)
         .fillColor("#475569")
-        .text(`Completed on ${completionDate}`, { align: "center" });
+        .text(`Completed on ${effectiveCompletionDate}`, { align: "center" });
 
-      // 8) Footer tagline (brandable)
+      // 10) Footer tagline (brandable)
       doc.moveDown(5);
       doc
         .fontSize(14)
@@ -113,7 +195,7 @@ export async function generateCertificatePDF({
           align: "center",
         });
 
-      // 9) Finalize PDF (flushes data events, then "end" → resolve)
+      // 11) Finalize PDF (flushes data events, then "end" → resolve)
       doc.end();
     } catch (err) {
       reject(err);
@@ -128,41 +210,44 @@ export async function generateCertificatePDF({
 
 
 
-
 // // lib/certificate.ts
 // //
 // // ============================================================
-// // Phase History
-// // ------------------------------------------------------------
-// // • Phase 2.3  : First in-memory PDF generation (no disk writes)
-// // • Phase 3.x  : Added comments, defensive handlers, type safety
-// // • Phase 4.0  : Final polish (import order + docs)
-// // ============================================================
-// //
 // // Purpose
 // // -------
-// // Generate a clean, printable certificate PDF entirely in memory.
+// // Generate a clean, printable certificate PDF entirely in memory,
+// // using PDFKit's *standalone* build so no font metrics are read
+// // from disk (fixes ENOENT Helvetica.afm on some setups).
+// //
+// // Why standalone?
+// // ---------------
+// // The regular 'pdfkit' Node build looks up AFM files on disk for
+// // built-in fonts like Helvetica. In some deployments (serverless,
+// // Windows paths, bundlers), that path breaks, causing ENOENT.
+// // The standalone build ships with standard font metrics embedded,
+// // avoiding any filesystem access.
 // //
 // // API Shape
 // // ---------
 // // Input : { userName, courseTitle, completionDate }
-// // Output: Buffer (PDF bytes) — suitable for `new Response(bytes, { headers })`
+// // Output: Buffer (PDF bytes)
 // //
 // // Pillars
 // // -------
-// // - Simplicity: single pure function returning a Buffer
-// // - Robustness: typed event handlers, try/catch around PDF pipeline
-// // - Security: no filesystem writes; operates fully in memory
-// // - Compatibility: works with Next.js App Router (Edge requires a WASM lib;
-// //                  this implementation targets Node runtime, which is standard)
-// //
-// // Notes
-// // -----
-// // If you want to brand the PDF (logo/signature), you can inject an image by
-// // passing a Buffer/URL and calling `doc.image(...)` at a chosen position.
+// // - Simplicity : one function, returns Buffer
+// // - Robustness : no FS reads (standalone build), typed handlers
+// // - Security   : memory-only, no temp files
+// // - Compatibility : works with Node runtime in Next.js
 // // ============================================================
 
-// import PDFDocument from "pdfkit"; // Requires `@types/pdfkit` (devDependency)
+// /**
+//  * IMPORTANT: use the standalone build that inlines the standard fonts.
+//  * This prevents ENOENT for Helvetica.afm and similar issues.
+//  *
+//  * We also include a type shim in types/pdfkit-standalone.d.ts so TS
+//  * understands this import (see file below).
+//  */
+// import PDFDocument from "pdfkit/js/pdfkit.standalone.js"; // <-- key change
 
 // export async function generateCertificatePDF({
 //   userName,
@@ -175,23 +260,28 @@ export async function generateCertificatePDF({
 // }): Promise<Buffer> {
 //   return new Promise((resolve, reject) => {
 //     try {
-//       // 1) Create a new PDF document (A4 with comfortable margins)
+//       // 1) Create a new PDF document (A4 with comfortable margins).
+//       //    Standalone build includes standard fonts; no disk access.
 //       const doc = new PDFDocument({ size: "A4", margin: 50 });
 
-//       // 2) Collect bytes emitted by PDFKit; we'll concat when the stream closes
+//       // 2) Collect bytes emitted by PDFKit; we'll concat when the stream closes.
 //       const chunks: Buffer[] = [];
 //       doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 //       doc.on("error", (err: unknown) => reject(err));
 //       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-//       // 3) Content — header
+//       // 3) (Optional) explicitly use a standard font. Standalone has metrics inline.
+//       //    If you later use custom .ttf/.otf files, call doc.registerFont() with a Buffer.
+//       doc.font("Helvetica");
+
+//       // 4) Content — header
 //       doc
 //         .fontSize(28)
 //         .fillColor("#1e3a8a")
 //         .text("Certificate of Completion", { align: "center" });
 //       doc.moveDown(2);
 
-//       // 4) Recipient name
+//       // 5) Recipient name
 //       doc
 //         .fontSize(20)
 //         .fillColor("black")
@@ -204,7 +294,7 @@ export async function generateCertificatePDF({
 //         .text(userName, { align: "center", underline: true });
 //       doc.moveDown(2);
 
-//       // 5) Course title
+//       // 6) Course title
 //       doc
 //         .fontSize(18)
 //         .fillColor("black")
@@ -217,13 +307,13 @@ export async function generateCertificatePDF({
 //         .text(courseTitle, { align: "center" });
 //       doc.moveDown(2);
 
-//       // 6) Completion date
+//       // 7) Completion date
 //       doc
 //         .fontSize(16)
 //         .fillColor("#475569")
 //         .text(`Completed on ${completionDate}`, { align: "center" });
 
-//       // 7) Footer tagline (brandable)
+//       // 8) Footer tagline (brandable)
 //       doc.moveDown(5);
 //       doc
 //         .fontSize(14)
@@ -235,10 +325,11 @@ export async function generateCertificatePDF({
 //           align: "center",
 //         });
 
-//       // 8) Finalize PDF (flushes data events, then "end" → resolve)
+//       // 9) Finalize PDF (flushes data events, then "end" → resolve)
 //       doc.end();
 //     } catch (err) {
 //       reject(err);
 //     }
 //   });
 // }
+
