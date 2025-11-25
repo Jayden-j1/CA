@@ -29,7 +29,7 @@ import { ChevronDownIcon } from "@heroicons/react/24/outline";
 // Each section of the cultural resources accordion uses this shape.
 interface Section {
   title: string;
-  content: string;
+  content: React.ReactNode;  // <-- allows bold, paragraphs, spacing, lists, etc.
 }
 
 // -----------------------------
@@ -48,24 +48,78 @@ const rotatingWords: string[] = [
 // extending this array.
 const sections: Section[] = [
   {
-    title: "Understanding History",
-    content:
-      "Learn about the deep and diverse histories of First Nations peoples, including the impact of colonisation, ongoing resistance, and the importance of truth-telling in reconciliation.",
+    title: "Collaborating with Nyangbul People",
+    content:(
+          <div className="space-y-4">
+      <p>
+        Nyangbul people hold a vital and enduring role in the wellbeing, identity, and future of our local community.
+      </p>
+
+      <p>
+        <strong>True collaboration</strong> means working with us—not speaking
+        for us, making decision on behalf of Nyangbul people, or engaging with a “saviour” mindset.
+      </p>
+
+      <p>
+        It is a two-way relationship grounded in listening, respect, and shared
+        responsibility.
+      </p>
+    </div> 
+      ),
   },
   {
-    title: "Building Relationships",
-    content:
-      "Effective collaboration with local Aboriginal communities starts with listening, respect, and long-term relationship-building based on trust, consent, and accountability.",
+    title: "Protocols and Respect",
+    content: (
+     <div className="space-y-4">
+      <p>
+        Like all Aboriginal communities, the Nyangbul community follows cultural
+        protocols that guide who should be approached for cultural matters,
+        community engagement, or advice relating to culture, Country, and
+        community projects.
+      </p>
+
+      <p>
+        There are certain organisations and individuals who are recognised as
+        the <strong>appropriate cultural authorities for Nyangbul Country</strong>.
+        Engaging with these people ensures cultural safety, accuracy, and
+        respect.
+      </p>
+
+      <p className="font-semibold underline">
+        Recommended cultural contacts:
+      </p>
+
+      <ul className="list-disc pl-6 space-y-2">
+        <li>
+          <strong>Jali Local Aboriginal Land Council</strong><br />
+          <span className="text-blue-100">
+            Placeholder text — Write a short explanation here about Jali LALC’s
+            role in caring for Country, protecting cultural sites, advocating
+            for Nyangbul people, and supporting community projects.
+          </span>
+        </li>
+
+        <li>
+          <strong>Person’s Name</strong><br />
+          <span className="text-blue-100">
+            Placeholder text — Include who they are, their connection to
+            Nyangbul Country, and why they are the appropriate person to
+            approach.
+          </span>
+        </li>
+      </ul>
+    </div>
+    ),
   },
   {
-    title: "Cultural Strengths",
+    title: "Placeholder Title One",
     content:
-      "First Nations communities bring unique perspectives, knowledge systems, and strengths that enrich all aspects of society, from land management to governance and education.",
+      "Placeholder text...",
   },
   {
-    title: "Protocols & Respect",
+    title: "Placeholder Title Two",
     content:
-      "Understanding cultural protocols—such as Acknowledgement of Country, Welcome to Country, and the role of Elders—is essential to showing genuine respect and avoiding tokenism.",
+      "Placeholder text...",
   },
 ];
 
