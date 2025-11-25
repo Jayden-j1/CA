@@ -142,7 +142,7 @@ function MapPageInner() {
             All clans had the necessary resources within their boundaries to not
             only survive but to thrive and flourish. This gives a glimpse into
             the complexity and sophistication of First Nations cultural systems,
-            where boundaries were carefully organised to support life, law, and
+            where boundaries were carefully organised to support life, lore, and
             responsibility.
           </p>
           <p className="text-base sm:text-lg leading-relaxed tracking-normal sm:tracking-wide mb-3">
