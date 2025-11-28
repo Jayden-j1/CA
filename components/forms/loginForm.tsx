@@ -21,7 +21,7 @@ import {
   showRoleToast,
   showRoleErrorToast,
   showSystemErrorToast,
-  showInvalidCredentialsToast, // ✅ new friendlier toast
+  showInvalidCredentialsToast, // new friendlier toast
 } from "@/lib/toastMessages";
 
 export default function LoginForm() {
@@ -85,7 +85,7 @@ export default function LoginForm() {
             msg === "CredentialsSignin" ||
             /invalid|credential|password|user|email/i.test(msg)
           ) {
-            // ✅ Friendly error for wrong email/password
+            // Friendly error for wrong email/password
             showInvalidCredentialsToast();
           } else {
             // Anything else → system error (server/network)
@@ -113,7 +113,7 @@ export default function LoginForm() {
       }, 500);
     } catch (err) {
       // True unexpected client error (network, runtime, etc.)
-      console.error("❌ [LoginForm] Unexpected error:", err);
+      console.error("[LoginForm] Unexpected error:", err);
       showSystemErrorToast();
     } finally {
       setLoading(false);

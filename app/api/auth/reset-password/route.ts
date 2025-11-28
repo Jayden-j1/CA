@@ -20,11 +20,11 @@
 //
 // Pillars
 // -------
-// ✅ Efficiency   – 1 DB read, 1 update, 1 cleanup
-// ✅ Robustness   – strict typing; consistent `expiresAt` only
-// ✅ Simplicity   – no legacy branches
-// ✅ Security     – defense-in-depth, minimal leakage
-// ✅ Ease of mgmt – Prisma-based; small, clear code
+// Efficiency   – 1 DB read, 1 update, 1 cleanup
+// Robustness   – strict typing; consistent `expiresAt` only
+// Simplicity   – no legacy branches
+// Security     – defense-in-depth, minimal leakage
+// Ease of mgmt – Prisma-based; small, clear code
 
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";

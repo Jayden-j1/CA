@@ -7,10 +7,10 @@
 //
 // What’s fixed in this version?
 // -----------------------------
-// • ✅ In some Next setups, `headers()` and `cookies()` are typed as Promise<…>.
+// • In some Next setups, `headers()` and `cookies()` are typed as Promise<…>.
 //      We now `await` both before calling .get() / .getAll().
-// • ✅ Explicit cookie entry typing, so TS doesn’t infer `any`.
-// • ✅ Async cookie serialization helper.
+// • Explicit cookie entry typing, so TS doesn’t infer `any`.
+// • Async cookie serialization helper.
 // • Robust base-URL resolution that works locally and in production.
 //
 // Pillars
